@@ -1,172 +1,122 @@
-/*package main;
+package main
 
 import (
-	"github.com/joonnna/ifrit"
-	"time"
-	"bytes"
 	"fmt"
-	"encoding/json"
+	"github.com/joonnna/ifrit"
+	//"ifrit"
+//	log "github.com/inconshreveable/log15"
+	"math/rand"
+	//"time"
 )
 
-// Mockup application
-type application struct {
-	ifritClient *ifrit.Client
-
-	exitChan chan bool
-	data     *appData
+type Application struct {
+	Clients []*ifrit.Client
+	ExitChan chan bool
+	AppData string
 }
 
-// Mockup data structure
-type appData struct {
-	Users map[int]*user
-}
 
-// Mockup users
-type user struct {
-	FirstName string
-	LastName  string
-	Address   string
-}
-
-// We store the client instance within the application
-// such that we can communicate with it as we see fit
-func newApp() (*application, error) {
-	c, err := ifrit.NewClient()
-	if err != nil {
-		return nil, err
+func NewApplication() (*Application, error) {
+	channel := make(chan bool, 1)
+	clients := make([]*ifrit.Client, 0)
+	
+	app := &Application {
+		ExitChan: channel,
 	}
 
-	return &application{
-		ifritClient: c,
-	}, nil
+	for i := 0; i < 1; i++ {
+		client, err := ifrit.NewClient()
+		if err != nil {
+			return nil, err
+		}
+	
+		clients = append(clients, client)
+		client.RegisterMsgHandler(app.simpleMessageHandler)
+		fmt.Printf("Started node with IP = %s\n", client.Addr());
+		go client.Start()
+	}
+
+	app.Clients = clients
+
+	//fmt.Printf("len=%d cap=%d %v\n", len(clients), cap(clients), clients)
+	return app, nil
 }
 
 // This callback will be invoked on each received message.
-func (a *application) handleMessages(data []byte) ([]byte, error) {
-	received := &appData{}
+func (app *Application) simpleMessageHandler(data []byte) ([]byte, error) {
 
-	err := json.NewDecoder(bytes.NewReader(data)).Decode(received)
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte("kake"), nil
+	return data, nil
 }
 
-// Start the mockup application
-func (a *application) Start() {
-	a.ifritClient.RegisterMsgHandler(a.handleMessages)
-
-	id := 1
-
+func (app *Application) Start() {
+	/*
 	for {
 		select {
-			case <-a.exitChan:
+			case <- app.ExitChan:
 				return
 
-			case <-time.After(time.Second * 1):
-				fmt.Printf("Should add user now\n");
-				a.AddUser(id)
-				id += 1
-			}
+			case <- time.After(time.Second * 0):
+				idx := rand.Int() % len(app.Clients)
+				randomClient := app.Clients[idx]
+				//fmt.Printf("Sends message to %s\n", randomClient.Addr());
+				ch := app.Clients[0].SendTo(randomClient.Addr(), []byte("msg"))
+				
+				//response := <- ch
+				//fmt.Printf("Kake = %s\n", response)
 		}
-}
+	}*/
 
-func (a *application) AddUser(id int) {
-	c, err := ifrit.NewClient()
-	if err != nil {
-	    panic(err)
-	}
-
-	go c.Start()
-	fmt.Printf("%p", &a.data);
+	idx := rand.Int() % len(app.Clients)
+	randomClient := app.Clients[idx]
+	ch := app.Clients[0].SendTo(randomClient.Addr(), []byte("msg"))
+	response := <- ch
+	fmt.Printf("Kake = %s\n", response)
 }
 
 func main() {
-	a, err := newApp()
+	app, err := NewApplication()
 	if err != nil {
 		panic(err)
 	}
 
-	a.Start()
+	app.Start()
 }
-*/
 
 /*
-package main
-
-import (
-	"fmt"
-	"ifrit"
-	//"time"
-	//"math/rand"
-)
-
-
-func getClientInfo(client ifrit.Client, numClients int) {
-	allNetworkMembers := client.Members()
-
-	for i := range allNetworkMembers {
-		fmt.Printf("Member's IP: %s\n", allNetworkMembers[i])
-	}
-}
-
-func addClientsToNetwork(clients *[1]ifrit.Client, numClients int) {
-
-	for i := 0; i < numClients; i++ {
-
-		c, err := ifrit.NewClient()
-		if err != nil {
-			panic(err)
-		}
-
-		clients[i] = *c
-		go c.Start()
-		fmt.Printf("Started node with address %s\n", c.Addr())
-	}
-}
-
-// This callback will be invoked on each received message.
-func yourMessageHandler(data []byte) ([]byte, error) {
-	fmt.Println("Message received");
-	return data, nil
-}
 
 func main() {
-	fmt.Printf("Creating a network of clients...")
-
-	const N_CLIENTS int = 1
+	const N_CLIENTS int = 2
 	var clients [N_CLIENTS]ifrit.Client
 
 	addClientsToNetwork(&clients, N_CLIENTS)
 
-	client := &clients[0]
-	client.RegisterMsgHandler(yourMessageHandler)
-	getClientInfo(*client, N_CLIENTS)
-	
-	// Testing connectivity in the graph
-	members := client.Members()
-	fmt.Printf("This node's IP = %s\n", client.Addr());
-	fmt.Printf("Sending message to %s\n", string(members[0]))
+	// Send the first message 
+	randomClient := clients[rand.Int() % len(clients)]
+	ch := clients[0].SendTo(randomClient.Addr(), []byte("msg"))
 
-	ch := client.SendTo(string(members[0]), []byte("msg"))
+	fmt.Printf("Address of this node = %s\n", clients[0].Addr())
 
+	simpleMessagePassing(ch, &clients)
+}
+
+func simpleMessagePassing(ch <-chan []byte, clients *[2]ifrit.Client) {
 	for {
 		select {
 			case response := <-ch:
-				fmt.Printf("s\n", response);
+				fmt.Printf("res = %s\n", string(response));
+		
+			case <-time.After(time.Second * 0):
+				randomClient := clients[rand.Int() % len(clients)]
+	//			fmt.Printf("Sends %s a message...\n", randomClient.Addr())
+				
+				for i := 0; i < 10; i++ {
+					clients[0].SendTo(randomClient.Addr(), []byte("msg"))
+				}
+				
+				randomClient.Stop()
 		}
 	}
-}*/
-
-
-package main
-
-import (
-	"fmt"
-	"ifrit"
-	//"math/rand"
-)
+}
 
 func addClientsToNetwork(clients *[2]ifrit.Client, numClients int) {
 
@@ -178,49 +128,16 @@ func addClientsToNetwork(clients *[2]ifrit.Client, numClients int) {
 		}
 
 		clients[i] = *c
+		c.RegisterMsgHandler(simpleMessageHandler)
 		go c.Start()
-		c.RegisterMsgHandler(yourMessageHandler)
 	}
 }
 
 // This callback will be invoked on each received message.
-func yourMessageHandler(data []byte) ([]byte, error) {
-	fmt.Println("Message received");
+func simpleMessageHandler(data []byte) ([]byte, error) {
+	//log.Info("Message received");
+	//fmt.Println("Message received");
 	return data, nil
 }
 
-func main() {
-	fmt.Printf("Creating a network of clients...\n\n")
-
-	// Client 1...
-	/*
-	c1, err := ifrit.NewClient()
-	if err != nil {
-		panic(err)
-	}
-	go c1.Start()
-
-	// Client 2...
-	c2, err := ifrit.NewClient()
-	if err != nil {
-		panic(err)
-	}
-	go c2.Start()*/
-
-	const N_CLIENTS int = 2
-	var clients [N_CLIENTS]ifrit.Client
-	addClientsToNetwork(&clients, N_CLIENTS)
-
-	// Testing Fireflies connectivity...
-	//fmt.Printf("c1.Addr() = %s\n", c1.Addr());
-	//fmt.Printf("Sending message to %s\n", string(c2.Addr()))
-
-	ch := clients[0].SendTo(string(clients[1].Addr()), []byte("msg"))
-
-	for {
-		select {
-			case response := <-ch:
-				fmt.Printf("res = %s\n", string(response));
-		}
-	}
-}
+*/
