@@ -6,7 +6,7 @@ import (
 //	"ifrit"
 	log "github.com/inconshreveable/log15"
 //	"math/rand"
-//	"time"
+	"time"
 	"errors"
 //	"encoding/gob"
 //	"bytes"
@@ -73,7 +73,7 @@ func NewApplication() (*Application, error) {
 
 // Main entry point for running the application
 func (app *Application) Run() {
-	for _, user := range app.Users {
+	/*for _, user := range app.Users {
 		// fix dis shit
 		if user == nil {
 			continue 
@@ -82,20 +82,22 @@ func (app *Application) Run() {
 		files := user.UserFiles()
 		app.Fs.StoreFiles(files)
 
-	}
+	}*/
 
-	for {
+	files := app.Users[0].UserFiles()
+	channel := app.Fs.StoreFiles(files)
+	response := <- channel
+	fmt.Printf("Resp = %s\n", response)
+
+	select {
 		case <- time.After(0):
-			channel := app.SendData(randomClient, clientData)
-			response := <- channel
 			fmt.Printf("Resp = %s\n", response)
-			clientData = nil
-		}			
-	}
+	}			
 }
 
+
 func CreateUsers(numUsers int) ([]*User, error) {
-	users := make([]*User, numUsers)
+	users := make([]*User, 0)
 
 	for i := 0; i < numUsers; i++ {
 		username := fmt.Sprintf("user_%d", i + 1)
@@ -104,7 +106,7 @@ func CreateUsers(numUsers int) ([]*User, error) {
 			panic(err)
 		}
 	
-		files, err := CreateFiles(2, user)
+		files, err := CreateFiles(1, user)
 		if err != nil {
 			panic(err)
 		}
@@ -117,10 +119,10 @@ func CreateUsers(numUsers int) ([]*User, error) {
 }
 
 func CreateFiles(numFiles int, user *User) ([]*File, error) {
-	files := make([]*File, numFiles)
+	files := make([]*File, 0)
 
 	for i := 0; i < numFiles; i++ {
-		file, err := NewFile(10, i, user)
+		file, err := NewFile(10, i, user, user.OwnerName)
 		if err != nil {
 			panic(err)
 		}

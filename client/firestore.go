@@ -6,8 +6,6 @@ import (
 	"math/rand"
 	"github.com/spf13/viper"
 	log "github.com/inconshreveable/log15"
-	"encoding/gob"
-	"bytes"
 )
 
 type Firestore struct {
@@ -43,9 +41,8 @@ func NewFirestore() (*Firestore, error) {
 	return fs, nil
 }
 
-func (fs *Firestore) StoreFiles(files []*File) {
-	//destinationNode := fs.randomFirestoreNode()
-	//fmt.Println(destinationNode.ID())
+func (fs *Firestore) StoreFiles(files []*File) chan []byte{
+	/*
 	for _, file := range files {
 		if file != nil {
 			
@@ -54,27 +51,23 @@ func (fs *Firestore) StoreFiles(files []*File) {
 			} else {
 				fmt.Printf("File does not exists. Is about to insert file...\n");
 				destinationFSNode := fs.randomFirestoreNode()
-				
-				for {
-					select {
-						case <- time.After(0):
-							fs.sendFileToFSNode(file, destinationFSNode)
-							response := <- channel
-							fmt.Printf("Resp = %s\n", response)
-						}
-					}
 			}
-		}
-	}
+		}	
+	}*/
+
+	
+	file := files[0]
+	destinationFSNode := fs.randomFirestoreNode()
+	return fs.storeDataIntoFSNode(file, destinationFSNode)
+	//return nil
 }
 
-func (fs *Firestore) sendFileToFSNode(file *File, fsNode *Node) chan []byte {
+func (fs *Firestore) storeDataIntoFSNode(file *File, fsNode *Node) chan []byte {
+	encodedFile, _ := file.Encoded()
 	masterIfritClient := fs.MasterNode.FireflyClient()
 	destinationNode := fs.randomFirestoreNode().FireflyClient()
-	message := NewFirestoreMessage(file, fsNode)
-	encodedMessage := message.Encoded()
 
-	return masterIfritClient.SendTo(destinationNode.Addr(), encodedMessage)
+	return masterIfritClient.SendTo(destinationNode.Addr(), encodedFile)
 }
 
 func (fs *Firestore) fileExists(file *File) bool {
@@ -89,7 +82,7 @@ func (fs *Firestore) fileExists(file *File) bool {
 func (fs *Firestore) randomFirestoreNode() *Node {
 	rand.Seed(time.Now().UnixNano())
 	idx := rand.Intn(len(fs.FirestoreNodes))
-	fmt.Println(fs.FirestoreNodes)
+	//fmt.Println(fs.FirestoreNodes)
 	return fs.FirestoreNodes[idx]
 }
 
@@ -123,41 +116,6 @@ func newFirestoreMasterNode() (*Masternode, error) {
 	ifritClient.RegisterMsgHandler(masterNode.MasterNodeMessageHandler)
 	return masterNode, nil
 }
-
-/** Filecontents interface here */
-func NewFirestoreMessage(file *File, fsNode *Node) *FSMessage {
-	fileMetadata, _ := decomposeFileInformation(file)
-	fileContents := file.GetFileAsBytes()
-
-	message := &FSMessage {
-		FileMetadata: fileMetadata,
-		FileContents: fileContents,		
-	}
-
-	return message
-}
-
-func (fsm *FSMessage) Encoded() []byte {
-	var buffer bytes.Buffer
-	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(fsm); err != nil {
-	   panic(err)
-	}
-	return buffer.Bytes()
-}
-
-func decomposeFileInformation(file *File) ([]byte, error) {
-	//fileInfoBuffer, _ := file.DecodeFileInfo()
-	fileHashBuffer, _ := file.DecodeHashString()
-	//bufferLength := len(fileInfoBuffer.Bytes()) + len(fileHashBuffer.Bytes())
-	bufferLength := len(fileHashBuffer.Bytes())
-	
-	buffer := make([]byte, bufferLength)
-	//buffer = append(buffer, fileInfoBuffer.Bytes()...)
-	buffer = append(buffer, fileHashBuffer.Bytes()...)
-	return buffer, nil
-}
-
 
 
 

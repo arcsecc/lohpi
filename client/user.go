@@ -22,8 +22,7 @@ type User struct {
 }
 
 func NewUser(ownerName string) (*User, error) {
-	self := &User {
-	}
+	self := &User {}
 	
 	self.OwnerName = ownerName
 	return self, nil
