@@ -24,7 +24,6 @@ type Application struct {
 }
 
 func main() {
-
 	// Main entry point. Read configuration to set initial parameters
 	readConfig()
 
@@ -67,18 +66,9 @@ func NewApplication() (*Application, error) {
 	return app, nil
 }
 
-/*func (app *Application) ApplicationClients() []*Client {
-	return app.Clients
-}*/
-
 // Main entry point for running the application
 func (app *Application) Run() {
 	/*for _, user := range app.Users {
-		// fix dis shit
-		if user == nil {
-			continue 
-		}
-
 		files := user.UserFiles()
 		app.Fs.StoreFiles(files)
 
@@ -94,7 +84,6 @@ func (app *Application) Run() {
 			fmt.Printf("Resp = %s\n", response)
 	}			
 }
-
 
 func CreateUsers(numUsers int) ([]*User, error) {
 	users := make([]*User, 0)

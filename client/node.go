@@ -21,17 +21,17 @@ type Node struct {
 	Filemap map[string]*os.File		// string -> *os.File
 	IfritClient *ifrit.Client
 	NodeID string
-	AbsoluteStorageDirectoryPath string
+	AbsoluteStorageDirectoryPath string // where to store files (node-locally)
 }
 
 // Might need to change the value's type
 type Masternode struct {
-	Filemap map[string]string		// hash -> absolute filepath
+	Filemap map[string]*ifrit.Client		// absolute filepath -> firestore node
 	IfritClient *ifrit.Client
 	NodeID string
 }
 
-/** Node interface */
+/** Node interface. Remote firestore node */
 func NewNode(ID string) (*Node, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
@@ -42,6 +42,8 @@ func NewNode(ID string) (*Node, error) {
 	node.IfritClient = ifritClient
 	node.NodeID = ID
 	node.Filemap = make(map[string]*os.File)
+
+	// TODO: recover from crash here... check files on disk and insert them into table
 	node.AbsoluteStorageDirectoryPath, err = setStorageDirectory(node)
 	if err != nil {
 		log.Error("Could not create directory for storage node")
@@ -57,9 +59,6 @@ func (n *Node) ID() string {
 }
 
 func (n *Node) FireflyClient() *ifrit.Client {
-	if n.IfritClient == nil {
-		fmt.Printf("OIAJSDOISOSIJDSO\n");
-	}
 	return n.IfritClient
 }
 
@@ -74,13 +73,11 @@ func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 	} else {
 		fmt.Printf("File is not contained in the node. Inserts it...\n")
 		
-		// sender's file tree is differen from out file tree!
-		absPath := n.getAbsFilePath(message.RelativeFilePath)
-		message.SetAbsoluteFilePath(absPath)
-		
-		fmt.Printf("new absolute file path = %s\n", message.AbsoluteFilePath)
+		//sender's file tree is differen from out file tree!
+		newFileAbsPath := n.getAbsFilePath(message.AbsoluteFilePath)
+		message.SetAbsoluteFilePath(newFileAbsPath)
 		n.insertNewFileIntoStorageNode(message)
-		
+		// gossip newest update of files to the entire network
 	}
 	return nil, nil
 }
@@ -133,8 +130,8 @@ func setStorageDirectory(n *Node) (string, error) {
 	return absoluteDirPath, nil
 }
 
-func (n *Node) getAbsFilePath(relPath string) string {
-	return filepath.Join(n.AbsoluteStorageDirectoryPath, relPath)
+func (n *Node) getAbsFilePath(fileAbsPath string) string {
+	return filepath.Join(n.AbsoluteStorageDirectoryPath, fileAbsPath)
 }
 
 /** Masternode interface */
@@ -152,7 +149,7 @@ func NewMasterNode(nodeID string) (*Masternode, error) {
 	return masterNode, nil
 }
 
-func (n *Masternode) FileNameTable() map[string]string {
+func (n *Masternode) FileNameTable() map[string]*ifrit.Client {
 	return n.Filemap
 }
 
