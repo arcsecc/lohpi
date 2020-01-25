@@ -6,10 +6,11 @@ import (
 //	"ifrit"
 	log "github.com/inconshreveable/log15"
 //	"math/rand"
-	"time"
 	"errors"
 //	"encoding/gob"
 //	"bytes"
+	"firestore/core/file"
+	//"firestore/core"
 	"github.com/spf13/viper"
 )
 
@@ -59,6 +60,13 @@ func NewApplication() (*Application, error) {
 	if err != nil {
 		log.Error("Could not create a new Firestore")
 		return nil, err
+	} 
+
+	// add users to network
+	for _, u := range users {
+		if firestore.AddUser(u); err != nil {
+			panic(err)
+		}
 	}
 
 	app.Users = users
@@ -68,12 +76,15 @@ func NewApplication() (*Application, error) {
 
 // Main entry point for running the application
 func (app *Application) Run() {
-	/*for _, user := range app.Users {
-		files := user.UserFiles()
-		app.Fs.StoreFiles(files)
+	
+	// Dummy user...
+	user := app.Users[0]
 
-	}*/
+	for _, file := range user.UserFiles() {
+		_ = app.Fs.StoreFile(file, user)
+	}
 
+	/*
 	files := app.Users[0].UserFiles()
 	channel := app.Fs.StoreFiles(files)
 	response := <- channel
@@ -82,7 +93,7 @@ func (app *Application) Run() {
 	select {
 		case <- time.After(0):
 			fmt.Printf("Resp = %s\n", response)
-	}			
+	}	*/		
 }
 
 func CreateUsers(numUsers int) ([]*User, error) {
@@ -90,6 +101,7 @@ func CreateUsers(numUsers int) ([]*User, error) {
 
 	for i := 0; i < numUsers; i++ {
 		username := fmt.Sprintf("user_%d", i + 1)
+
 		user, err := NewUser(username)
 		if err != nil {
 			panic(err)
@@ -107,11 +119,11 @@ func CreateUsers(numUsers int) ([]*User, error) {
 	return users, nil
 }
 
-func CreateFiles(numFiles int, user *User) ([]*File, error) {
-	files := make([]*File, 0)
+func CreateFiles(numFiles int, user *User) ([]*file.File, error) {
+	files := make([]*file.File, 0)
 
 	for i := 0; i < numFiles; i++ {
-		file, err := NewFile(10, i, user, user.OwnerName)
+		file, err := file.NewFile(10, i, user.OwnerName)
 		if err != nil {
 			panic(err)
 		}

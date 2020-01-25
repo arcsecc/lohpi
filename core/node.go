@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"errors"
 	log "github.com/inconshreveable/log15"
 	"path/filepath"
+	"firestore/core/file"
 //	"encoding/gob"
 //	"bytes"
 //	"time"
@@ -18,17 +19,10 @@ var (
 
 // Firestore node
 type Node struct {
-	Filemap map[string]*os.File		// string -> *os.File
+	Filemap map[string]*os.File		// hash of client's file path -> *os.File
 	IfritClient *ifrit.Client
 	NodeID string
-	AbsoluteStorageDirectoryPath string // where to store files (node-locally)
-}
-
-// Might need to change the value's type
-type Masternode struct {
-	Filemap map[string]*ifrit.Client		// absolute filepath -> firestore node
-	IfritClient *ifrit.Client
-	NodeID string
+	AbsoluteStorageDirectoryPath string // directory into which to store files (node-locally)
 }
 
 /** Node interface. Remote firestore node */
@@ -66,7 +60,7 @@ func (n *Node) FireflyClient() *ifrit.Client {
 func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 	fmt.Println("StorageNodeMessageHandler")
 
-	message, _ := DecodedMessage(data)
+	message, _ := file.DecodedMessage(data)
 
 	if n.storageNodeHasFile(message) == true {
 		fmt.Printf("File is already in node. Should update it...\n")
@@ -82,9 +76,9 @@ func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (n *Node) insertNewFileIntoStorageNode(m *Message) {
+func (n *Node) insertNewFileIntoStorageNode(m *file.Message) {
 	n.createFileTree(m.AbsoluteFilePath)
-	file, err := CreateFileFromBytes(m.AbsoluteFilePath, m.FileContents) 		// pass permission as well!
+	file, err := file.CreateFileFromBytes(m.AbsoluteFilePath, m.FileContents) 		// pass permission as well!
 	if err != nil {
 		fmt.Errorf("File exists!!1! It should not exist!")
 		panic(err)
@@ -103,7 +97,7 @@ func (n *Node) createFileTree(absFilePath string) {
 	}
 }
 
-func (n *Node) storageNodeHasFile(m *Message) bool {
+func (n *Node) storageNodeHasFile(m *file.Message) bool {
 	filenameTable := n.FileNameTable()
 	idx := m.FileHash
 	if _, ok := filenameTable[idx]; ok {
@@ -135,6 +129,7 @@ func (n *Node) getAbsFilePath(fileAbsPath string) string {
 }
 
 /** Masternode interface */
+/*
 func NewMasterNode(nodeID string) (*Masternode, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
@@ -147,12 +142,14 @@ func NewMasterNode(nodeID string) (*Masternode, error) {
 	}
 	go ifritClient.Start()
 	return masterNode, nil
-}
+}*/
 
+/*
 func (n *Masternode) FileNameTable() map[string]*ifrit.Client {
 	return n.Filemap
-}
+}*/
 
+/*
 func (n *Masternode) MasterNodeMessageHandler(data []byte) ([]byte, error) {
 	//fmt.Println(data)
 	return nil, nil
@@ -160,4 +157,4 @@ func (n *Masternode) MasterNodeMessageHandler(data []byte) ([]byte, error) {
 
 func (n *Masternode) FireflyClient() *ifrit.Client {
 	return n.IfritClient
-}
+}*/
