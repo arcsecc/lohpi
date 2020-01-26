@@ -5,26 +5,41 @@ import (
 	"encoding/gob"
 )
 
+// used to send files from a client to the network.
+type Message struct {
+	FileContents []byte
+	FileContentHash string
+	FilePathHash string
+	OwnerID string
+	//AbsoluteFilePath string
+	//RelativeFilePath string 
+	LocalModTime int64
+	PreviousModifier string
+}
+
+
 /** Message interface */
-func NewMessage(file *File) (*Message, error) {
+func NewMessage(file *File) *Message {
 	fileContents := file.GetFileAsBytes()
-	fileHash := file.GetFileHash()
+	fileContentHash := file.GetFileContentHash()
+	filePathHash := file.GetFilePathHash()
 	fileOwner := file.OwnerID
-	absolutePath := file.File.Name()
-	relativePath := file.RelativePath
+	//absolutePath := file.File.Name()
+	//relativePath := file.RelativePath
 	modTime := file.Fileinfo.ModTime().Unix()
 	
 	message := &Message {
 		FileContents: fileContents,
-		FileHash: fileHash,
+		FileContentHash: fileContentHash,
+		FilePathHash: filePathHash,
 		OwnerID: fileOwner,
-		AbsoluteFilePath: absolutePath,
-		RelativeFilePath: relativePath,
+		//AbsoluteFilePath: absolutePath,
+		//RelativeFilePath: relativePath,
 		LocalModTime: modTime,
 		PreviousModifier: fileOwner,
 	}
 
-	return message, nil
+	return message
 }
 
 func (m *Message) Encoded() []byte {
@@ -47,7 +62,3 @@ func DecodedMessage(encodedMessage []byte) (*Message, error) {
 
 	return &decodedMessage, nil
 }
-
-func (m *Message) SetAbsoluteFilePath(absFilePath string) {
-	m.AbsoluteFilePath = absFilePath
-} 

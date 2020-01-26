@@ -44,6 +44,7 @@ func NewNode(ID string) (*Node, error) {
 		panic(err)
 	}
 
+	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
 	go ifritClient.Start()
 	return node, nil
 }
@@ -58,34 +59,31 @@ func (n *Node) FireflyClient() *ifrit.Client {
 
 // Invoked when this client receives a message
 func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
-	fmt.Println("StorageNodeMessageHandler")
+	decodedFile := file.Decoded(data)
+	n.SetAbsoluteFilePath(decodedFile)
 
-	message, _ := file.DecodedMessage(data)
+	fmt.Printf("Path = %s\n", decodedFile.GetAbsoluteFilePath())
 
-	if n.storageNodeHasFile(message) == true {
+	if n.storageNodeHasFile(decodedFile) == true {
 		fmt.Printf("File is already in node. Should update it...\n")
 	} else {
 		fmt.Printf("File is not contained in the node. Inserts it...\n")
-		
-		//sender's file tree is differen from out file tree!
-		newFileAbsPath := n.getAbsFilePath(message.AbsoluteFilePath)
-		message.SetAbsoluteFilePath(newFileAbsPath)
-		n.insertNewFileIntoStorageNode(message)
+		n.insertNewFileIntoStorageNode(decodedFile)
 		// gossip newest update of files to the entire network
 	}
 	return nil, nil
 }
 
-func (n *Node) insertNewFileIntoStorageNode(m *file.Message) {
-	n.createFileTree(m.AbsoluteFilePath)
-	file, err := file.CreateFileFromBytes(m.AbsoluteFilePath, m.FileContents) 		// pass permission as well!
+func (n *Node) insertNewFileIntoStorageNode(f *file.File) {
+	fmt.Printf("%s\n", f.GetFileAsBytes())
+	/*_, err := file.CreateFileFromBytes(f.GetAbsoluteFilePath(), f.GetFileAsBytes())
 	if err != nil {
 		fmt.Errorf("File exists!!1! It should not exist!")
 		panic(err)
 	}
 
-	fileKey := m.FileHash
-	n.Filemap[fileKey] = file
+	fileKey := m.FileHash*/
+//	n.Filemap[fileKey] = file
 }
 
 func (n *Node) createFileTree(absFilePath string) {
@@ -97,9 +95,9 @@ func (n *Node) createFileTree(absFilePath string) {
 	}
 }
 
-func (n *Node) storageNodeHasFile(m *file.Message) bool {
+func (n *Node) storageNodeHasFile(file *file.File) bool {
 	filenameTable := n.FileNameTable()
-	idx := m.FileHash
+	idx := file.FilePathHash
 	if _, ok := filenameTable[idx]; ok {
 		return true
 	}
@@ -126,6 +124,12 @@ func setStorageDirectory(n *Node) (string, error) {
 
 func (n *Node) getAbsFilePath(fileAbsPath string) string {
 	return filepath.Join(n.AbsoluteStorageDirectoryPath, fileAbsPath)
+}
+
+func (n *Node) SetAbsoluteFilePath(file *file.File) {
+	hash := file.FilePathHash
+	absFilePath := fmt.Sprintf("%s/%x", n.AbsoluteStorageDirectoryPath, hash)
+	file.AbsolutePath = absFilePath
 }
 
 /** Masternode interface */

@@ -11,6 +11,7 @@ import (
 var (
 	errCreateRandomData			= errors.New("Could not create random")
 	errHashClientData 			= errors.New("Could not hash client's data")
+	errAddClientNode 			= errors.New("Could not add ClientNode to User")
 )
 
 type User struct {
@@ -21,12 +22,19 @@ type User struct {
 	Files []*file.File
 	ClientNode *core.Clientnode
 	OwnerName string
+
+	// should remove this ugly hack 
+	StorageNodes []*core.Node
 }
 
-func NewUser(ownerName string) (*User, error) {
-	self := &User {}
-	self.OwnerName = ownerName
-	return self, nil
+func NewUser(ownerName string) *User {
+	clientNode := core.NewClientNode(ownerName)
+	self := &User {
+		OwnerName: ownerName,
+		ClientNode: clientNode,
+	}
+
+	return self
 }
 
 func (u *User) SetFiles(files []*file.File) {
@@ -41,10 +49,24 @@ func (u *User) Name() string {
 	return u.OwnerName
 }
 
-func (u *User) SetAPIFrontEnd(cn *core.Clientnode) {
-	u.ClientNode = cn
+func (u *User) StoreFileRemotely(file *file.File) chan []byte {
+	return u.ClientNode.StoreFileRemotely(file, u.StorageNodes)
 }
 
-func (u *User) GetAPIFrontEnd() *core.Clientnode {
-	return u.ClientNode
+/*func (u *User) FileExists(file *file.File) bool {
+	return u.ClientNode.FileExists(file)
+}*/
+
+func (u *User) DeleteFile(file *file.File) {
+	u.ClientNode.DeleteFile(file)
 }
+
+// HACK
+func (u *User) SetStorageNodesList(storageNodes []*core.Node) {
+	u.StorageNodes = storageNodes
+}
+
+/*
+func (u *User) UpdateFile(file *File, data []byte) error {
+	return u.ClientNode.UpdateFile(file, data)
+}*/

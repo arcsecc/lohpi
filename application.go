@@ -9,8 +9,9 @@ import (
 	"errors"
 //	"encoding/gob"
 //	"bytes"
+	"time"
 	"firestore/core/file"
-	//"firestore/core"
+	"firestore/core"
 	"github.com/spf13/viper"
 )
 
@@ -20,8 +21,8 @@ var (
 )
 
 type Application struct {
-	Fs *Firestore
 	Users []*User
+	StorageNodes []*core.Node
 }
 
 func main() {
@@ -50,62 +51,67 @@ func NewApplication() (*Application, error) {
 	app := &Application {}
 
 	numUsers := viper.GetInt("num_users")
-	users, err := CreateUsers(numUsers)
+	users, err := CreateApplicationUsers(numUsers)
 	if err != nil {
 		log.Error("Could not create users")
 		return nil, err
 	}
 
-	firestore, err := NewFirestore()
+	numFirestoreNodes := viper.GetInt("firestore_nodes")
+	firestore_nodes, err := CreateFirestoreNodes(numFirestoreNodes)
 	if err != nil {
-		log.Error("Could not create a new Firestore")
+		log.Error("Could not create Firestore storage nodes")
 		return nil, err
-	} 
-
-	// add users to network
-	for _, u := range users {
-		if firestore.AddUser(u); err != nil {
-			panic(err)
-		}
 	}
 
 	app.Users = users
-	app.Fs = firestore
+	app.StorageNodes = firestore_nodes
+	
+	// HACK
+	for _, u := range app.Users {
+		u.SetStorageNodesList(firestore_nodes)
+	}
+
 	return app, nil
 }
 
 // Main entry point for running the application
 func (app *Application) Run() {
-	
-	// Dummy user...
+
 	user := app.Users[0]
-
-	for _, file := range user.UserFiles() {
-		_ = app.Fs.StoreFile(file, user)
-	}
-
-	/*
-	files := app.Users[0].UserFiles()
-	channel := app.Fs.StoreFiles(files)
-	response := <- channel
-	fmt.Printf("Resp = %s\n", response)
+	file := user.UserFiles()[0]
+	_ = <- user.StoreFileRemotely(file)
+	//fmt.Printf("Resp = %s\n", response)
 
 	select {
 		case <- time.After(0):
-			fmt.Printf("Resp = %s\n", response)
-	}	*/		
+			//fmt.Printf("Resp = %s\n", response)
+	}			
 }
 
-func CreateUsers(numUsers int) ([]*User, error) {
+func CreateFirestoreNodes(numFirestoreNodes int) ([]*core.Node, error) {
+	nodes := make([]*core.Node, 0)
+
+	for i := 0; i < numFirestoreNodes; i++ {
+		nodeID := fmt.Sprintf("fsNode_%d", i + 1)
+		node, err := core.NewNode(nodeID)
+		if err != nil {
+			log.Error("Could not create Firestore storage node")
+			return nil, err
+		}
+
+		nodes = append(nodes, node)
+	}
+
+	return nodes, nil
+}
+
+func CreateApplicationUsers(numUsers int) ([]*User, error) {
 	users := make([]*User, 0)
 
 	for i := 0; i < numUsers; i++ {
 		username := fmt.Sprintf("user_%d", i + 1)
-
-		user, err := NewUser(username)
-		if err != nil {
-			panic(err)
-		}
+		user := NewUser(username)
 	
 		files, err := CreateFiles(1, user)
 		if err != nil {
@@ -147,9 +153,12 @@ func readConfig() error {
 	}
 
 	// Behavior variables
-	viper.SetDefault("firestore_clients", 3)
+	viper.SetDefault("firestore_nodes", 1)
 	viper.SetDefault("replication_degree", 1)
 	viper.SetDefault("files_per_user", 1)
+	viper.SetDefault("num_users", 1)
+	viper.SetDefault("files_per_user", 1)
+	viper.SetDefault("file_size", 256)
 	viper.SafeWriteConfig()
 
 	return nil

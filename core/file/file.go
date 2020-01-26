@@ -9,7 +9,8 @@ import (
 	"math/rand"
 	"crypto/sha256"
 	"io"
-	"io/ioutil"
+//	"io/ioutil"
+	"strings"
 //	"path/filepath"
 )
 
@@ -19,27 +20,17 @@ var FILE_DIRECTORY = "files"
 const MAX_SHARD_SIZE = 1000000
 
 // API used by clients and storage nodes to handle files
-
 type File struct {
 	File *os.File
 	Fileinfo os.FileInfo
-	ContentHash string				// sha256 hash of the os.File's contents
+	FileContentHash string				// sha256 hash of the os.File's contents
+	FilePathHash string		// sha256 hash of the absolute path
 	OwnerID string
 	RelativePath string		// extend os.FileInfo a little bit
+	AbsolutePath string
 }
 
-// used to send files from a client to the network.
-type Message struct {
-	FileContents []byte
-	FileContentHash string
-	OwnerID string
-	AbsoluteFilePath string
-	RelativeFilePath string 
-	LocalModTime int64
-	PreviousModifier string
-}
-
-func NewFile(fileSize uint64, order int, ownerID string) (*File, error) {	
+func NewFile(fileSize uint64, directoryLocalID int, ownerID string) (*File, error) {	
 	customFile := &File {
 		OwnerID: ownerID,
 	}
@@ -50,9 +41,10 @@ func NewFile(fileSize uint64, order int, ownerID string) (*File, error) {
 		panic(err)
 	}
 
+	// Create FILES dir too...
 	createUserDirectory(currentWorkingDirectoy, ownerID)
-	absolutePath := fmt.Sprintf("%s/%s/%s/%d_file.txt", currentWorkingDirectoy, FILE_DIRECTORY, ownerID, order)
-	relativePath := fmt.Sprintf("./%s/%s/%d_file.txt", FILE_DIRECTORY, ownerID, order)
+	absolutePath := fmt.Sprintf("%s/%s/%s/%d_file.txt", currentWorkingDirectoy, FILE_DIRECTORY, ownerID, directoryLocalID)
+	relativePath := fmt.Sprintf("./%s/%s/%d_file.txt", FILE_DIRECTORY, ownerID, directoryLocalID)
 	emptyFile, err := os.OpenFile(absolutePath, os.O_RDONLY|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
 		log.Error("Could not open a new file")
@@ -66,8 +58,8 @@ func NewFile(fileSize uint64, order int, ownerID string) (*File, error) {
 
 	customFile.File = emptyFile
 	fillEmptyFile(fileSize, emptyFile)
-	customFile.ContentHash = customFile.computeFileContentHash()
-	customFile.PathHash = customFile.computeFilePathHash()
+	customFile.FileContentHash = customFile.computeFileContentHash()
+	customFile.FilePathHash = customFile.computeFilePathHash()
 	customFile.Fileinfo, _ = os.Stat(absolutePath)
 	customFile.RelativePath = relativePath
 	return customFile, nil
@@ -78,8 +70,9 @@ func (f *File) GetFile() (*os.File) {
 }
 
 func (f *File) GetFileAsBytes() []byte {
-	file, _ := os.Open(f.File.Name())
-	bytes, err := ioutil.ReadFile(file.Name())
+	//file, _ := os.Open(f.File.Name())
+	fmt.Printf("name = %s\n", f.File.Name())
+	/*bytes, err := ioutil.ReadFile(file.Name())
 	if err != nil {
 		log.Error("Could not read file")
 	}
@@ -87,8 +80,8 @@ func (f *File) GetFileAsBytes() []byte {
 
 	buffer := make([]byte, len(bytes))
 	copy(buffer, bytes)
-	
-	return buffer
+	*/
+	return nil
 }
 
 func (f *File) GetFileInfo() (os.FileInfo) {
@@ -96,14 +89,18 @@ func (f *File) GetFileInfo() (os.FileInfo) {
 }
 
 func (f *File) GetFileContentHash() string {
-	return f.ContentHash
+	return f.FileContentHash
 }
 
-func (f *File) GetFileHash() string {
-	return f.PathHash
+func (f *File) GetFilePathHash() string {
+	return f.FilePathHash
 }
 
-func (f *File) DecodeFileInfo() (bytes.Buffer, error) {
+func (f *File) GetAbsoluteFilePath() string {
+	return f.AbsolutePath
+}
+
+func (f *File) EncodeFileInfo() (bytes.Buffer, error) {
 	var buffer bytes.Buffer
 	encoder := gob.NewEncoder(&buffer)
 	if err := encoder.Encode(&f.Fileinfo); err != nil {
@@ -113,29 +110,46 @@ func (f *File) DecodeFileInfo() (bytes.Buffer, error) {
 	return buffer, nil
 }
 
-func (f *File) DecodeHashString() (bytes.Buffer, error) {
+func (f *File) EncodeHashString() (bytes.Buffer, error) {
 	var buffer bytes.Buffer
-	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(f.Hash); err != nil {
+	_ = gob.NewEncoder(&buffer)
+	/*if err := encoder.Encode(f.Hash); err != nil {
 	   panic(err)
-	}
+	}*/
 
 	return buffer, nil
 }
 
-func (f *File) Encoded() ([]byte, error) {
-	message, _ := NewMessage(f)
+func (f *File) Encoded() []byte {
+	message := NewMessage(f)
 	encodedMessage := message.Encoded()
-	return encodedMessage, nil
+	return encodedMessage
+}
+
+func Decoded(data []byte) *File {
+	var message Message
+	dataBytes := bytes.NewBuffer(data)
+	decoder := gob.NewDecoder(dataBytes)
+	if err := decoder.Decode(&message); err != nil {
+	   panic(err)
+	}
+
+	file := &File {
+		FileContentHash: message.FileContentHash,
+		FilePathHash: message.FilePathHash,
+		OwnerID: message.OwnerID,
+	}
+
+	return file
 }
 
 // TODO: need to set appropriate mode too
-func CreateFileFromBytes(remoteRelativePath string, fileContents []byte) (*os.File, error) {
-	if _, err := os.Stat(remoteRelativePath); err == nil {
+func CreateFileFromBytes(absFilePath string, fileContents []byte) (*os.File, error) {
+	if _, err := os.Stat(absFilePath); err == nil {
 		log.Error("File exists on remote node! It shouldn't...")
 	}
 
-	file, err := os.Create(remoteRelativePath)
+	file, err := os.Create(absFilePath)
 	if err != nil {
 		panic(err)
 	}
@@ -152,7 +166,7 @@ func CreateFileFromBytes(remoteRelativePath string, fileContents []byte) (*os.Fi
 	return file, nil
 }
 
-/** Private methods */
+/******************** Private methods ***********************/
 func (f *File) computeFileContentHash() string {
 	file, err := os.Open(f.File.Name())
 	if err != nil {
@@ -166,6 +180,17 @@ func (f *File) computeFileContentHash() string {
 	defer file.Close()
 	return string(hash.Sum(nil)[:])
 }
+
+func (f *File) computeFilePathHash() string {
+	filePath := strings.NewReader(f.File.Name())
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, filePath); err != nil {
+		log.Error("Could not copy from file to hasher")
+	}
+	return string(hash.Sum(nil)[:])
+}
+
 
 func createUserDirectory(wd, userDir string) {
 	fullPath := fmt.Sprintf("%s/%s/%s/", wd, FILE_DIRECTORY, userDir)
