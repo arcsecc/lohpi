@@ -14,20 +14,20 @@ import (
 // to use the network
 
 type Clientnode struct {
-	Filemap map[string]*Node
+	GlobalFileNodeMap map[string]string
 	IfritClient *ifrit.Client
 	UserNodeID string
 }
 
 func NewClientNode(NodeID string) *Clientnode {
-	fileMap := make(map[string]*Node, 0)
+	globalFileNodeMap := make(map[string]string, 0)
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		panic(err)
 	}
 
 	self := &Clientnode {
-		Filemap: fileMap,
+		GlobalFileNodeMap: globalFileNodeMap,
 		IfritClient: ifritClient,
 	}
 
@@ -38,7 +38,7 @@ func NewClientNode(NodeID string) *Clientnode {
 }
 
 func (cn *Clientnode) StoreFileRemotely(file *file.File, storageNodes []*Node) chan []byte {
-	if cn.fileExists(file) == true {
+	if cn.fileExistsInRemoteStorage(file) == true {
 		log.Error("File already exists. Should we overwrite it?")
 		panic(nil)
 		return nil
@@ -47,9 +47,9 @@ func (cn *Clientnode) StoreFileRemotely(file *file.File, storageNodes []*Node) c
 	// Map the user file's absolute file path to the storage node that stores is
 	fileContentHash := file.GetFileContentHash()
 	randomStorageNode := storageNodes[rand.Int() % len(storageNodes)]
-	cn.Filemap[fileContentHash] = randomStorageNode
+	cn.GlobalFileNodeMap[fileContentHash] = randomStorageNode.FireflyClient().Addr()
 
-	// Actually send the file to the node by encoding it as a Message)
+	// Actually send the file to the node by encoding it as a file.Message
 	return cn.IfritClient.SendTo(randomStorageNode.FireflyClient().Addr(), file.Encoded())
 }
 
@@ -57,9 +57,9 @@ func (cn *Clientnode) DeleteFile(file *file.File) error {
 	return nil
 }
 
-func (cn *Clientnode) fileExists(file *file.File) bool {
+func (cn *Clientnode) fileExistsInRemoteStorage(file *file.File) bool {
 	mapKey := file.GetFilePathHash()
-	if _, ok := cn.Filemap[mapKey]; ok {
+	if _, ok := cn.GlobalFileNodeMap[mapKey]; ok {
 		return true
 	} else {
 		return false

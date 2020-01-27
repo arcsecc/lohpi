@@ -134,6 +134,7 @@ func CreateFiles(numFiles int, user *User) ([]*file.File, error) {
 			panic(err)
 		}
 
+		fmt.Printf("File = %s\n", file.GetFileAsBytes())
 		files = append(files, file)
 	}
 

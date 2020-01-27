@@ -19,7 +19,8 @@ var (
 
 // Firestore node
 type Node struct {
-	Filemap map[string]*os.File		// hash of client's file path -> *os.File
+	LocalFileMap map[string]*os.File		// hash of client's file path -> *os.File
+	GlobalFileNodeMap map[string]string 			 
 	IfritClient *ifrit.Client
 	NodeID string
 	AbsoluteStorageDirectoryPath string // directory into which to store files (node-locally)
@@ -35,7 +36,8 @@ func NewNode(ID string) (*Node, error) {
 	node := &Node {}
 	node.IfritClient = ifritClient
 	node.NodeID = ID
-	node.Filemap = make(map[string]*os.File)
+	node.LocalFileMap = make(map[string]*os.File)
+	node.GlobalFileNodeMap = make(map[string]string)
 
 	// TODO: recover from crash here... check files on disk and insert them into table
 	node.AbsoluteStorageDirectoryPath, err = setStorageDirectory(node)
@@ -59,31 +61,40 @@ func (n *Node) FireflyClient() *ifrit.Client {
 
 // Invoked when this client receives a message
 func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
-	decodedFile := file.Decoded(data)
-	n.SetAbsoluteFilePath(decodedFile)
+	decodedMessage := file.DecodedMessage(data)	
+	n.SetAbsoluteMessagePath(decodedMessage)
+	localFileMapKey := decodedMessage.FilePathHash
 
-	fmt.Printf("Path = %s\n", decodedFile.GetAbsoluteFilePath())
+	//fmt.Printf("Path = %s\n", decodedMessage.RemoteAbsolutePath)
 
-	if n.storageNodeHasFile(decodedFile) == true {
+	if n.storageNodeHasFile(localFileMapKey) == true {
 		fmt.Printf("File is already in node. Should update it...\n")
 	} else {
 		fmt.Printf("File is not contained in the node. Inserts it...\n")
-		n.insertNewFileIntoStorageNode(decodedFile)
+		n.insertNewFileIntoStorageNode(decodedMessage)
+		n.broadcastStorageState()
 		// gossip newest update of files to the entire network
 	}
 	return nil, nil
 }
 
-func (n *Node) insertNewFileIntoStorageNode(f *file.File) {
-	fmt.Printf("%s\n", f.GetFileAsBytes())
-	/*_, err := file.CreateFileFromBytes(f.GetAbsoluteFilePath(), f.GetFileAsBytes())
+func (n *Node) broadcastStorageState() {
+	
+}
+
+func (n *Node) insertNewFileIntoStorageNode(msg *file.Message) {
+	newFile, err := file.CreateFileFromBytes(msg.RemoteAbsolutePath, msg.FileContents)
 	if err != nil {
 		fmt.Errorf("File exists!!1! It should not exist!")
 		panic(err)
 	}
 
-	fileKey := m.FileHash*/
-//	n.Filemap[fileKey] = file
+	// Add the file to the node's storage (this is really not needed)
+	fileKey := msg.FilePathHash
+	n.LocalFileMap[fileKey] = newFile
+
+	// Add the file to the global map 
+	n.GlobalFileNodeMap[fileKey] = n.FireflyClient().Addr()
 }
 
 func (n *Node) createFileTree(absFilePath string) {
@@ -95,17 +106,16 @@ func (n *Node) createFileTree(absFilePath string) {
 	}
 }
 
-func (n *Node) storageNodeHasFile(file *file.File) bool {
-	filenameTable := n.FileNameTable()
-	idx := file.FilePathHash
-	if _, ok := filenameTable[idx]; ok {
+func (n *Node) storageNodeHasFile(fileMapKey string) bool {
+	filenameTable := n.LocalFileNameTable()
+	if _, ok := filenameTable[fileMapKey]; ok {
 		return true
 	}
 	return false
 }
 
-func (n *Node) FileNameTable() map[string]*os.File {
-	return n.Filemap
+func (n *Node) LocalFileNameTable() map[string]*os.File {
+	return n.LocalFileMap
 }
 
 func setStorageDirectory(n *Node) (string, error) {
@@ -126,10 +136,10 @@ func (n *Node) getAbsFilePath(fileAbsPath string) string {
 	return filepath.Join(n.AbsoluteStorageDirectoryPath, fileAbsPath)
 }
 
-func (n *Node) SetAbsoluteFilePath(file *file.File) {
-	hash := file.FilePathHash
-	absFilePath := fmt.Sprintf("%s/%x", n.AbsoluteStorageDirectoryPath, hash)
-	file.AbsolutePath = absFilePath
+func (n *Node) SetAbsoluteMessagePath(msg *file.Message) {
+	hash := msg.FilePathHash
+	absMsgPath := fmt.Sprintf("%s/%x", n.AbsoluteStorageDirectoryPath, hash)
+	msg.RemoteAbsolutePath = absMsgPath
 }
 
 /** Masternode interface */

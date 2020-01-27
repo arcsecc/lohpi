@@ -9,7 +9,7 @@ import (
 	"math/rand"
 	"crypto/sha256"
 	"io"
-//	"io/ioutil"
+	"io/ioutil"
 	"strings"
 //	"path/filepath"
 )
@@ -70,9 +70,8 @@ func (f *File) GetFile() (*os.File) {
 }
 
 func (f *File) GetFileAsBytes() []byte {
-	//file, _ := os.Open(f.File.Name())
-	fmt.Printf("name = %s\n", f.File.Name())
-	/*bytes, err := ioutil.ReadFile(file.Name())
+	file, _ := os.Open(f.File.Name())
+	bytes, err := ioutil.ReadFile(file.Name())
 	if err != nil {
 		log.Error("Could not read file")
 	}
@@ -80,8 +79,7 @@ func (f *File) GetFileAsBytes() []byte {
 
 	buffer := make([]byte, len(bytes))
 	copy(buffer, bytes)
-	*/
-	return nil
+	return buffer
 }
 
 func (f *File) GetFileInfo() (os.FileInfo) {

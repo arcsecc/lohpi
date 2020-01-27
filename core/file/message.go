@@ -1,6 +1,7 @@
 package file
 
 import (
+//	"fmt"
 	"bytes"
 	"encoding/gob"
 )
@@ -15,6 +16,7 @@ type Message struct {
 	//RelativeFilePath string 
 	LocalModTime int64
 	PreviousModifier string
+	RemoteAbsolutePath string
 }
 
 
@@ -52,7 +54,7 @@ func (m *Message) Encoded() []byte {
 	return buffer.Bytes()
 }
 
-func DecodedMessage(encodedMessage []byte) (*Message, error) {
+func DecodedMessage(encodedMessage []byte) *Message {
 	var decodedMessage Message
 	buffer := bytes.NewBuffer(encodedMessage)
 	decoder := gob.NewDecoder(buffer)
@@ -60,5 +62,5 @@ func DecodedMessage(encodedMessage []byte) (*Message, error) {
 	   panic(err)
 	}
 
-	return &decodedMessage, nil
+	return &decodedMessage
 }
