@@ -17,13 +17,15 @@ var (
 	errCreateRandomClientData 	= errors.New("Could not set client data.")
 )
 
-// Firestore node
+// Storage node used to store "research data"
 type Node struct {
-	LocalFileMap map[string]*os.File		// hash of client's file path -> *os.File
-	GlobalFileNodeMap map[string]string 			 
+	SubjectFiles []*file.File		// one-to-one mapping between subject and 
+	StorageDirectoryPath string		// directory into which to store files (node-locally)
 	IfritClient *ifrit.Client
 	NodeID string
-	AbsoluteStorageDirectoryPath string // directory into which to store files (node-locally)
+	AbsoluteStorageDirectoryPath string 
+	GlobalReadPermission map[string]string
+	GlobalAppendPermission map[string]string
 }
 
 /** Node interface. Remote firestore node */
@@ -36,8 +38,8 @@ func NewNode(ID string) (*Node, error) {
 	node := &Node {}
 	node.IfritClient = ifritClient
 	node.NodeID = ID
-	node.LocalFileMap = make(map[string]*os.File)
-	node.GlobalFileNodeMap = make(map[string]string)
+	node.GlobalReadPermission = make(map[string]string) 	// subject name -> files that can be read
+	node.GlobalAppendPermission = make(map[string]string) 	// subject name -> files that can be writtten
 
 	// TODO: recover from crash here... check files on disk and insert them into table
 	node.AbsoluteStorageDirectoryPath, err = setStorageDirectory(node)
@@ -46,12 +48,13 @@ func NewNode(ID string) (*Node, error) {
 		panic(err)
 	}
 
+	/*
 	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
-	go ifritClient.Start()
+	go ifritClient.Start()*/
 	return node, nil
 }
 
-func (n *Node) ID() string {
+func (n *Node) Name() string {
 	return n.NodeID
 }
 
@@ -83,18 +86,11 @@ func (n *Node) broadcastStorageState() {
 }
 
 func (n *Node) insertNewFileIntoStorageNode(msg *file.Message) {
-	newFile, err := file.CreateFileFromBytes(msg.RemoteAbsolutePath, msg.FileContents)
+	/*newFile, err := file.CreateFileFromBytes(msg.RemoteAbsolutePath, msg.FileContents)
 	if err != nil {
 		fmt.Errorf("File exists!!1! It should not exist!")
 		panic(err)
-	}
-
-	// Add the file to the node's storage (this is really not needed)
-	fileKey := msg.FilePathHash
-	n.LocalFileMap[fileKey] = newFile
-
-	// Add the file to the global map 
-	n.GlobalFileNodeMap[fileKey] = n.FireflyClient().Addr()
+	}*/
 }
 
 func (n *Node) createFileTree(absFilePath string) {
@@ -107,16 +103,13 @@ func (n *Node) createFileTree(absFilePath string) {
 }
 
 func (n *Node) storageNodeHasFile(fileMapKey string) bool {
-	filenameTable := n.LocalFileNameTable()
+	/*filenameTable := n.LocalFileNameTable()
 	if _, ok := filenameTable[fileMapKey]; ok {
 		return true
-	}
+	}*/
 	return false
 }
 
-func (n *Node) LocalFileNameTable() map[string]*os.File {
-	return n.LocalFileMap
-}
 
 func setStorageDirectory(n *Node) (string, error) {
 	cwd, err := os.Getwd()
@@ -140,6 +133,20 @@ func (n *Node) SetAbsoluteMessagePath(msg *file.Message) {
 	hash := msg.FilePathHash
 	absMsgPath := fmt.Sprintf("%s/%x", n.AbsoluteStorageDirectoryPath, hash)
 	msg.RemoteAbsolutePath = absMsgPath
+}
+
+// Should be called from elsewhere to assign subjects to files,
+// and in turn, files to this node
+func (n *Node) SetSubjectFiles(files []*file.File) {
+	n.SubjectFiles = files	
+}
+
+func (n *Node) AppendSubjectFile(file *file.File) {
+	n.SubjectFiles = append(n.SubjectFiles, file)
+}
+
+func (n *Node) NodeSubjectFiles() []*file.File {
+	return n.SubjectFiles	
 }
 
 /** Masternode interface */

@@ -16,6 +16,10 @@ import (
 
 var FILE_DIRECTORY = "files"
 
+var FILE_READ = "r"
+var FILE_APPEND = "a"
+var FILE_NO_PERMISSION = " "
+
 // gRPC does not allow messages to exceed this size in bytes
 const MAX_SHARD_SIZE = 1000000
 
@@ -25,14 +29,19 @@ type File struct {
 	Fileinfo os.FileInfo
 	FileContentHash string				// sha256 hash of the os.File's contents
 	FilePathHash string		// sha256 hash of the absolute path
+	SubjectID string
 	OwnerID string
 	RelativePath string		// extend os.FileInfo a little bit
 	AbsolutePath string
+	FilePermission string 
+	Readers []string			// Which data users can read to the file
+	Appenders []string		// Which data users can append to the file
 }
 
-func NewFile(fileSize uint64, directoryLocalID int, ownerID string) (*File, error) {	
+func NewFile(fileSize int, directoryLocalID int, subjectID, ownerID, permission string) (*File, error) {	
 	customFile := &File {
-		OwnerID: ownerID,
+		SubjectID: ownerID,
+		FilePermission: permission,
 	}
 
 	currentWorkingDirectoy, err := os.Getwd()
@@ -64,6 +73,7 @@ func NewFile(fileSize uint64, directoryLocalID int, ownerID string) (*File, erro
 	customFile.RelativePath = relativePath
 	return customFile, nil
 }
+
 
 func (f *File) GetFile() (*os.File) {
 	return f.File
@@ -195,7 +205,7 @@ func createUserDirectory(wd, userDir string) {
 	_ = os.Mkdir(fullPath, 0774)
 }
 
-func fillEmptyFile(fileSize uint64, file *os.File) {
+func fillEmptyFile(fileSize int, file *os.File) {
 	// open file...
 	fileContents := make([]byte, fileSize)
 

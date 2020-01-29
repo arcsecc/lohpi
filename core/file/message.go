@@ -12,8 +12,6 @@ type Message struct {
 	FileContentHash string
 	FilePathHash string
 	OwnerID string
-	//AbsoluteFilePath string
-	//RelativeFilePath string 
 	LocalModTime int64
 	PreviousModifier string
 	RemoteAbsolutePath string

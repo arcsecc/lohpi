@@ -5,11 +5,11 @@ import (
 	///"github.com/joonnna/ifrit"
 //	"ifrit"
 	log "github.com/inconshreveable/log15"
-//	"math/rand"
+_	"math/rand"
 	"errors"
 //	"encoding/gob"
 //	"bytes"
-	"time"
+	//"time"
 	"firestore/core/file"
 	"firestore/core"
 	"github.com/spf13/viper"
@@ -21,8 +21,10 @@ var (
 )
 
 type Application struct {
-	Users []*User
-	StorageNodes []*core.Node
+	Subjects []*core.Subject				// data owners. Pub
+	//StorageNodes []*core.Node		// data storage units
+	MasterNode *core.Masternode	// single point-of-entry node for API calls
+	DataUsers []*core.Datauser		// data users. Sub
 }
 
 func main() {
@@ -50,81 +52,79 @@ func NewApplication() (*Application, error) {
 
 	app := &Application {}
 
-	numUsers := viper.GetInt("num_users")
-	users, err := CreateApplicationUsers(numUsers)
+	numFiles := viper.GetInt("files_per_subject")
+	numSubjects := viper.GetInt("num_subjects")
+	subjects := CreateApplicationSubjects(numSubjects)
+	masterNode, err := core.NewMasterNode()
 	if err != nil {
-		log.Error("Could not create users")
-		return nil, err
+		panic(err)
 	}
 
-	numFirestoreNodes := viper.GetInt("firestore_nodes")
-	firestore_nodes, err := CreateFirestoreNodes(numFirestoreNodes)
-	if err != nil {
-		log.Error("Could not create Firestore storage nodes")
-		return nil, err
-	}
+	app.Subjects = subjects
+	app.MasterNode = masterNode
+	storageNodes := masterNode.StorageNodes()
 
-	app.Users = users
-	app.StorageNodes = firestore_nodes
-	
-	// HACK
-	for _, u := range app.Users {
-		u.SetStorageNodesList(firestore_nodes)
-	}
-
+	initializeFilesInNetwork(storageNodes, subjects, numFiles)
 	return app, nil
 }
 
 // Main entry point for running the application
 func (app *Application) Run() {
 
+/*
 	user := app.Users[0]
 	file := user.UserFiles()[0]
 	_ = <- user.StoreFileRemotely(file)
-	//fmt.Printf("Resp = %s\n", response)
-
-	select {
+	
 		case <- time.After(0):
 			//fmt.Printf("Resp = %s\n", response)
-	}			
+	}	*/		
 }
 
-func CreateFirestoreNodes(numFirestoreNodes int) ([]*core.Node, error) {
-	nodes := make([]*core.Node, 0)
+// Assign subjects as file and 
+func initializeFilesInNetwork(nodes []*core.Node, subjects []*core.Subject, numFiles int) {
+	fileSize := viper.GetInt("file_size")	
+	allFiles := make([][]*file.File, 0)
 
-	for i := 0; i < numFirestoreNodes; i++ {
-		nodeID := fmt.Sprintf("fsNode_%d", i + 1)
-		node, err := core.NewNode(nodeID)
-		if err != nil {
-			log.Error("Could not create Firestore storage node")
-			return nil, err
+	for _, subject := range subjects {
+		files := make([]*file.File, 0)
+		for i := 0; i < numFiles; i++ {
+			directoryOrder := i
+			dummyNodeID := " "
+			file, err := file.NewFile(fileSize, directoryOrder, subject.Name(), dummyNodeID, file.FILE_NO_PERMISSION)
+			if err != nil {
+				panic(err)
+			}
+			files = append(files, file)
 		}
-
-		nodes = append(nodes, node)
+		allFiles = append(allFiles, files)
+		subject.SetFiles(files)
 	}
 
-	return nodes, nil
+	// hackingly hacky hack
+	for _, node := range nodes {
+		for _, list := range allFiles {
+			for _, f := range list {
+				node.AppendSubjectFile(f)
+			}
+		}
+		fmt.Printf("Node %s file = %v\n", node.Name(), node.NodeSubjectFiles())
+	}
 }
 
-func CreateApplicationUsers(numUsers int) ([]*User, error) {
-	users := make([]*User, 0)
+func CreateApplicationSubjects(numSubjects int) []*core.Subject {
+	subjects := make([]*core.Subject, 0)
 
-	for i := 0; i < numUsers; i++ {
-		username := fmt.Sprintf("user_%d", i + 1)
-		user := NewUser(username)
-	
-		files, err := CreateFiles(1, user)
-		if err != nil {
-			panic(err)
-		}
-
-		user.SetFiles(files)
-		users = append(users, user)
+	for i := 0; i < numSubjects; i++ {
+		subjectName := fmt.Sprintf("subject_%d", i + 1)
+		subject := core.NewSubject(subjectName)
+		subjects = append(subjects, subject)
 	}
 
-	return users, nil
+	return subjects
 }
 
+/*
 func CreateFiles(numFiles int, user *User) ([]*file.File, error) {
 	files := make([]*file.File, 0)
 
@@ -140,12 +140,12 @@ func CreateFiles(numFiles int, user *User) ([]*file.File, error) {
 
 	return files, nil
 }
+*/
 
 func readConfig() error {
 	viper.SetConfigName("firestore_config")
 	viper.AddConfigPath("/var/tmp")
 	viper.AddConfigPath(".")
-
 	viper.SetConfigType("yaml")
 
 	err := viper.ReadInConfig()
@@ -155,10 +155,9 @@ func readConfig() error {
 
 	// Behavior variables
 	viper.SetDefault("firestore_nodes", 1)
-	viper.SetDefault("replication_degree", 1)
-	viper.SetDefault("files_per_user", 1)
-	viper.SetDefault("num_users", 1)
-	viper.SetDefault("files_per_user", 1)
+	viper.SetDefault("num_subjects", 2)
+	viper.SetDefault("data_users", 1)
+	viper.SetDefault("files_per_subject", 1)
 	viper.SetDefault("file_size", 256)
 	viper.SafeWriteConfig()
 
@@ -169,7 +168,7 @@ func readConfig() error {
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {
 	// Get needed application clients
-	ifritClient := client.FireflyClient()
+	ifritClient := client.FirefzlyClient()
 	masterIfritClient := app.MasterClient.FireflyClient()
 
 	// Set payload properties prior to sending it
