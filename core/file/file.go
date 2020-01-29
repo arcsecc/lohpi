@@ -11,14 +11,14 @@ import (
 	"io"
 	"io/ioutil"
 	"strings"
+	"github.com/pkg/xattr"
 //	"path/filepath"
 )
 
-var FILE_DIRECTORY = "files"
-
-var FILE_READ = "r"
-var FILE_APPEND = "a"
-var FILE_NO_PERMISSION = "NOPE"
+var FILE_STORE = "STORE"
+var FILE_READ = "READ"	
+var FILE_APPEND = "APPEND"
+var FILE_NO_PERMISSION = "NO PERMISSIONS"
 
 // gRPC does not allow messages to exceed this size in bytes
 const MAX_SHARD_SIZE = 1000000
@@ -26,42 +26,17 @@ const MAX_SHARD_SIZE = 1000000
 // API used by clients and storage nodes to handle files
 type File struct {
 	File *os.File
-	Fileinfo os.FileInfo
+	FileInfo os.FileInfo
 	FileContentHash string				// sha256 hash of the os.File's contents
 	FilePathHash string		// sha256 hash of the absolute path
 	SubjectID string
 	OwnerID string
-	RelativePath string		// extend os.FileInfo a little bit
+	RelativePath string		// extend os.FileInfo a little bit for remote storage purposes
 	AbsolutePath string
 	FilePermissionString string 
-	StorageReaders []string			// Which data users can read to the file
-	StorageAppenders []string		// Which data users can append to the file
-	DataUserReaders []string
-	DataUserAppenders []string
 }
 
-func NewFile(fileSize int, directoryLocalID int, subjectID, ownerID, permission string) (*File, error) {	
-	customFile := &File {
-		SubjectID: subjectID,
-		OwnerID: ownerID,
-		FilePermissionString: permission,
-	}
-
-	storageReaders    := make([]string, 0)
-	storageAppenders  := make([]string, 0)
-	dataUserReaders   := make([]string, 0)
-	dataUserAppenders := make([]string, 0)
-
-	currentWorkingDirectoy, err := os.Getwd()
-	if err != nil {
-		log.Error("Could not get current working directory")
-		panic(err)
-	}
-
-	// Create FILES dir too...
-	createUserDirectory(currentWorkingDirectoy, ownerID)
-	absolutePath := fmt.Sprintf("%s/%s/%s/%0d_file.txt", currentWorkingDirectoy, FILE_DIRECTORY, ownerID, directoryLocalID)
-	relativePath := fmt.Sprintf("./%s/%s/%d_file.txt", FILE_DIRECTORY, ownerID, directoryLocalID)
+func NewFile(fileSize int, absolutePath, subjectID, ownerID, permission string) (*File, error) {	
 	emptyFile, err := os.OpenFile(absolutePath, os.O_RDONLY|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
 		log.Error("Could not open a new file")
@@ -69,25 +44,64 @@ func NewFile(fileSize int, directoryLocalID int, subjectID, ownerID, permission 
 	}
 	
 	defer emptyFile.Close()
+	fillEmptyFile(fileSize, emptyFile)
+
+	fileStat, err := os.Stat(absolutePath)
 	if err != nil {
 		panic(err)
 	}
 
-	customFile.File = emptyFile
-	customFile.FileContentHash = customFile.computeFileContentHash()
-	customFile.FilePathHash = customFile.computeFilePathHash()
-	customFile.Fileinfo, _ = os.Stat(absolutePath)	
-	customFile.RelativePath = relativePath
-	customFile.StorageReaders = storageReaders
-	customFile.StorageAppenders = storageAppenders
-	customFile.DataUserReaders = dataUserReaders
-	customFile.DataUserAppenders = dataUserAppenders
-	fillEmptyFile(fileSize, emptyFile)
-	return customFile, nil
+	fileContentHash := computeFileContentHash(absolutePath)
+	file := &File {
+		File: emptyFile,
+		FileInfo: fileStat,
+		FileContentHash: fileContentHash,
+		SubjectID: subjectID,
+		OwnerID: ownerID,
+		AbsolutePath: absolutePath,
+		FilePermissionString: permission,
+	}
+	
+	file.setExtendedFileAttribute()
+	return file, nil
+}
+
+func (f *File) setExtendedFileAttribute() {
+	const prefix = "user."			// must be used as leading token
+	absFilePath := f.AbsolutePath
+	attribute := fmt.Sprintf("%s%s", prefix, f.OwnerID)
+	permission := fmt.Sprintf("%s", f.FilePermission())
+	if err := xattr.Set(absFilePath, attribute+"test", []byte(permission)); err != nil {
+		panic(err)
+	}
+
+	data, err := xattr.Get(absFilePath, attribute+"test"); 
+	if err != nil {
+		panic(err)
+	}
+	
+  	fmt.Printf("%s\n", data)
+}
+
+func (f *File) ListAllStorePermissions() {
+	list, err := xattr.List(f.AbsolutePath); 
+	if err != nil {
+		panic(err)
+	}
+	
+	for _, attribute := range list {
+		data, err := xattr.Get(f.AbsolutePath, attribute);
+		if err != nil {
+	  		panic(err)
+		}
+
+		fmt.Printf("%s\n", string(data[1:]))
+	}
 }
 
 func (f *File) SetPermission(permission string) {
 	f.FilePermissionString = permission
+	f.setExtendedFileAttribute()
 }
 
 func (f *File) FileSubject() string {
@@ -116,7 +130,7 @@ func (f *File) GetFileAsBytes() []byte {
 }
 
 func (f *File) GetFileInfo() (os.FileInfo) {
-	return f.Fileinfo
+	return f.FileInfo
 }
 
 func (f *File) GetFileContentHash() string {
@@ -134,7 +148,7 @@ func (f *File) GetAbsoluteFilePath() string {
 func (f *File) EncodeFileInfo() (bytes.Buffer, error) {
 	var buffer bytes.Buffer
 	encoder := gob.NewEncoder(&buffer)
-	if err := encoder.Encode(&f.Fileinfo); err != nil {
+	if err := encoder.Encode(&f.FileInfo); err != nil {
 	   panic(err)
 	}
 
@@ -198,8 +212,8 @@ func CreateFileFromBytes(absFilePath string, fileContents []byte) (*os.File, err
 }
 
 /******************** Private methods ***********************/
-func (f *File) computeFileContentHash() string {
-	file, err := os.Open(f.File.Name())
+func computeFileContentHash(filePath string) string {
+	file, err := os.Open(filePath)
 	if err != nil {
 		panic(err)
 	}
@@ -222,11 +236,11 @@ func (f *File) computeFilePathHash() string {
 	return string(hash.Sum(nil)[:])
 }
 
-
+/*
 func createUserDirectory(wd, userDir string) {
 	fullPath := fmt.Sprintf("%s/%s/%s/", wd, FILE_DIRECTORY, userDir)
 	_ = os.Mkdir(fullPath, 0774)
-}
+}*/
 
 func fillEmptyFile(fileSize int, file *os.File) {
 	// open file...

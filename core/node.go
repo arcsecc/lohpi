@@ -15,7 +15,10 @@ import (
 
 var (
 	errCreateRandomClientData 	= errors.New("Could not set client data.")
+
 )
+
+const NODE_DIR = "storage_nodes"
 
 // Storage node used to store "research data"
 type Node struct {
@@ -35,12 +38,8 @@ func NewNode(ID string) (*Node, error) {
 		return nil, err
 	}
 
-	// TODO: recover from crash here... check files on disk and insert them into table
-	dir, err := setStorageDirectory(ID)
-	if err != nil {
-		log.Error("Could not create directory for storage node")
-		panic(err)
-	}
+	dirPath := GetDirAbsolutePath(ID)
+	createStorageDirectory(dirPath)
 
 	/*
 	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
@@ -50,9 +49,9 @@ func NewNode(ID string) (*Node, error) {
 		IfritClient: ifritClient,
 		NodeID: ID,
 		GlobalUsagePermission: permissionMap,
-		AbsoluteStorageDirectoryPath: dir,
+		AbsoluteStorageDirectoryPath: dirPath,
 	}
-	
+
 	return node, nil
 }
 
@@ -64,8 +63,12 @@ func (n *Node) FireflyClient() *ifrit.Client {
 	return n.IfritClient
 }
 
+func (n *Node) StoragePath() string {
+	return n.AbsoluteStorageDirectoryPath
+}
+
 // Invoked when this client receives a message
-func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
+/*func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 	decodedMessage := file.DecodedMessage(data)	
 	n.SetAbsoluteMessagePath(decodedMessage)
 	localFileMapKey := decodedMessage.FilePathHash
@@ -79,9 +82,9 @@ func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 		n.insertNewFileIntoStorageNode(decodedMessage)
 		n.broadcastStorageState()
 		// gossip newest update of files to the entire network
-	}
-	return nil, nil
-}
+	}*/
+//	return nil, nil
+//}
 
 func (n *Node) broadcastStorageState() {
 	
@@ -112,19 +115,20 @@ func (n *Node) storageNodeHasFile(fileMapKey string) bool {
 	return false
 }
 
-
-func setStorageDirectory(nodeName string) (string, error) {
+func GetDirAbsolutePath(nodeName string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
+		log.Error("Could not create directory for storage node")
 		panic(err)
 	}
 
-	absoluteDirPath := fmt.Sprintf("%s/%s", cwd, nodeName)
-	if _, err := os.Stat(absoluteDirPath); os.IsNotExist(err) {
-		os.Mkdir(absoluteDirPath, 0755)
-	}
+	return fmt.Sprintf("%s/%s/%s", cwd, NODE_DIR, nodeName)
+}
 
-	return absoluteDirPath, nil
+func createStorageDirectory(dirPath string) {
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		os.MkdirAll(dirPath, 0755)
+	}
 }
 
 func (n *Node) getAbsFilePath(fileAbsPath string) string {

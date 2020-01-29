@@ -1,27 +1,22 @@
 package core
 
 import (
-	"fmt"
-	log "github.com/inconshreveable/log15"
-	"github.com/spf13/viper"
+//	"fmt"
+//	log "github.com/inconshreveable/log15"
+//	"github.com/spf13/viper"
 	"ifrit"
-	"firestore/core/file"
+//	"firestore/core/file"
 )
 
+// In order for us to simulate a read-world scenario, we do not maintain
+// any application-like data structures in the masternode. This is because the state of
+// the permissions is supposed to be held by the storage nodes and NOT master. Otherwise,
+// we could simply delegate the enitre 
 type Masternode struct {
-	NetworkStorageNodes []*Node		// data storage units encapsulated behind this master node
-	Subjects []*Subject			// Subjects known to the network. Dynamic membership
 	IfritClient *ifrit.Client
 }
 
 func NewMasterNode() (*Masternode, error) {
-	numFirestoreNodes := viper.GetInt("firestore_nodes")
-	storage_nodes, err := createStorageNodes(numFirestoreNodes)
-	if err != nil {
-		log.Error("Could not create Firestore storage nodes")
-		return nil, err
-	}
-
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -29,7 +24,6 @@ func NewMasterNode() (*Masternode, error) {
 
 	go ifritClient.Start()
 	self := &Masternode {
-		NetworkStorageNodes: storage_nodes,
 		IfritClient: ifritClient,
 	}
 
@@ -41,8 +35,8 @@ func NewMasterNode() (*Masternode, error) {
 // are invoked does not matter. Also, remember that the operation are idempotent.
 
 // Permit use to both storage nodes and data users 
-func (m *Masternode) PermitToAll(s *Subject) {
-
+func (m *Masternode) BroadcastPermissionToStorageNetwork(s *Subject, permission string) {
+	//m.IfritClient.SetGossipContent(yourGossipMsg)
 }
 
 // Permit only to a subset of data users
@@ -51,15 +45,8 @@ func (m *Masternode) PermitDataUsers(s *Subject, users []*Datauser) {
 }
 
 // Permit only to a subset of storage nodes
-func (m *Masternode) PermitStorageNodes(s *Subject, nodes []*Node) {
-	for _, node := range nodes {
-		for _, f := range node.NodeSubjectFiles() {
-			if f.FileSubject() == s.Name() {
-				f.SetPermission(file.FILE_READ)
-				
-			}
-		}
-	}
+func (m *Masternode) BroadcastPermission(s *Subject, permission string) {
+
 }
 
 // Revoke all usages from storage nodes and data users
@@ -85,35 +72,6 @@ func (m *Masternode) GetPermittedStorageNodes(s *Subject) ([]*Node) {
 // Returns a list of data users that are permitted to use the data 
 func (m *Masternode) GetPermittedDataUsers(s *Subject) ([]*Datauser) {
 	return nil
-}
-
-func (m *Masternode) StorageNodes() []*Node {
-	return m.NetworkStorageNodes
-}
-
-func (m *Masternode) StorageNodesNames() []string {
-	names := make([]string, 0)
-	for _, sn := range m.NetworkStorageNodes {
-		names = append(names, sn.Name())
-	}
-	return names
-}
-
-func createStorageNodes(numStorageNodes int) ([]*Node, error) {
-	nodes := make([]*Node, 0)
-
-	for i := 0; i < numStorageNodes; i++ {
-		nodeID := fmt.Sprintf("storageNode_%d", i + 1)
-		node, err := NewNode(nodeID)
-		if err != nil {
-			log.Error("Could not create storage node")
-			return nil, err
-		}
-
-		nodes = append(nodes, node)
-	}
-
-	return nodes, nil
 }
 
 func MasterNodeMessageHandler(data []byte) ([]byte, error) {

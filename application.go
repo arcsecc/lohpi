@@ -25,6 +25,7 @@ type Application struct {
 	StorageNodes []*core.Node		// data storage units
 	MasterNode *core.Masternode	// single point-of-entry node for API calls
 	DataUsers []*core.Datauser		// data users. Sub
+	Files []*file.File				// All files (might need to move this somewhere else)
 }
 
 func main() {
@@ -53,64 +54,69 @@ func NewApplication() (*Application, error) {
 	app := &Application {}
 
 	numFiles := viper.GetInt("files_per_subject")
-	//numSubjects := viper.GetInt("num_subjects")
+	numStorageNodes := viper.GetInt("firestore_nodes")
+//	numSubjects := viper.GetInt("num_subjects")
 	numDataUsers := viper.GetInt("data_users")
 
 	masterNode, err := core.NewMasterNode()
 	if err != nil {
 		panic(err)
 	}
-	
+
+	storageNodes, err := CreateStorageNodes(numStorageNodes)
+	if err != nil {
+		panic(err)
+	}
+
+	app.StorageNodes = storageNodes
 	app.MasterNode = masterNode
-	storageNodes := masterNode.StorageNodes()
 	app.DataUsers = CreateDataUsers(numDataUsers)
 	app.Subject = CreateApplicationSubject()
-
-	initializeFilesInNetwork(storageNodes, app.Subject, numFiles)
+	app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subject, numFiles)
 	return app, nil
 }
 
 // Main entry point for running the application
 func (app *Application) Run() {
 	master := app.MasterNode
+//	node := app.StorageNodes[0]
 
-	// let's try the first subject...
-	TestPermitAllStorageNodes(app.Subject, master)
-
+	TestStorageBroadcast(app.Subject, master, file.FILE_NO_PERMISSION)
+	for _, file := range app.Files {
+		fmt.Printf("All file permissions for file %s\n:", file.AbsolutePath)
+		file.ListAllStorePermissions()
+	}	
 }
 
-func TestPermitAllStorageNodes(s *core.Subject, master *core.Masternode) {
-	allStorageNodes := master.StorageNodes()
+func TestStorageBroadcast(s *core.Subject, master *core.Masternode, permissions string) {
+	//allStorageNodes := master.StorageNodes()
 
-	node := allStorageNodes[1]
-	files := node.NodeSubjectFiles()
-	master.PermitStorageNodes(s, allStorageNodes)
+//	node := allStorageNodes[0]
+//	files := node.NodeSubjectFiles()
 
-	for _, node := range allStorageNodes {
-		fmt.Printf("Node %s\n", node.Name())
-		for _, f := range files {
-			fmt.Printf("%s\n", f.FilePermission())
-		}
-	}
-}	
+	master.BroadcastPermissionToStorageNetwork(s, permissions)
+}
+
 
 // Environment initialization functions //
-func initializeFilesInNetwork(nodes []*core.Node, subject *core.Subject, numFiles int) {
+// Set the initial state of the system: the storage nodes hold the files
+// while having storage permissions only
+func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subject *core.Subject, numFiles int) {
 	fileSize := viper.GetInt("file_size")
+	app.Files = make([]*file.File, 0)
 
 	// might add more subjects too...
 	for i := 0; i < numFiles; i++ {
-		directoryOrder := i
 		for _, node := range nodes {
-			file, err := file.NewFile(fileSize, directoryOrder, subject.Name(), node.Name(), file.FILE_NO_PERMISSION)
+			path := fmt.Sprintf("%s/%s_file%d.txt", node.StoragePath(), subject.Name(), i)
+			file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_STORE)
 			if err != nil {
 				panic(err)
 			}
-			
 			node.AppendSubjectFile(file)
+			app.Files = append(app.Files, file)
 		}
 	}
-
 
 	/*
 	for _, subject := range subjects {
@@ -129,8 +135,14 @@ func initializeFilesInNetwork(nodes []*core.Node, subject *core.Subject, numFile
 	}*/
 }
 
+func (app *Application) PrintFilePermissions() {
+	for _, file := range app.Files {
+		fmt.Printf("Path: %s. Perm = %s\n", file.AbsolutePath, file.FilePermission())
+	}
+}
+
 func CreateApplicationSubject() *core.Subject {
-	subjectName := fmt.Sprintf("subject_%d", 1)
+	subjectName := fmt.Sprintf("subject%d", 1)
 	return core.NewSubject(subjectName)
 	/*subjects := make([]*core.Subject, 0)
 
@@ -154,23 +166,22 @@ func CreateDataUsers(numDataUsers int) ([]*core.Datauser) {
 	return dataUsers
 }
 
-/*
-func CreateFiles(numFiles int, user *User) ([]*file.File, error) {
-	files := make([]*file.File, 0)
+func CreateStorageNodes(numStorageNodes int) ([]*core.Node, error) {
+	nodes := make([]*core.Node, 0)
 
-	for i := 0; i < numFiles; i++ {
-		file, err := file.NewFile(10, i, user.OwnerName)
+	for i := 0; i < numStorageNodes; i++ {
+		nodeID := fmt.Sprintf("storageNode_%d", i + 1)
+		node, err := core.NewNode(nodeID)
 		if err != nil {
-			panic(err)
+			log.Error("Could not create storage node")
+			return nil, err
 		}
 
-		fmt.Printf("File = %s\n", file.GetFileAsBytes())
-		files = append(files, file)
+		nodes = append(nodes, node)
 	}
 
-	return files, nil
+	return nodes, nil
 }
-*/
 
 func readConfig() error {
 	viper.SetConfigName("firestore_config")

@@ -26,7 +26,7 @@ func NewMessage(file *File) *Message {
 	fileOwner := file.OwnerID
 	//absolutePath := file.File.Name()
 	//relativePath := file.RelativePath
-	modTime := file.Fileinfo.ModTime().Unix()
+	modTime := file.FileInfo.ModTime().Unix()
 	
 	message := &Message {
 		FileContents: fileContents,
