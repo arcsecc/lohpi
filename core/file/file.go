@@ -18,7 +18,7 @@ var FILE_DIRECTORY = "files"
 
 var FILE_READ = "r"
 var FILE_APPEND = "a"
-var FILE_NO_PERMISSION = " "
+var FILE_NO_PERMISSION = "NOPE"
 
 // gRPC does not allow messages to exceed this size in bytes
 const MAX_SHARD_SIZE = 1000000
@@ -33,16 +33,24 @@ type File struct {
 	OwnerID string
 	RelativePath string		// extend os.FileInfo a little bit
 	AbsolutePath string
-	FilePermission string 
-	Readers []string			// Which data users can read to the file
-	Appenders []string		// Which data users can append to the file
+	FilePermissionString string 
+	StorageReaders []string			// Which data users can read to the file
+	StorageAppenders []string		// Which data users can append to the file
+	DataUserReaders []string
+	DataUserAppenders []string
 }
 
 func NewFile(fileSize int, directoryLocalID int, subjectID, ownerID, permission string) (*File, error) {	
 	customFile := &File {
-		SubjectID: ownerID,
-		FilePermission: permission,
+		SubjectID: subjectID,
+		OwnerID: ownerID,
+		FilePermissionString: permission,
 	}
+
+	storageReaders    := make([]string, 0)
+	storageAppenders  := make([]string, 0)
+	dataUserReaders   := make([]string, 0)
+	dataUserAppenders := make([]string, 0)
 
 	currentWorkingDirectoy, err := os.Getwd()
 	if err != nil {
@@ -52,7 +60,7 @@ func NewFile(fileSize int, directoryLocalID int, subjectID, ownerID, permission 
 
 	// Create FILES dir too...
 	createUserDirectory(currentWorkingDirectoy, ownerID)
-	absolutePath := fmt.Sprintf("%s/%s/%s/%d_file.txt", currentWorkingDirectoy, FILE_DIRECTORY, ownerID, directoryLocalID)
+	absolutePath := fmt.Sprintf("%s/%s/%s/%0d_file.txt", currentWorkingDirectoy, FILE_DIRECTORY, ownerID, directoryLocalID)
 	relativePath := fmt.Sprintf("./%s/%s/%d_file.txt", FILE_DIRECTORY, ownerID, directoryLocalID)
 	emptyFile, err := os.OpenFile(absolutePath, os.O_RDONLY|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
@@ -66,14 +74,29 @@ func NewFile(fileSize int, directoryLocalID int, subjectID, ownerID, permission 
 	}
 
 	customFile.File = emptyFile
-	fillEmptyFile(fileSize, emptyFile)
 	customFile.FileContentHash = customFile.computeFileContentHash()
 	customFile.FilePathHash = customFile.computeFilePathHash()
-	customFile.Fileinfo, _ = os.Stat(absolutePath)
+	customFile.Fileinfo, _ = os.Stat(absolutePath)	
 	customFile.RelativePath = relativePath
+	customFile.StorageReaders = storageReaders
+	customFile.StorageAppenders = storageAppenders
+	customFile.DataUserReaders = dataUserReaders
+	customFile.DataUserAppenders = dataUserAppenders
+	fillEmptyFile(fileSize, emptyFile)
 	return customFile, nil
 }
 
+func (f *File) SetPermission(permission string) {
+	f.FilePermissionString = permission
+}
+
+func (f *File) FileSubject() string {
+	return f.SubjectID
+}
+
+func (f *File) FilePermission() string {
+	return f.FilePermissionString
+}
 
 func (f *File) GetFile() (*os.File) {
 	return f.File

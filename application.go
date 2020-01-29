@@ -21,8 +21,8 @@ var (
 )
 
 type Application struct {
-	Subjects []*core.Subject				// data owners. Pub
-	//StorageNodes []*core.Node		// data storage units
+	Subject *core.Subject				// data owners. Pub
+	StorageNodes []*core.Node		// data storage units
 	MasterNode *core.Masternode	// single point-of-entry node for API calls
 	DataUsers []*core.Datauser		// data users. Sub
 }
@@ -53,75 +53,105 @@ func NewApplication() (*Application, error) {
 	app := &Application {}
 
 	numFiles := viper.GetInt("files_per_subject")
-	numSubjects := viper.GetInt("num_subjects")
-	subjects := CreateApplicationSubjects(numSubjects)
+	//numSubjects := viper.GetInt("num_subjects")
+	numDataUsers := viper.GetInt("data_users")
+
 	masterNode, err := core.NewMasterNode()
 	if err != nil {
 		panic(err)
 	}
-
-	app.Subjects = subjects
+	
 	app.MasterNode = masterNode
 	storageNodes := masterNode.StorageNodes()
+	app.DataUsers = CreateDataUsers(numDataUsers)
+	app.Subject = CreateApplicationSubject()
 
-	initializeFilesInNetwork(storageNodes, subjects, numFiles)
+	initializeFilesInNetwork(storageNodes, app.Subject, numFiles)
 	return app, nil
 }
 
 // Main entry point for running the application
 func (app *Application) Run() {
+	master := app.MasterNode
 
-/*
-	user := app.Users[0]
-	file := user.UserFiles()[0]
-	_ = <- user.StoreFileRemotely(file)
-	
-		case <- time.After(0):
-			//fmt.Printf("Resp = %s\n", response)
-	}	*/		
+	// let's try the first subject...
+	TestPermitAllStorageNodes(app.Subject, master)
+
 }
 
-// Assign subjects as file and 
-func initializeFilesInNetwork(nodes []*core.Node, subjects []*core.Subject, numFiles int) {
-	fileSize := viper.GetInt("file_size")	
-	allFiles := make([][]*file.File, 0)
+func TestPermitAllStorageNodes(s *core.Subject, master *core.Masternode) {
+	allStorageNodes := master.StorageNodes()
 
-	for _, subject := range subjects {
-		files := make([]*file.File, 0)
-		for i := 0; i < numFiles; i++ {
-			directoryOrder := i
-			dummyNodeID := " "
-			file, err := file.NewFile(fileSize, directoryOrder, subject.Name(), dummyNodeID, file.FILE_NO_PERMISSION)
+	node := allStorageNodes[1]
+	files := node.NodeSubjectFiles()
+	master.PermitStorageNodes(s, allStorageNodes)
+
+	for _, node := range allStorageNodes {
+		fmt.Printf("Node %s\n", node.Name())
+		for _, f := range files {
+			fmt.Printf("%s\n", f.FilePermission())
+		}
+	}
+}	
+
+// Environment initialization functions //
+func initializeFilesInNetwork(nodes []*core.Node, subject *core.Subject, numFiles int) {
+	fileSize := viper.GetInt("file_size")
+
+	// might add more subjects too...
+	for i := 0; i < numFiles; i++ {
+		directoryOrder := i
+		for _, node := range nodes {
+			file, err := file.NewFile(fileSize, directoryOrder, subject.Name(), node.Name(), file.FILE_NO_PERMISSION)
 			if err != nil {
 				panic(err)
 			}
-			files = append(files, file)
+			
+			node.AppendSubjectFile(file)
 		}
-		allFiles = append(allFiles, files)
-		subject.SetFiles(files)
 	}
 
-	// hackingly hacky hack
-	for _, node := range nodes {
-		for _, list := range allFiles {
-			for _, f := range list {
-				node.AppendSubjectFile(f)
+
+	/*
+	for _, subject := range subjects {
+		for i := 0; i < numFiles; i++ {
+			files := make([]*file.File, 0)
+			for _, node := range nodes {
+				directoryOrder := i
+				file, err := file.NewFile(fileSize, directoryOrder, subject.Name(), node.Name(), file.FILE_NO_PERMISSION)
+				if err != nil {
+					panic(err)
+				}
+				files = append(files, file)
+				node.SetSubjectFiles(files)
 			}
 		}
-		fmt.Printf("Node %s file = %v\n", node.Name(), node.NodeSubjectFiles())
-	}
+	}*/
 }
 
-func CreateApplicationSubjects(numSubjects int) []*core.Subject {
-	subjects := make([]*core.Subject, 0)
+func CreateApplicationSubject() *core.Subject {
+	subjectName := fmt.Sprintf("subject_%d", 1)
+	return core.NewSubject(subjectName)
+	/*subjects := make([]*core.Subject, 0)
 
 	for i := 0; i < numSubjects; i++ {
 		subjectName := fmt.Sprintf("subject_%d", i + 1)
 		subject := core.NewSubject(subjectName)
 		subjects = append(subjects, subject)
 	}
+	return subjects*/
+}
 
-	return subjects
+func CreateDataUsers(numDataUsers int) ([]*core.Datauser) {
+	dataUsers := make([]*core.Datauser, 0)
+
+	for i := 0; i < numDataUsers; i++ {
+		id := fmt.Sprintf("dataUser_%d\n", i + 1)
+		user := core.NewDataUser(id)
+		dataUsers = append(dataUsers, user)
+	}
+
+	return dataUsers
 }
 
 /*

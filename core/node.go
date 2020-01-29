@@ -24,25 +24,19 @@ type Node struct {
 	IfritClient *ifrit.Client
 	NodeID string
 	AbsoluteStorageDirectoryPath string 
-	GlobalReadPermission map[string]string
-	GlobalAppendPermission map[string]string
+	GlobalUsagePermission map[string]*file.File
 }
 
 /** Node interface. Remote firestore node */
 func NewNode(ID string) (*Node, error) {
+	permissionMap := make(map[string]*file.File) 	// subject name -> files that can be read
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
-	node := &Node {}
-	node.IfritClient = ifritClient
-	node.NodeID = ID
-	node.GlobalReadPermission = make(map[string]string) 	// subject name -> files that can be read
-	node.GlobalAppendPermission = make(map[string]string) 	// subject name -> files that can be writtten
-
 	// TODO: recover from crash here... check files on disk and insert them into table
-	node.AbsoluteStorageDirectoryPath, err = setStorageDirectory(node)
+	dir, err := setStorageDirectory(ID)
 	if err != nil {
 		log.Error("Could not create directory for storage node")
 		panic(err)
@@ -51,6 +45,14 @@ func NewNode(ID string) (*Node, error) {
 	/*
 	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
 	go ifritClient.Start()*/
+
+	node := &Node {
+		IfritClient: ifritClient,
+		NodeID: ID,
+		GlobalUsagePermission: permissionMap,
+		AbsoluteStorageDirectoryPath: dir,
+	}
+	
 	return node, nil
 }
 
@@ -111,13 +113,13 @@ func (n *Node) storageNodeHasFile(fileMapKey string) bool {
 }
 
 
-func setStorageDirectory(n *Node) (string, error) {
+func setStorageDirectory(nodeName string) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
 
-	absoluteDirPath := fmt.Sprintf("%s/%s", cwd, n.NodeID)
+	absoluteDirPath := fmt.Sprintf("%s/%s", cwd, nodeName)
 	if _, err := os.Stat(absoluteDirPath); os.IsNotExist(err) {
 		os.Mkdir(absoluteDirPath, 0755)
 	}
