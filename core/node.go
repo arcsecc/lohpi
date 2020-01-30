@@ -43,8 +43,6 @@ func NewNode(ID string) (*Node, error) {
 	dirPath := GetDirAbsolutePath(ID)
 	createStorageDirectory(dirPath)
 
-	/*
-	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)*/
 	node := &Node {
 		IfritClient: ifritClient,
 		NodeID: ID,
@@ -54,6 +52,7 @@ func NewNode(ID string) (*Node, error) {
 
 	node.IfritClient.RegisterGossipHandler(node.GossipMessageHandler)
 	node.IfritClient.RegisterResponseHandler(node.GossipResponseHandler)
+	node.IfritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
 	go ifritClient.Start()
 	return node, nil
 }
@@ -71,35 +70,19 @@ func (n *Node) StoragePath() string {
 }
 
 // Invoked when this client receives a message
-/*func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
-	decodedMessage := file.DecodedMessage(data)	
-	n.SetAbsoluteMessagePath(decodedMessage)
-	localFileMapKey := decodedMessage.FilePathHash
+func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
+	msg := message.DecodedMessage(data)
+	targetSubject := msg.SubjectID
+	// if msg type...
+	for _, file := range n.SubjectFiles {
+		if strings.Contains(file.AbsolutePath, targetSubject) {
+			file.SetPermission(msg.Permission)
+			//fmt.Printf("File: %s\n", file.AbsolutePath)
+		}
+	}
 
-	//fmt.Printf("Path = %s\n", decodedMessage.RemoteAbsolutePath)
-
-	if n.storageNodeHasFile(localFileMapKey) == true {
-		fmt.Printf("File is already in node. Should update it...\n")
-	} else {
-		fmt.Printf("File is not contained in the node. Inserts it...\n")
-		n.insertNewFileIntoStorageNode(decodedMessage)
-		n.broadcastStorageState()
-		// gossip newest update of files to the entire network
-	}*/
-//	return nil, nil
-//}
-
-func (n *Node) broadcastStorageState() {
-	
+	return nil, nil
 }
-
-//func (n *Node) insertNewFileIntoStorageNode(msg *file.Message) {
-	/*newFile, err := file.CreateFileFromBytes(msg.RemoteAbsolutePath, msg.FileContents)
-	if err != nil {
-		fmt.Errorf("File exists!!1! It should not exist!")
-		panic(err)
-	}*/
-//}
 
 func (n *Node) createFileTree(absFilePath string) {
 	directory, _ := filepath.Split(absFilePath)
@@ -148,7 +131,6 @@ func (n *Node) getAbsFilePath(fileAbsPath string) string {
 func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
 	msg := message.DecodedMessage(data)
 	targetSubject := msg.SubjectID
-	fmt.Printf("Resp: %s\n", msg.Permission)
 	
 	for _, file := range n.SubjectFiles {
 		if strings.Contains(file.AbsolutePath, targetSubject) {

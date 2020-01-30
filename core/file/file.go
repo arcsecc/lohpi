@@ -12,7 +12,7 @@ import (
 	"io/ioutil"
 	"strings"
 	"github.com/pkg/xattr"
-//	"path/filepath"
+	"path/filepath"
 )
 
 var FILE_STORE = "STORE"
@@ -37,6 +37,7 @@ type File struct {
 }
 
 func NewFile(fileSize int, absolutePath, subjectID, ownerID, permission string) (*File, error) {	
+	createDirectoryTree(absolutePath)
 	emptyFile, err := os.OpenFile(absolutePath, os.O_RDONLY|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
 		log.Error("Could not open a new file")
@@ -45,7 +46,6 @@ func NewFile(fileSize int, absolutePath, subjectID, ownerID, permission string) 
 	
 	defer emptyFile.Close()
 	fillEmptyFile(fileSize, emptyFile)
-
 	fileStat, err := os.Stat(absolutePath)
 	if err != nil {
 		panic(err)
@@ -71,16 +71,16 @@ func (f *File) setExtendedFileAttribute() {
 	absFilePath := f.AbsolutePath
 	attribute := fmt.Sprintf("%s%s", prefix, f.OwnerID)
 	permission := fmt.Sprintf("%s", f.FilePermission())
-	if err := xattr.Set(absFilePath, attribute+"test", []byte(permission)); err != nil {
+	if err := xattr.Set(absFilePath, attribute, []byte(permission)); err != nil {
 		panic(err)
 	}
 
-	data, err := xattr.Get(absFilePath, attribute+"test"); 
-	if err != nil {
-		panic(err)
-	}
+	//data, err := xattr.Get(absFilePath, attribute); 
+	//if err != nil {
+	//	panic(err)
+//	}
 	
-  	fmt.Printf("%s\n", data)
+  	//fmt.Printf("%s\n", data)
 }
 
 func (f *File) ListAllStorePermissions() {
@@ -261,4 +261,12 @@ func fillEmptyFile(fileSize int, file *os.File) {
 		log.Error("Could not write random data to file")
 	}
 	// close file...
+}
+
+func createDirectoryTree(absolutePath string) {
+	dir, _ := filepath.Split(absolutePath)
+	err := os.MkdirAll(dir, 0755) 
+	if err != nil {
+		panic(err)
+	}
 }

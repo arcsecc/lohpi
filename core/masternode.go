@@ -5,7 +5,7 @@ import (
 //	log "github.com/inconshreveable/log15"
 //	"github.com/spf13/viper"
 	"ifrit"
-	"firestore/core/file"
+//	"firestore/core/file"
 	"firestore/core/message"
 )
 
@@ -38,46 +38,18 @@ func NewMasterNode() (*Masternode, error) {
 // are invoked does not matter. Also, remember that the operation are idempotent.
 
 // Permit use to both storage nodes and data users 
-func (m *Masternode) BroadcastPermissionToStorageNetwork(s *Subject, permission string) {
-	msg := message.NewMessage(s.Name(), message.PERMISSION_GET, file.FILE_APPEND)
+func (m *Masternode) GossipStorageNetwork(s *Subject, permission string) {
+	msg := message.NewMessage(s.Name(), message.PERMISSION_GET, permission)
 	encodedMsg := msg.Encoded()
-	//str := fmt.Sprintf("%s has something to say", encodedMsg)
 	m.IfritClient.SetGossipContent([]byte(encodedMsg))
 }
 
 // Permit only to a subset of data users
-func (m *Masternode) PermitDataUsers(s *Subject, users []*Datauser) {
-
-}
-
-// Permit only to a subset of storage nodes
-func (m *Masternode) BroadcastPermission(s *Subject, permission string) {
-
-}
-
-// Revoke all usages from storage nodes and data users
-func (m *Masternode) RevokeAll(s *Subject) {
-
-}
-
-// Revoke permission only from a subset of data users
-func (m *Masternode) RevokeDataUsers(s *Subject, users []*Datauser) {
-
-}
-
-// Revoke permission only from a subset of storage nodes
-func (m *Masternode) RevokeStorageNodes(s *Subject, nodes []*Node) {
-
-}
-
-// Returns a list of storage nodes that are permitted to use the data
-func (m *Masternode) GetPermittedStorageNodes(s *Subject) ([]*Node) {
-	return nil
-}
-
-// Returns a list of data users that are permitted to use the data 
-func (m *Masternode) GetPermittedDataUsers(s *Subject) ([]*Datauser) {
-	return nil
+func (m *Masternode) SendStoragePermission(s *Subject, node *Node, permission string) {
+	dst := node.FireflyClient().Addr()
+	msg := message.NewMessage(s.Name(), message.PERMISSION_GET, permission)
+	encodedMsg := msg.Encoded()
+	<- m.FireflyClient().SendTo(dst, encodedMsg)
 }
 
 func (m *Masternode) MessageHandler(data []byte) ([]byte, error) {

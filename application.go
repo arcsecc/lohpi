@@ -39,8 +39,9 @@ func main() {
 		log.Error("Could not create several clients")
 	}
 
+	time.After(2)
 	app.Run()
-	app.Stop()
+	//app.Stop()
 }
 
 
@@ -59,7 +60,6 @@ func NewApplication() (*Application, error) {
 	numStorageNodes := viper.GetInt("firestore_nodes")
 //	numSubjects := viper.GetInt("num_subjects")
 	numDataUsers := viper.GetInt("data_users")
-
 	masterNode, err := core.NewMasterNode()
 	if err != nil {
 		panic(err)
@@ -80,33 +80,34 @@ func NewApplication() (*Application, error) {
 
 // Main entry point for running the application
 func (app *Application) Run() {
-	master := app.MasterNode
 	app.PrintFilePermissions()
-
-	TestStorageBroadcast(app.Subject, master, file.FILE_NO_PERMISSION)
-	/*for _, file := range app.Files {1
-		fmt.Printf("All file permissions for file %s\n:", file.AbsolutePath)
-		
-		// Nodes who stores this file
-		file.ListAllStorePermissions()
-	}	*/
-
+	//app.TestGossiping()
+	app.TestMulticast()
+	app.waitForPropagation()
 	app.PrintFilePermissions()
 }
 
-func TestStorageBroadcast(s *core.Subject, master *core.Masternode, permissions string) {
-	master.BroadcastPermissionToStorageNetwork(s, permissions)
-	
+func (app *Application) waitForPropagation() {
 	for {
 		select {
-			case <- time.After(time.Second * 5):
+			case <- time.After(time.Second * 10):
 				return
 		}
 	}
 }
 
+func (app *Application) TestMulticast() {
+	nodes := app.StorageNodes[:len(app.StorageNodes) / 2]
+	for _, node := range nodes {
+		app.MasterNode.SendStoragePermission(app.Subject, node, file.FILE_APPEND)
+	}
+}
 
-// Environment initialization functions //
+func (app *Application) TestGossiping() {
+	app.MasterNode.GossipStorageNetwork(app.Subject, file.FILE_APPEND)
+}
+
+// Environment initialization functions 
 // Set the initial state of the system: the storage nodes hold the files
 // while having storage permissions only
 func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subject *core.Subject, numFiles int) {
@@ -114,9 +115,10 @@ func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, sub
 	app.Files = make([]*file.File, 0)
 
 	// might add more subjects too...
+	
 	for i := 0; i < numFiles; i++ {
 		for _, node := range nodes {
-			path := fmt.Sprintf("%s/%s_file%d.txt", node.StoragePath(), subject.Name(), i)
+			path := fmt.Sprintf("%s/%s/file%d.txt", node.StoragePath(), subject.Name(), i)
 			file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_STORE)
 			if err != nil {
 				panic(err)
@@ -186,7 +188,7 @@ func CreateStorageNodes(numStorageNodes int) ([]*core.Node, error) {
 	nodes := make([]*core.Node, 0)
 
 	for i := 0; i < numStorageNodes; i++ {
-		nodeID := fmt.Sprintf("storageNode_%d", i + 1)
+		nodeID := fmt.Sprintf("node_%d", i + 1)
 		node, err := core.NewNode(nodeID)
 		if err != nil {
 			log.Error("Could not create storage node")
