@@ -9,7 +9,7 @@ _	"math/rand"
 	"errors"
 //	"encoding/gob"
 //	"bytes"
-	//"time"
+	"time"
 	"firestore/core/file"
 	"firestore/core"
 	"github.com/spf13/viper"
@@ -26,6 +26,7 @@ type Application struct {
 	MasterNode *core.Masternode	// single point-of-entry node for API calls
 	DataUsers []*core.Datauser		// data users. Sub
 	Files []*file.File				// All files (might need to move this somewhere else)
+	ExitChan chan bool 
 }
 
 func main() {
@@ -39,6 +40,7 @@ func main() {
 	}
 
 	app.Run()
+	app.Stop()
 }
 
 
@@ -62,7 +64,7 @@ func NewApplication() (*Application, error) {
 	if err != nil {
 		panic(err)
 	}
-
+	
 	storageNodes, err := CreateStorageNodes(numStorageNodes)
 	if err != nil {
 		panic(err)
@@ -79,22 +81,28 @@ func NewApplication() (*Application, error) {
 // Main entry point for running the application
 func (app *Application) Run() {
 	master := app.MasterNode
-//	node := app.StorageNodes[0]
+	app.PrintFilePermissions()
 
 	TestStorageBroadcast(app.Subject, master, file.FILE_NO_PERMISSION)
-	for _, file := range app.Files {
+	/*for _, file := range app.Files {1
 		fmt.Printf("All file permissions for file %s\n:", file.AbsolutePath)
+		
+		// Nodes who stores this file
 		file.ListAllStorePermissions()
-	}	
+	}	*/
+
+	app.PrintFilePermissions()
 }
 
 func TestStorageBroadcast(s *core.Subject, master *core.Masternode, permissions string) {
-	//allStorageNodes := master.StorageNodes()
-
-//	node := allStorageNodes[0]
-//	files := node.NodeSubjectFiles()
-
 	master.BroadcastPermissionToStorageNetwork(s, permissions)
+	
+	for {
+		select {
+			case <- time.After(time.Second * 5):
+				return
+		}
+	}
 }
 
 
@@ -139,6 +147,14 @@ func (app *Application) PrintFilePermissions() {
 	for _, file := range app.Files {
 		fmt.Printf("Path: %s. Perm = %s\n", file.AbsolutePath, file.FilePermission())
 	}
+}
+
+func (app *Application) Stop() {
+	for _, node := range app.StorageNodes {
+		node.FireflyClient().Stop()
+	}
+
+	app.MasterNode.FireflyClient().Stop()
 }
 
 func CreateApplicationSubject() *core.Subject {

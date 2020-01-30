@@ -84,6 +84,7 @@ func (f *File) setExtendedFileAttribute() {
 }
 
 func (f *File) ListAllStorePermissions() {
+	
 	list, err := xattr.List(f.AbsolutePath); 
 	if err != nil {
 		panic(err)
@@ -166,13 +167,14 @@ func (f *File) EncodeHashString() (bytes.Buffer, error) {
 }
 
 func (f *File) Encoded() []byte {
-	message := NewMessage(f)
-	encodedMessage := message.Encoded()
-	return encodedMessage
+//	message := NewMessage(f)
+//	encodedMessage := message.Encoded()
+//	return encodedMessage
+return nil
 }
 
 func Decoded(data []byte) *File {
-	var message Message
+	/*var message Message
 	dataBytes := bytes.NewBuffer(data)
 	decoder := gob.NewDecoder(dataBytes)
 	if err := decoder.Decode(&message); err != nil {
@@ -184,8 +186,8 @@ func Decoded(data []byte) *File {
 		FilePathHash: message.FilePathHash,
 		OwnerID: message.OwnerID,
 	}
-
-	return file
+*/
+	return nil
 }
 
 // TODO: need to set appropriate mode too

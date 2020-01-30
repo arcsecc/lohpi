@@ -1,11 +1,12 @@
 package core
 
 import (
-//	"fmt"
+	"fmt"
 //	log "github.com/inconshreveable/log15"
 //	"github.com/spf13/viper"
 	"ifrit"
-//	"firestore/core/file"
+	"firestore/core/file"
+	"firestore/core/message"
 )
 
 // In order for us to simulate a read-world scenario, we do not maintain
@@ -27,6 +28,8 @@ func NewMasterNode() (*Masternode, error) {
 		IfritClient: ifritClient,
 	}
 
+	ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
+	ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 	return self, nil
 }
 
@@ -36,7 +39,10 @@ func NewMasterNode() (*Masternode, error) {
 
 // Permit use to both storage nodes and data users 
 func (m *Masternode) BroadcastPermissionToStorageNetwork(s *Subject, permission string) {
-	//m.IfritClient.SetGossipContent(yourGossipMsg)
+	msg := message.NewMessage(s.Name(), message.PERMISSION_GET, file.FILE_APPEND)
+	encodedMsg := msg.Encoded()
+	//str := fmt.Sprintf("%s has something to say", encodedMsg)
+	m.IfritClient.SetGossipContent([]byte(encodedMsg))
 }
 
 // Permit only to a subset of data users
@@ -74,6 +80,20 @@ func (m *Masternode) GetPermittedDataUsers(s *Subject) ([]*Datauser) {
 	return nil
 }
 
-func MasterNodeMessageHandler(data []byte) ([]byte, error) {
-	return data, nil
+func (m *Masternode) MessageHandler(data []byte) ([]byte, error) {
+
+	return nil, nil
+}
+
+func (m *Masternode) GossipMessageHandler(data []byte) ([]byte, error) {
+	fmt.Printf("masternode gossip msg handler: %s\n", string(data))
+	return nil, nil
+}
+
+func (m *Masternode) GossipResponseHandler(data []byte) {
+	fmt.Printf("masternode gossip response handler: %s\n", string(data))
+}
+
+func (m *Masternode) FireflyClient() *ifrit.Client {
+	return m.IfritClient
 }

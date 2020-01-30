@@ -8,6 +8,8 @@ import (
 	log "github.com/inconshreveable/log15"
 	"path/filepath"
 	"firestore/core/file"
+	"firestore/core/message"
+	"strings"
 //	"encoding/gob"
 //	"bytes"
 //	"time"
@@ -42,9 +44,7 @@ func NewNode(ID string) (*Node, error) {
 	createStorageDirectory(dirPath)
 
 	/*
-	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
-	go ifritClient.Start()*/
-
+	ifritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)*/
 	node := &Node {
 		IfritClient: ifritClient,
 		NodeID: ID,
@@ -52,6 +52,9 @@ func NewNode(ID string) (*Node, error) {
 		AbsoluteStorageDirectoryPath: dirPath,
 	}
 
+	node.IfritClient.RegisterGossipHandler(node.GossipMessageHandler)
+	node.IfritClient.RegisterResponseHandler(node.GossipResponseHandler)
+	go ifritClient.Start()
 	return node, nil
 }
 
@@ -90,13 +93,13 @@ func (n *Node) broadcastStorageState() {
 	
 }
 
-func (n *Node) insertNewFileIntoStorageNode(msg *file.Message) {
+//func (n *Node) insertNewFileIntoStorageNode(msg *file.Message) {
 	/*newFile, err := file.CreateFileFromBytes(msg.RemoteAbsolutePath, msg.FileContents)
 	if err != nil {
 		fmt.Errorf("File exists!!1! It should not exist!")
 		panic(err)
 	}*/
-}
+//}
 
 func (n *Node) createFileTree(absFilePath string) {
 	directory, _ := filepath.Split(absFilePath)
@@ -135,10 +138,30 @@ func (n *Node) getAbsFilePath(fileAbsPath string) string {
 	return filepath.Join(n.AbsoluteStorageDirectoryPath, fileAbsPath)
 }
 
-func (n *Node) SetAbsoluteMessagePath(msg *file.Message) {
+/*func (n *Node) SetAbsoluteMessagePath(msg *file.Message) {
 	hash := msg.FilePathHash
 	absMsgPath := fmt.Sprintf("%s/%x", n.AbsoluteStorageDirectoryPath, hash)
 	msg.RemoteAbsolutePath = absMsgPath
+}*/
+
+// This callback will be invoked on each received gossip message.
+func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
+	msg := message.DecodedMessage(data)
+	targetSubject := msg.SubjectID
+	fmt.Printf("Resp: %s\n", msg.Permission)
+	
+	for _, file := range n.SubjectFiles {
+		if strings.Contains(file.AbsolutePath, targetSubject) {
+			file.SetPermission(msg.Permission)
+			//fmt.Printf("File: %s\n", file.AbsolutePath)
+		}
+	}
+
+    return nil, nil
+}
+
+// This callback will be invoked on each received gossip response.
+func (n *Node) GossipResponseHandler(data []byte) {
 }
 
 // Should be called from elsewhere to assign subjects to files,
@@ -154,34 +177,3 @@ func (n *Node) AppendSubjectFile(file *file.File) {
 func (n *Node) NodeSubjectFiles() []*file.File {
 	return n.SubjectFiles	
 }
-
-/** Masternode interface */
-/*
-func NewMasterNode(nodeID string) (*Masternode, error) {
-	ifritClient, err := ifrit.NewClient()
-	if err != nil {
-		return nil, err
-	}
-
-	masterNode := &Masternode {
-		IfritClient: ifritClient,
-		NodeID: nodeID,
-	}
-	go ifritClient.Start()
-	return masterNode, nil
-}*/
-
-/*
-func (n *Masternode) FileNameTable() map[string]*ifrit.Client {
-	return n.Filemap
-}*/
-
-/*
-func (n *Masternode) MasterNodeMessageHandler(data []byte) ([]byte, error) {
-	//fmt.Println(data)
-	return nil, nil
-}
-
-func (n *Masternode) FireflyClient() *ifrit.Client {
-	return n.IfritClient
-}*/
