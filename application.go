@@ -7,12 +7,18 @@ import (
 	log "github.com/inconshreveable/log15"
 _	"math/rand"
 	"errors"
-//	"encoding/gob"
-//	"bytes"
+_	"encoding/gob"
+	"bytes"
 	"time"
 	"firestore/core/file"
 	"firestore/core"
+	"firestore/netutil"
 	"github.com/spf13/viper"
+	"net"
+	"net/http"
+	"io"
+_	"io/ioutil"
+	"encoding/json"
 )
 
 var (
@@ -21,12 +27,42 @@ var (
 )
 
 type Application struct {
-	Subject *core.Subject				// data owners. Pub
-	StorageNodes []*core.Node		// data storage units
-	MasterNode *core.Masternode	// single point-of-entry node for API calls
-	DataUsers []*core.Datauser		// data users. Sub
-	Files []*file.File				// All files (might need to move this somewhere else)
+	// Data owners
+	Subject *core.Subject
+	
+	// Data storage units
+	StorageNodes []*core.Node
+	
+	// Single point-of-entry node for API calls. Stateless too
+	MasterNode *Masternode
+
+	// Data users requesting data 
+	DataUsers []*core.Datauser	
+	
+	// All files. Only used to print file permissions
+	Files []*file.File			
+
+	// Http server stuff
+	Listener   net.Listener
+	httpServer *http.Server 
+	
+	// Pass exit signals 
 	ExitChan chan bool 
+}
+
+type SubjectPermissionStruct struct {
+	Subject string
+	Permission string
+}
+
+type NodePermissionStruct struct {
+	Node string
+	Permission string
+}
+
+// used by /print_node endpoint
+type PrintNodeStruct struct {
+	Node string
 }
 
 func main() {
@@ -39,28 +75,24 @@ func main() {
 		log.Error("Could not create several clients")
 	}
 
-	time.After(2)
-	app.Run()
+	app.Start()
+	//app.Run()
 	//app.Stop()
 }
 
 
 func NewApplication() (*Application, error) {
-	/*
-	numFirestoreNodes := viper.GetInt32("firestore_nodes")
-	replication_degree := viper.GetInt32("replication_degree")
-	
-	filesPerUser := viper.GetInt32("files_per_user")
-	fileSize := viper.GetInt32("file_size")
-	*/
-
 	app := &Application {}
+
+	l, err := netutil.ListenOnPort(viper.GetInt("server_port"))
+	if err != nil {
+		return nil, err
+	}
 
 	numFiles := viper.GetInt("files_per_subject")
 	numStorageNodes := viper.GetInt("firestore_nodes")
-//	numSubjects := viper.GetInt("num_subjects")
 	numDataUsers := viper.GetInt("data_users")
-	masterNode, err := core.NewMasterNode()
+	masterNode, err := NewMasterNode()
 	if err != nil {
 		panic(err)
 	}
@@ -75,47 +107,211 @@ func NewApplication() (*Application, error) {
 	app.DataUsers = CreateDataUsers(numDataUsers)
 	app.Subject = CreateApplicationSubject()
 	app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subject, numFiles)
+	app.Listener = l
+	time.After(5)
 	return app, nil
 }
 
 // Main entry point for running the application
 func (app *Application) Run() {
-	app.PrintFilePermissions()
+	//app.PrintFilePermissions()
 	//app.TestGossiping()
-	app.TestMulticast()
-	app.waitForPropagation()
-	app.PrintFilePermissions()
+	//app.TestMulticast()
+	//app.waitForPropagation()
+	//app.PrintFilePermissions()
 }
 
-func (app *Application) waitForPropagation() {
-	for {
-		select {
-			case <- time.After(time.Second * 10):
-				return
+func (app *Application) Start() error {
+	log.Info("Started application server", "addr", app.Listener.Addr().String())
+	return app.httpHandler()
+}
+ 
+func (app *Application) httpHandler() error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/print_all_files", app.PrintFiles)
+	mux.HandleFunc("/print_node", app.PrintNode)
+	mux.HandleFunc("/subject_set_perm", app.SubjectSetPermission)
+	mux.HandleFunc("/node_set_perm", app.NodeSetPermission)
+	mux.HandleFunc("/shutdown", app.Shutdown)
+	mux.HandleFunc("/subjects", app.PrintSubjects)
+	/*mux.HandleFunc("/analysers", app.Shutdown)*/
+
+	app.httpServer = &http.Server{
+		Handler: mux,
+	}
+
+	err := app.httpServer.Serve(app.Listener)
+	if err != nil {
+		log.Error(err.Error())
+		return err
+	}
+
+	return nil
+}
+
+func (app *Application) PrintNode(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		log.Error("Header type must be application/json")
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		return
+	}
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+
+	var message PrintNodeStruct
+	err := json.Unmarshal(body.Bytes(), &message)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, n := range app.StorageNodes {
+		if message.Node == n.Name() {
+			str := n.PrintInfo()
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "%s", str) 
+			return
+		}
+	}
+
+	w.WriteHeader(http.StatusNotFound)
+	log.Error("Node not found")
+}
+
+func (app *Application) PrintFiles(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if len(app.Files) < 1 {
+		str := fmt.Sprintf("There are no files in the storage network\n")
+		fmt.Fprintf(w, "%s", str) 
+	}
+
+	for _, file := range app.Files {
+		str := string(fmt.Sprintf("Path: %s\nOwner: %s\nStorage node:%s\nPermission:%s\n\n\n", file.AbsolutePath, file.SubjectID, file.OwnerID, file.FilePermission()))
+		fmt.Fprintf(w, "%s", str) 
+	}
+}
+
+// TODO: Handle multiple subjects too
+func (app *Application) SubjectSetPermission(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != "POST" {
+		respString := fmt.Sprintf("Invalid method: %s for /subject_set_perm\n", r.Method)
+		_, err := w.Write([]byte(respString))
+		if err != nil {
+			log.Error(err.Error())
+			return
+		}
+	}
+
+	defer r.Body.Close()
+	if r.Header.Get("Content-type") != "application/json" {
+		log.Error("Require header to be application/json")
+	}
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+
+	var message SubjectPermissionStruct
+	err := json.Unmarshal(body.Bytes(), &message)
+	if err != nil {
+		panic(err)
+	}
+
+	// change this when adding several subjects
+	tempSubject := core.NewSubject(message.Subject)
+	app.MasterNode.GossipSubjectPermission(tempSubject, message.Permission)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != "POST" {
+		respString := fmt.Sprintf("Invalid method: %s for /node_set_perm\n", r.Method)
+		_, err := w.Write([]byte(respString))
+		if err != nil {
+			log.Error(err.Error())
+			return
+		}
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		log.Error("Require header to be application/json")
+	}
+
+	var message NodePermissionStruct
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &message)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, node := range app.StorageNodes {
+		if node.Name() == message.Node {
+			fmt.Printf("found node\n");
+			app.MasterNode.UpdateNodePermission(node, message.Permission)
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (app *Application) Shutdown(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	for _, node := range app.StorageNodes {
+		node.FireflyClient().Stop()
+	}
+	r.Body.Close()
+	app.MasterNode.FireflyClient().Stop()
+	app.Listener.Close()
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "System shutdown OK\n") 
+}
+
+// TODO: Handle multiple subjects too
+func (app *Application) PrintSubjects(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	for _, file := range app.Files {
+		if (app.Subject.Name() == file.SubjectID) {
+			str := string(fmt.Sprintf("Subject's name: %s\nOwner name: %s\nStorage network path: %s\n\n", app.Subject.Name(), file.OwnerID, file.AbsolutePath))
+			fmt.Fprintf(w, "%s", str) 	
 		}
 	}
 }
 
 func (app *Application) TestMulticast() {
-	nodes := app.StorageNodes[:len(app.StorageNodes) / 2]
-	for _, node := range nodes {
-		app.MasterNode.SendStoragePermission(app.Subject, node, file.FILE_APPEND)
-	}
+//	nodes := app.StorageNodes[:len(app.StorageNodes) / 2]
+//	for _, node := range nodes {
+//		app.MasterNode.SendStoragePermission(app.Subject, node, file.FILE_APPEND)
+//	}
 }
 
 func (app *Application) TestGossiping() {
-	app.MasterNode.GossipStorageNetwork(app.Subject, file.FILE_APPEND)
+	//app.MasterNode.GossipStorageNetwork(app.Subject, file.FILE_APPEND)
 }
 
-// Environment initialization functions 
-// Set the initial state of the system: the storage nodes hold the files
-// while having storage permissions only
 func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subject *core.Subject, numFiles int) {
 	fileSize := viper.GetInt("file_size")
 	app.Files = make([]*file.File, 0)
 
 	// might add more subjects too...
-	
 	for i := 0; i < numFiles; i++ {
 		for _, node := range nodes {
 			path := fmt.Sprintf("%s/%s/file%d.txt", node.StoragePath(), subject.Name(), i)
@@ -127,36 +323,6 @@ func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, sub
 			app.Files = append(app.Files, file)
 		}
 	}
-
-	/*
-	for _, subject := range subjects {
-		for i := 0; i < numFiles; i++ {
-			files := make([]*file.File, 0)
-			for _, node := range nodes {
-				directoryOrder := i
-				file, err := file.NewFile(fileSize, directoryOrder, subject.Name(), node.Name(), file.FILE_NO_PERMISSION)
-				if err != nil {
-					panic(err)
-				}
-				files = append(files, file)
-				node.SetSubjectFiles(files)
-			}
-		}
-	}*/
-}
-
-func (app *Application) PrintFilePermissions() {
-	for _, file := range app.Files {
-		fmt.Printf("Path: %s. Perm = %s\n", file.AbsolutePath, file.FilePermission())
-	}
-}
-
-func (app *Application) Stop() {
-	for _, node := range app.StorageNodes {
-		node.FireflyClient().Stop()
-	}
-
-	app.MasterNode.FireflyClient().Stop()
 }
 
 func CreateApplicationSubject() *core.Subject {
@@ -222,8 +388,6 @@ func readConfig() error {
 
 	return nil
 }
-
-//Firestore: scalable, secure and sharded one-hop key-value store 
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {
 	// Get needed application clients

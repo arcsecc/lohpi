@@ -17,6 +17,13 @@ const (
 	FILE_DISTRIBUTE Msgtype = "FILE_DISTRIBUTE"
 )
 
+const (
+	MSG_EMPTY_FIELD = "Empty message field"
+	MSG_EMPTY_MESSAGE = "Empty message"
+	MSG_NEW_PERM_SET = "new permission set"
+	
+)
+
 type Message struct {
 	SubjectID string
 	Type Msgtype

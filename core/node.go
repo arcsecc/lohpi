@@ -10,8 +10,9 @@ import (
 	"firestore/core/file"
 	"firestore/core/message"
 	"strings"
+	//"net/http"
 //	"encoding/gob"
-//	"bytes"
+	"bytes"
 //	"time"
 )
 
@@ -57,6 +58,26 @@ func NewNode(ID string) (*Node, error) {
 	return node, nil
 }
 
+func (n *Node) PrintInfo() string {
+	var b bytes.Buffer
+	str := fmt.Sprintf("****** Node info ******\nLocal directory path: %s\nNode ID: %s\nIfrit address: %s\n\n",
+		n.AbsoluteStorageDirectoryPath, n.NodeID, n.IfritClient.Addr())
+	_, err := b.WriteString(str)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, f := range n.SubjectFiles {
+		str := string(fmt.Sprintf("Path: %s\nOwner: %s\nStorage node: %s\nPermission: %s\n\n\n", f.AbsolutePath, f.SubjectID, f.OwnerID, f.FilePermission()))
+		_, err = b.WriteString(str)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return string(b.Bytes())
+}
+
 func (n *Node) Name() string {
 	return n.NodeID
 }
@@ -72,16 +93,13 @@ func (n *Node) StoragePath() string {
 // Invoked when this client receives a message
 func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 	msg := message.DecodedMessage(data)
-	targetSubject := msg.SubjectID
-	// if msg type...
+	
 	for _, file := range n.SubjectFiles {
-		if strings.Contains(file.AbsolutePath, targetSubject) {
-			file.SetPermission(msg.Permission)
-			//fmt.Printf("File: %s\n", file.AbsolutePath)
-		}
-	}
+		file.SetPermission(msg.Permission)
+	} 
 
-	return nil, nil
+	// Put this into if branch
+    return []byte(message.MSG_NEW_PERM_SET), nil
 }
 
 func (n *Node) createFileTree(absFilePath string) {
@@ -129,17 +147,23 @@ func (n *Node) getAbsFilePath(fileAbsPath string) string {
 
 // This callback will be invoked on each received gossip message.
 func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
+	//fmt.Printf("Gossip message handler at %s\n", n.IfritClient.Addr());
 	msg := message.DecodedMessage(data)
 	targetSubject := msg.SubjectID
 	
-	for _, file := range n.SubjectFiles {
-		if strings.Contains(file.AbsolutePath, targetSubject) {
-			file.SetPermission(msg.Permission)
-			//fmt.Printf("File: %s\n", file.AbsolutePath)
+	// Find file in the node. If it exists, set new permission
+	if (msg.Type == message.PERMISSION_SET) {
+		for _, file := range n.SubjectFiles {
+			if strings.Contains(file.AbsolutePath, targetSubject) {
+				file.SetPermission(msg.Permission)
+			}
 		}
+	} else {
+		fmt.Printf("Unknown message type\n")
 	}
 
-    return nil, nil
+	// Put this into if branch
+    return []byte(message.MSG_NEW_PERM_SET), nil
 }
 
 // This callback will be invoked on each received gossip response.
