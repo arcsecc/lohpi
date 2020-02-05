@@ -20,7 +20,7 @@ type User struct {
 	//PrivateKey *rsa.PrivateKey
 	//PublicKey *rsa.PublicKey
 	Files []*file.File
-	ClientNode *core.Clientnode
+	//ClientNode *core.Clientnode
 	OwnerName string
 
 	// should remove this ugly hack 
@@ -28,13 +28,14 @@ type User struct {
 }
 
 func NewUser(ownerName string) *User {
-	clientNode := core.NewClientNode(ownerName)
+	/*clientNode := core.NewClientNode(ownerName)
 	self := &User {
 		OwnerName: ownerName,
-		ClientNode: clientNode,
+		//ClientNode: clientNode,
 	}
 
-	return self
+	return self*/
+	return nil
 }
 
 func (u *User) SetFiles(files []*file.File) {
@@ -49,16 +50,17 @@ func (u *User) Name() string {
 	return u.OwnerName
 }
 
+/*
 func (u *User) StoreFileRemotely(file *file.File) chan []byte {
-	return u.ClientNode.StoreFileRemotely(file, u.StorageNodes)
-}
+	//return u.ClientNode.StoreFileRemotely(file, u.StorageNodes)
+}*/
 
 /*func (u *User) FileExists(file *file.File) bool {
 	return u.ClientNode.FileExists(file)
 }*/
 
 func (u *User) DeleteFile(file *file.File) {
-	u.ClientNode.DeleteFile(file)
+//	u.ClientNode.DeleteFile(file)
 }
 
 // HACK

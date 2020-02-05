@@ -8,17 +8,21 @@ import (
 _	"math/rand"
 	"errors"
 _	"encoding/gob"
-	"bytes"
+_	"bytes"
 	"time"
 	"firestore/core/file"
 	"firestore/core"
+	"firestore/core/messages"
+//	"firestore/utils"
 	"firestore/netutil"
 	"github.com/spf13/viper"
 	"net"
 	"net/http"
+	"bytes"
 	"io"
 _	"io/ioutil"
 	"encoding/json"
+
 )
 
 var (
@@ -50,19 +54,12 @@ type Application struct {
 	ExitChan chan bool 
 }
 
-type SubjectPermissionStruct struct {
+// used by /print_node endpoint
+type Msg struct {
+	Node string
 	Subject string
 	Permission string
-}
-
-type NodePermissionStruct struct {
-	Node string
-	Permission string
-}
-
-// used by /print_node endpoint
-type PrintNodeStruct struct {
-	Node string
+	SetPermission string
 }
 
 func main() {
@@ -128,12 +125,13 @@ func (app *Application) Start() error {
  
 func (app *Application) httpHandler() error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/print_all_files", app.PrintFiles)
+	mux.HandleFunc("/print_files", app.PrintFiles)
 	mux.HandleFunc("/print_node", app.PrintNode)
 	mux.HandleFunc("/subject_set_perm", app.SubjectSetPermission)
 	mux.HandleFunc("/node_set_perm", app.NodeSetPermission)
+	/*user_set_perm
 	mux.HandleFunc("/shutdown", app.Shutdown)
-	mux.HandleFunc("/subjects", app.PrintSubjects)
+	mux.HandleFunc("/subjects", app.PrintSubjects)*/
 	/*mux.HandleFunc("/analysers", app.Shutdown)*/
 
 	app.httpServer = &http.Server{
@@ -152,28 +150,27 @@ func (app *Application) httpHandler() error {
 func (app *Application) PrintNode(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		msg := "Requires GET method"
+		http.Error(w, msg, http.StatusMethodNotAllowed)
 		return
 	}
 
 	if r.Header.Get("Content-type") != "application/json" {
-		log.Error("Header type must be application/json")
-		w.WriteHeader(http.StatusUnsupportedMediaType)
-		return
+		log.Error("Require header to be application/json")
 	}
 
+	var incomingMsg messages.Clientmessage
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
 
-	var message PrintNodeStruct
-	err := json.Unmarshal(body.Bytes(), &message)
+	err := json.Unmarshal(body.Bytes(), &incomingMsg)
 	if err != nil {
 		panic(err)
 	}
 
 	for _, n := range app.StorageNodes {
-		if message.Node == n.Name() {
-			str := n.PrintInfo()
+		if incomingMsg.Node == n.Name() {
+			str := n.NodeInfo()
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintf(w, "%s", str) 
 			return
@@ -196,8 +193,11 @@ func (app *Application) PrintFiles(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "%s", str) 
 	}
 
+	str := string(fmt.Sprintf("**** All known files in the system ****\n\n"))
+	fmt.Fprintf(w, "%s", str) 
+
 	for _, file := range app.Files {
-		str := string(fmt.Sprintf("Path: %s\nOwner: %s\nStorage node:%s\nPermission:%s\n\n\n", file.AbsolutePath, file.SubjectID, file.OwnerID, file.FilePermission()))
+		str := string(fmt.Sprintf("Path: %s\nOwner: %s\nStorage node: %s\nPermission: %s\n\n\n", file.AbsolutePath, file.SubjectID, file.OwnerID, file.FilePermission()))
 		fmt.Fprintf(w, "%s", str) 
 	}
 }
@@ -222,17 +222,23 @@ func (app *Application) SubjectSetPermission(w http.ResponseWriter, r *http.Requ
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
 
-	var message SubjectPermissionStruct
-	err := json.Unmarshal(body.Bytes(), &message)
+	var incomingMsg messages.Clientmessage
+	err := json.Unmarshal(body.Bytes(), &incomingMsg)
 	if err != nil {
 		panic(err)
 	}
 
 	// change this when adding several subjects
-	tempSubject := core.NewSubject(message.Subject)
-	app.MasterNode.GossipSubjectPermission(tempSubject, message.Permission)
-	w.WriteHeader(http.StatusOK)
+	err = app.MasterNode.GossipSubjectPermission(&incomingMsg); 
+	if err != nil {
+		w.WriteHeader(http.StatusNotAcceptable)
+		str := fmt.Sprintf("Invalid request body\n")
+		fmt.Fprintf(w, "%s", str) 
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 }
+
 
 func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
@@ -249,7 +255,7 @@ func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request
 		log.Error("Require header to be application/json")
 	}
 
-	var message NodePermissionStruct
+	var message messages.Clientmessage
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
 	err := json.Unmarshal(body.Bytes(), &message)
@@ -260,17 +266,21 @@ func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request
 	for _, node := range app.StorageNodes {
 		if node.Name() == message.Node {
 			fmt.Printf("found node\n");
-			app.MasterNode.UpdateNodePermission(node, message.Permission)
+			app.MasterNode.UpdateNodePermission(node, &message)
+			w.WriteHeader(http.StatusOK)
+			return
 		}
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusNotFound)
+	str := fmt.Sprintf("Could not find node %s\n", message.Node)
+	fmt.Fprintf(w, "%s", str)
 }
 
 func (app *Application) Shutdown(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	for _, node := range app.StorageNodes {
-		node.FireflyClient().Stop()
+		node.IfritClient().Stop()
 	}
 	r.Body.Close()
 	app.MasterNode.FireflyClient().Stop()
@@ -314,8 +324,8 @@ func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, sub
 	// might add more subjects too...
 	for i := 0; i < numFiles; i++ {
 		for _, node := range nodes {
-			path := fmt.Sprintf("%s/%s/file%d.txt", node.StoragePath(), subject.Name(), i)
-			file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_STORE)
+			path := fmt.Sprintf("%s/%s/file%d.txt", node.StorageDirectory(), subject.Name(), i)
+			file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_READ)
 			if err != nil {
 				panic(err)
 			}
@@ -387,6 +397,16 @@ func readConfig() error {
 	viper.SafeWriteConfig()
 
 	return nil
+}
+
+func (m *Msg) ValidFormat() bool {
+	if m.SetPermission == "set" || m.SetPermission == "unset" {
+		if m.Permission == file.FILE_READ || m.Permission == file.FILE_ANALYSIS || m.Permission == file.FILE_SHARE {
+			return true
+		}
+	}
+
+	return false
 }
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {

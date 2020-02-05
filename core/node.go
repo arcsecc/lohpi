@@ -8,7 +8,7 @@ import (
 	log "github.com/inconshreveable/log15"
 	"path/filepath"
 	"firestore/core/file"
-	"firestore/core/message"
+	"firestore/core/messages"
 	"strings"
 	//"net/http"
 //	"encoding/gob"
@@ -25,49 +25,57 @@ const NODE_DIR = "storage_nodes"
 
 // Storage node used to store "research data"
 type Node struct {
-	SubjectFiles []*file.File		// one-to-one mapping between subject and 
-	StorageDirectoryPath string		// directory into which to store files (node-locally)
-	IfritClient *ifrit.Client
+	// Files stored in the node 
+	Files []*file.File	
+	
+	// The directory in which the node stores data (node-locally)
+	StorageDirectoryPath string		
+	
+	// Underlying Firefly client
+	FireflyClient *ifrit.Client
+	
+	// Its unique ID (might change it later to something more bulletproof?)
 	NodeID string
-	AbsoluteStorageDirectoryPath string 
+	
+
 	GlobalUsagePermission map[string]*file.File
 }
 
 /** Node interface. Remote firestore node */
 func NewNode(ID string) (*Node, error) {
 	permissionMap := make(map[string]*file.File) 	// subject name -> files that can be read
-	ifritClient, err := ifrit.NewClient()
+	fireflyClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
-	dirPath := GetDirAbsolutePath(ID)
+	dirPath := storageDirectoryPath(ID)
 	createStorageDirectory(dirPath)
 
 	node := &Node {
-		IfritClient: ifritClient,
+		FireflyClient: fireflyClient,
 		NodeID: ID,
 		GlobalUsagePermission: permissionMap,
-		AbsoluteStorageDirectoryPath: dirPath,
+		StorageDirectoryPath: dirPath,
 	}
 
-	node.IfritClient.RegisterGossipHandler(node.GossipMessageHandler)
-	node.IfritClient.RegisterResponseHandler(node.GossipResponseHandler)
-	node.IfritClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
-	go ifritClient.Start()
+	node.FireflyClient.RegisterGossipHandler(node.GossipMessageHandler)
+	node.FireflyClient.RegisterResponseHandler(node.GossipResponseHandler)
+	node.FireflyClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
+	go fireflyClient.Start()
 	return node, nil
 }
 
-func (n *Node) PrintInfo() string {
+func (n *Node) NodeInfo() string {
 	var b bytes.Buffer
 	str := fmt.Sprintf("****** Node info ******\nLocal directory path: %s\nNode ID: %s\nIfrit address: %s\n\n",
-		n.AbsoluteStorageDirectoryPath, n.NodeID, n.IfritClient.Addr())
+		n.StorageDirectoryPath, n.NodeID, n.IfritClient().Addr())
 	_, err := b.WriteString(str)
 	if err != nil {
 		panic(err)
 	}
 
-	for _, f := range n.SubjectFiles {
+	for _, f := range n.Files {
 		str := string(fmt.Sprintf("Path: %s\nOwner: %s\nStorage node: %s\nPermission: %s\n\n\n", f.AbsolutePath, f.SubjectID, f.OwnerID, f.FilePermission()))
 		_, err = b.WriteString(str)
 		if err != nil {
@@ -82,24 +90,35 @@ func (n *Node) Name() string {
 	return n.NodeID
 }
 
-func (n *Node) FireflyClient() *ifrit.Client {
-	return n.IfritClient
+func (n *Node) IfritClient() *ifrit.Client {
+	return n.FireflyClient
 }
 
-func (n *Node) StoragePath() string {
-	return n.AbsoluteStorageDirectoryPath
+func (n *Node) StorageDirectory() string {
+	return n.StorageDirectoryPath
 }
 
 // Invoked when this client receives a message
 func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
-	msg := message.DecodedMessage(data)
+	msg := messages.DecodedInternalMessage(data)
 	
-	for _, file := range n.SubjectFiles {
-		file.SetPermission(msg.Permission)
+	if (msg.Type == messages.PERMISSION_SET) {
+		for _, file := range n.Files {
+			if msg.SetPermission == "set" {
+				//fmt.Printf("set permission %s to true", msg.Permission)
+				file.SetPermission(msg.Permission, true)
+			} else if msg.SetPermission == "unset" {
+				file.RemovePermission(msg.Permission)
+			} else {
+				fmt.Errorf("%s switch is not valid\n", msg.SetPermission)
+			}
+		}
+	} else {
+		fmt.Errorf("%s type is not valid\n", msg.Type)
 	} 
 
-	// Put this into if branch
-    return []byte(message.MSG_NEW_PERM_SET), nil
+	// Put this into if branch...
+    return nil, nil
 }
 
 func (n *Node) createFileTree(absFilePath string) {
@@ -111,7 +130,7 @@ func (n *Node) createFileTree(absFilePath string) {
 	}
 }
 
-func (n *Node) storageNodeHasFile(fileMapKey string) bool {
+func (n *Node) HasFile(fileMapKey string) bool {
 	/*filenameTable := n.LocalFileNameTable()
 	if _, ok := filenameTable[fileMapKey]; ok {
 		return true
@@ -119,7 +138,8 @@ func (n *Node) storageNodeHasFile(fileMapKey string) bool {
 	return false
 }
 
-func GetDirAbsolutePath(nodeName string) string {
+// Returns the absolute path of the node's top-level storage directory
+func storageDirectoryPath(nodeName string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		log.Error("Could not create directory for storage node")
@@ -135,35 +155,41 @@ func createStorageDirectory(dirPath string) {
 	}
 }
 
-func (n *Node) getAbsFilePath(fileAbsPath string) string {
-	return filepath.Join(n.AbsoluteStorageDirectoryPath, fileAbsPath)
+func (n *Node) AbsFilePath(fileAbsPath string) string {
+	return filepath.Join(n.StorageDirectoryPath, fileAbsPath)
 }
 
 /*func (n *Node) SetAbsoluteMessagePath(msg *file.Message) {
 	hash := msg.FilePathHash
-	absMsgPath := fmt.Sprintf("%s/%x", n.AbsoluteStorageDirectoryPath, hash)
+	absMsgPath := fmt.Sprintf("%s/%x", n.StorageDirectoryPath, hash)
 	msg.RemoteAbsolutePath = absMsgPath
 }*/
 
 // This callback will be invoked on each received gossip message.
 func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
-	//fmt.Printf("Gossip message handler at %s\n", n.IfritClient.Addr());
-	msg := message.DecodedMessage(data)
-	targetSubject := msg.SubjectID
+	msg := messages.DecodedInternalMessage(data)
+	targetSubject := msg.Subject
 	
 	// Find file in the node. If it exists, set new permission
-	if (msg.Type == message.PERMISSION_SET) {
-		for _, file := range n.SubjectFiles {
+	if (msg.Type == messages.PERMISSION_SET) {
+		for _, file := range n.Files {
 			if strings.Contains(file.AbsolutePath, targetSubject) {
-				file.SetPermission(msg.Permission)
+				if msg.SetPermission == "set" {
+					//fmt.Printf("set permission %s to true", msg.Permission)
+					file.SetPermission(msg.Permission, true)
+				} else if msg.SetPermission == "unset" {
+					file.RemovePermission(msg.Permission)
+				} else {
+					fmt.Errorf("%s switch is not valid\n", msg.SetPermission)
+				}
 			}
 		}
 	} else {
-		fmt.Printf("Unknown message type\n")
-	}
+		fmt.Errorf("%s type is not valid\n", msg.Type)
+	} 
 
 	// Put this into if branch
-    return []byte(message.MSG_NEW_PERM_SET), nil
+    return []byte(messages.MSG_NEW_PERM_SET), nil
 }
 
 // This callback will be invoked on each received gossip response.
@@ -173,13 +199,13 @@ func (n *Node) GossipResponseHandler(data []byte) {
 // Should be called from elsewhere to assign subjects to files,
 // and in turn, files to this node
 func (n *Node) SetSubjectFiles(files []*file.File) {
-	n.SubjectFiles = files	
+	n.Files = files	
 }
 
 func (n *Node) AppendSubjectFile(file *file.File) {
-	n.SubjectFiles = append(n.SubjectFiles, file)
+	n.Files = append(n.Files, file)
 }
 
-func (n *Node) NodeSubjectFiles() []*file.File {
-	return n.SubjectFiles	
+func (n *Node) SubjectFiles() []*file.File {
+	return n.Files	
 }

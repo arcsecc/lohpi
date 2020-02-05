@@ -1,5 +1,6 @@
-package message
+package messages
 
+/** This API is used for message passing between master node and storage node */
 import (
 //	"fmt"
 	"bytes"
@@ -7,7 +8,6 @@ import (
 	//"firestore/core/file"
 )
 
-// Use this to interpret the messages the right way
 type Msgtype string 
 
 const (
@@ -24,23 +24,26 @@ const (
 	
 )
 
-type Message struct {
-	SubjectID string
-	Type Msgtype
+type Internalmessage struct {
+	Subject string
+	Node string
 	Permission string
+	SetPermission string
+	Type Msgtype
 }
 
-func NewMessage(subjectID string, messageType Msgtype, permission string) *Message {
-	self := &Message {
-		SubjectID: subjectID,
+func NewInternalMessage(subjectID string, messageType Msgtype, permission, setPermission string) *Internalmessage {
+	self := &Internalmessage {
+		Subject: subjectID,
 		Type: messageType,
 		Permission: permission,
+		SetPermission: setPermission,
 	}
 
 	return self
 }
 
-func (m *Message) Encoded() []byte {
+func (m *Internalmessage) EncodedInternal() []byte {
 	var buffer bytes.Buffer
 	encoder := gob.NewEncoder(&buffer)
 	if err := encoder.Encode(m); err != nil {
@@ -50,8 +53,8 @@ func (m *Message) Encoded() []byte {
 	return buffer.Bytes()
 }
 
-func DecodedMessage(encodedMessage []byte) *Message {
-	var decodedMessage Message
+func DecodedInternalMessage(encodedMessage []byte) *Internalmessage {
+	var decodedMessage Internalmessage
 	buffer := bytes.NewBuffer(encodedMessage)
 	decoder := gob.NewDecoder(buffer)
 	if err := decoder.Decode(&decodedMessage); err != nil {

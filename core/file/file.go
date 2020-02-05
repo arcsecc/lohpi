@@ -13,12 +13,12 @@ import (
 	"strings"
 	"github.com/pkg/xattr"
 	"path/filepath"
+	"strconv"
 )
 
-var FILE_STORE = "STORE"
-var FILE_READ = "READ"	
-var FILE_APPEND = "APPEND"
-var FILE_NO_PERMISSION = "NO PERMISSIONS"
+var FILE_SHARE 			= "SHARE"	// Cannot be used by data users/analysers
+var FILE_READ 			= "READ"	
+var FILE_ANALYSIS 		= "ANALYSIS"
 
 // gRPC does not allow messages to exceed this size in bytes
 const MAX_SHARD_SIZE = 1000000
@@ -62,16 +62,15 @@ func NewFile(fileSize int, absolutePath, subjectID, ownerID, permission string) 
 		FilePermissionString: permission,
 	}
 	
-	file.setExtendedFileAttribute()
+	file.setExtendedFileAttribute(true)
 	return file, nil
 }
 
-func (f *File) setExtendedFileAttribute() {
+func (f *File) setExtendedFileAttribute(flag bool) {
 	const prefix = "user."			// must be used as leading token
 	absFilePath := f.AbsolutePath
-	attribute := fmt.Sprintf("%s%s", prefix, f.OwnerID)
-	permission := fmt.Sprintf("%s", f.FilePermission())
-	if err := xattr.Set(absFilePath, attribute, []byte(permission)); err != nil {
+	attribute := fmt.Sprintf("%s%s - %s", prefix, f.OwnerID, f.FilePermission())
+	if err := xattr.Set(absFilePath, attribute, []byte(strconv.FormatBool(flag))); err != nil {
 		panic(err)
 	}
 
@@ -83,7 +82,14 @@ func (f *File) setExtendedFileAttribute() {
   	//fmt.Printf("%s\n", data)
 }
 
-func (f *File) ListAllStorePermissions() {
+func (f *File) RemovePermission(permission string) {
+	const prefix = "user."			// must be used as leading token
+	absFilePath := f.AbsolutePath
+	attribute := fmt.Sprintf("%s%s - %s", prefix, f.OwnerID, permission)
+	xattr.Remove(absFilePath, attribute)
+}
+
+func (f *File) AllPermissions() {
 	
 	list, err := xattr.List(f.AbsolutePath); 
 	if err != nil {
@@ -100,9 +106,9 @@ func (f *File) ListAllStorePermissions() {
 	}
 }
 
-func (f *File) SetPermission(permission string) {
+func (f *File) SetPermission(permission string, flag bool) {
 	f.FilePermissionString = permission
-	f.setExtendedFileAttribute()
+	f.setExtendedFileAttribute(flag)
 }
 
 func (f *File) FileSubject() string {
@@ -113,7 +119,7 @@ func (f *File) FilePermission() string {
 	return f.FilePermissionString
 }
 
-func (f *File) GetFile() (*os.File) {
+func (f *File) OSFile() (*os.File) {
 	return f.File
 }
 

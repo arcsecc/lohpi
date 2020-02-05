@@ -1,13 +1,18 @@
 package main
 
 import (
-	"fmt"
-//	log "github.com/inconshreveable/log15"
+_	"fmt"
+	log "github.com/inconshreveable/log15"
 //	"github.com/spf13/viper"
 	"ifrit"
-//	"firestore/core/file"
-	"firestore/core/message"
+	"firestore/core/file"
+	"firestore/core/messages"
 	"firestore/core"
+	"errors"
+)
+
+var (
+	errInvalidPermission = errors.New("Requested to send an invalid permission")
 )
 
 // In order for us to simulate a read-world scenario, we do not maintain
@@ -34,17 +39,27 @@ func NewMasterNode() (*Masternode, error) {
 	return self, nil
 }
 
-func (m *Masternode) GossipSubjectPermission(s *core.Subject, permission string) {
-	msg := message.NewMessage(s.Name(), message.PERMISSION_SET, permission)
-	encodedMsg := msg.Encoded()
+func (m *Masternode) GossipSubjectPermission(msg *messages.Clientmessage) error {
+	if err := msg.IsValidSubjectQuery(); err != nil {
+		log.Error("ClientMessage (subject-centric) is invalid")
+		return err
+	}
+	internalMsg := messages.NewInternalMessage(msg.Subject, "PERMISSION_SET", msg.Permission, msg.SetPermission)
+	encodedMsg := internalMsg.EncodedInternal()
 	m.IfritClient.SetGossipContent([]byte(encodedMsg))
+	return nil
 }
 
-func (m *Masternode) UpdateNodePermission(node *core.Node, permission string) {
-	dst := node.FireflyClient().Addr()
-	msg := message.NewMessage(message.MSG_EMPTY_FIELD, message.PERMISSION_SET, permission)
-	encodedMsg := msg.Encoded()
+func (m *Masternode) UpdateNodePermission(node *core.Node,  msg *messages.Clientmessage) error {
+	if err := msg.IsValidNodeQuery(); err != nil {
+		log.Error("ClientMessage (node-centric) is invalid")
+		return err
+	}
+	dst := node.IfritClient().Addr()
+	internalMsg := messages.NewInternalMessage(msg.Subject, "PERMISSION_SET", msg.Permission, msg.SetPermission)
+	encodedMsg := internalMsg.EncodedInternal()
 	<- m.FireflyClient().SendTo(dst, encodedMsg)
+	return nil
 }
 
 func (m *Masternode) SendMessage(s *core.Subject, node *core.Node, permission string) {
@@ -60,15 +75,22 @@ func (m *Masternode) MessageHandler(data []byte) ([]byte, error) {
 }
 
 func (m *Masternode) GossipMessageHandler(data []byte) ([]byte, error) {
-	fmt.Printf("masternode gossip msg handler: %s\n", string(data))
+	//fmt.Printf("masternode gossip msg handler: %s\n", string(data))
 	return nil, nil
 }
 
 func (m *Masternode) GossipResponseHandler(data []byte) {
-	fmt.Printf("masternode gossip response handler: %s\n", string(data))
+	//fmt.Printf("masternode gossip response handler: %s\n", string(data))
 	//m.IfritClient.SetGossipContent([]byte("kake"))
 }
 
 func (m *Masternode) FireflyClient() *ifrit.Client {
 	return m.IfritClient
+}
+
+func (m *Masternode) IsValidPermission(permission string) bool {
+	if permission == file.FILE_READ || permission == file.FILE_ANALYSIS || permission == file.FILE_SHARE {
+		return true
+	}
+	return false
 }
