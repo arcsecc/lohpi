@@ -101,16 +101,18 @@ func (n *Node) StorageDirectory() string {
 // Invoked when this client receives a message
 func (n *Node) StorageNodeMessageHandler(data []byte) ([]byte, error) {
 	msg := messages.DecodedInternalMessage(data)
-	
+
 	if (msg.Type == messages.PERMISSION_SET) {
 		for _, file := range n.Files {
-			if msg.SetPermission == "set" {
-				//fmt.Printf("set permission %s to true", msg.Permission)
-				file.SetPermission(msg.Permission, true)
-			} else if msg.SetPermission == "unset" {
-				file.RemovePermission(msg.Permission)
-			} else {
-				fmt.Errorf("%s switch is not valid\n", msg.SetPermission)
+			if msg.Subject == file.SubjectID || msg.Subject == "ALL" {
+				if msg.SetPermission == "set" {
+					//fmt.Printf("set permission %s to true", msg.Permission)
+					file.SetPermission(msg.Permission, true)
+				} else if msg.SetPermission == "unset" {
+					file.RemovePermission(msg.Permission)
+				} else {
+					fmt.Errorf("%s switch is not valid\n", msg.SetPermission)
+				}	
 			}
 		}
 	} else {

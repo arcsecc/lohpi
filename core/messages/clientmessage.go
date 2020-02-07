@@ -17,7 +17,7 @@ type Clientmessage struct {
 }
 
 func (c *Clientmessage) IsValidFormat() error {
-	if c.Permission == file.FILE_READ || c.Permission == file.FILE_ANALYSIS || c.Permission == file.FILE_SHARE {
+	if c.Permission == file.FILE_STORE || c.Permission == file.FILE_ANALYSIS || c.Permission == file.FILE_SHARE {
 		if c.SetPermission == "set" || c.SetPermission == "unset" {
 			return nil
 		}

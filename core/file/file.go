@@ -16,8 +16,8 @@ import (
 	"strconv"
 )
 
-var FILE_SHARE 			= "SHARE"	// Cannot be used by data users/analysers
-var FILE_READ 			= "READ"	
+var FILE_SHARE 			= "SHARE"		// Cannot be used by data users/analysers
+var FILE_STORE 			= "STORE"		// Cannot be used by data users/analysers
 var FILE_ANALYSIS 		= "ANALYSIS"
 
 // gRPC does not allow messages to exceed this size in bytes

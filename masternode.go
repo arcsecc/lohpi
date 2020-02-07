@@ -89,7 +89,7 @@ func (m *Masternode) FireflyClient() *ifrit.Client {
 }
 
 func (m *Masternode) IsValidPermission(permission string) bool {
-	if permission == file.FILE_READ || permission == file.FILE_ANALYSIS || permission == file.FILE_SHARE {
+	if permission == file.FILE_STORE || permission == file.FILE_ANALYSIS || permission == file.FILE_SHARE {
 		return true
 	}
 	return false

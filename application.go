@@ -32,7 +32,7 @@ var (
 
 type Application struct {
 	// Data owners
-	Subject *core.Subject
+	Subjects []*core.Subject
 	
 	// Data storage units
 	StorageNodes []*core.Node
@@ -89,6 +89,7 @@ func NewApplication() (*Application, error) {
 	numFiles := viper.GetInt("files_per_subject")
 	numStorageNodes := viper.GetInt("firestore_nodes")
 	numDataUsers := viper.GetInt("data_users")
+	numSubjects := viper.GetInt("num_subjects")
 	masterNode, err := NewMasterNode()
 	if err != nil {
 		panic(err)
@@ -102,8 +103,8 @@ func NewApplication() (*Application, error) {
 	app.StorageNodes = storageNodes
 	app.MasterNode = masterNode
 	app.DataUsers = CreateDataUsers(numDataUsers)
-	app.Subject = CreateApplicationSubject()
-	app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subject, numFiles)
+	app.Subjects = CreateApplicationSubject(numSubjects)
+	app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subjects, numFiles)
 	app.Listener = l
 	time.After(5)
 	return app, nil
@@ -129,6 +130,8 @@ func (app *Application) httpHandler() error {
 	mux.HandleFunc("/print_node", app.PrintNode)
 	mux.HandleFunc("/subject_set_perm", app.SubjectSetPermission)
 	mux.HandleFunc("/node_set_perm", app.NodeSetPermission)
+
+	//mux.HandleFunc()
 	/*user_set_perm
 	mux.HandleFunc("/shutdown", app.Shutdown)
 	mux.HandleFunc("/subjects", app.PrintSubjects)*/
@@ -298,10 +301,12 @@ func (app *Application) PrintSubjects(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
-	for _, file := range app.Files {
-		if (app.Subject.Name() == file.SubjectID) {
-			str := string(fmt.Sprintf("Subject's name: %s\nOwner name: %s\nStorage network path: %s\n\n", app.Subject.Name(), file.OwnerID, file.AbsolutePath))
-			fmt.Fprintf(w, "%s", str) 	
+	for _, subject := range app.Subjects {
+		for _, file := range app.Files {
+			if (subject.Name() == file.SubjectID) {
+				str := string(fmt.Sprintf("Subject's name: %s\nOwner name: %s\nStorage network path: %s\n\n", subject.Name(), file.OwnerID, file.AbsolutePath))
+				fmt.Fprintf(w, "%s", str) 	
+			}
 		}
 	}
 }
@@ -317,35 +322,35 @@ func (app *Application) TestGossiping() {
 	//app.MasterNode.GossipStorageNetwork(app.Subject, file.FILE_APPEND)
 }
 
-func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subject *core.Subject, numFiles int) {
+func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subjects []*core.Subject, numFiles int) {
 	fileSize := viper.GetInt("file_size")
 	app.Files = make([]*file.File, 0)
 
 	// might add more subjects too...
-	for i := 0; i < numFiles; i++ {
-		for _, node := range nodes {
-			path := fmt.Sprintf("%s/%s/file%d.txt", node.StorageDirectory(), subject.Name(), i)
-			file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_READ)
-			if err != nil {
-				panic(err)
+	for _, subject := range subjects {
+		for i := 0; i < numFiles; i++ {
+			for _, node := range nodes {
+				path := fmt.Sprintf("%s/%s/file%d.txt", node.StorageDirectory(), subject.Name(), i)
+				file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_STORE)
+				if err != nil {
+					panic(err)
+				}
+				node.AppendSubjectFile(file)
+				app.Files = append(app.Files, file)
 			}
-			node.AppendSubjectFile(file)
-			app.Files = append(app.Files, file)
 		}
 	}
 }
 
-func CreateApplicationSubject() *core.Subject {
-	subjectName := fmt.Sprintf("subject%d", 1)
-	return core.NewSubject(subjectName)
-	/*subjects := make([]*core.Subject, 0)
+func CreateApplicationSubject(numSubjects int) []*core.Subject {
+	subjects := make([]*core.Subject, 0)
 
 	for i := 0; i < numSubjects; i++ {
 		subjectName := fmt.Sprintf("subject_%d", i + 1)
 		subject := core.NewSubject(subjectName)
 		subjects = append(subjects, subject)
 	}
-	return subjects*/
+	return subjects
 }
 
 func CreateDataUsers(numDataUsers int) ([]*core.Datauser) {
@@ -399,15 +404,6 @@ func readConfig() error {
 	return nil
 }
 
-func (m *Msg) ValidFormat() bool {
-	if m.SetPermission == "set" || m.SetPermission == "unset" {
-		if m.Permission == file.FILE_READ || m.Permission == file.FILE_ANALYSIS || m.Permission == file.FILE_SHARE {
-			return true
-		}
-	}
-
-	return false
-}
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {
 	// Get needed application clients
