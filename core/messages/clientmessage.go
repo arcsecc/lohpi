@@ -38,7 +38,7 @@ func (c *Clientmessage) IsValidNodeQuery() error {
 	if c.IsValidFormat() == nil {
 		if len(c.Node) > 0 {
 			return nil
-		}
+		} 
 	}
 	return errors.New("Node query is invalid")
 }

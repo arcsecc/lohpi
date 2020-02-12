@@ -8,8 +8,9 @@ import (
 	log "github.com/inconshreveable/log15"
 	"path/filepath"
 	"firestore/core/file"
+	"firestore/core/fuse"
 	"firestore/core/messages"
-	"strings"
+_	"strings"
 	//"net/http"
 //	"encoding/gob"
 	"bytes"
@@ -36,9 +37,11 @@ type Node struct {
 	
 	// Its unique ID (might change it later to something more bulletproof?)
 	NodeID string
-	
 
 	GlobalUsagePermission map[string]*file.File
+
+	// Local FUSE-mounted file system
+	Fs *fuse.Filesystem
 }
 
 /** Node interface. Remote firestore node */
@@ -50,8 +53,6 @@ func NewNode(ID string) (*Node, error) {
 	}
 
 	dirPath := storageDirectoryPath(ID)
-	createStorageDirectory(dirPath)
-
 	node := &Node {
 		FireflyClient: fireflyClient,
 		NodeID: ID,
@@ -59,7 +60,14 @@ func NewNode(ID string) (*Node, error) {
 		StorageDirectoryPath: dirPath,
 	}
 
+	// Mount the FUSE system at /tmp/<node_ID>
+	MAX_FILE_SIZE := 1024
+	node.Fs, err = fuse.FSMount(dirPath, MAX_FILE_SIZE) //err
 	node.FireflyClient.RegisterGossipHandler(node.GossipMessageHandler)
+	if err != nil {
+		panic(err)
+	}
+
 	node.FireflyClient.RegisterResponseHandler(node.GossipResponseHandler)
 	node.FireflyClient.RegisterMsgHandler(node.StorageNodeMessageHandler)
 	go fireflyClient.Start()
@@ -142,13 +150,7 @@ func (n *Node) HasFile(fileMapKey string) bool {
 
 // Returns the absolute path of the node's top-level storage directory
 func storageDirectoryPath(nodeName string) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		log.Error("Could not create directory for storage node")
-		panic(err)
-	}
-
-	return fmt.Sprintf("%s/%s/%s", cwd, NODE_DIR, nodeName)
+	return fmt.Sprintf("/tmp/%s", nodeName)
 }
 
 func createStorageDirectory(dirPath string) {
@@ -169,28 +171,26 @@ func (n *Node) AbsFilePath(fileAbsPath string) string {
 
 // This callback will be invoked on each received gossip message.
 func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
-	msg := messages.DecodedInternalMessage(data)
+/*	msg := messages.DecodedInternalMessage(data)
 	targetSubject := msg.Subject
 	
 	// Find file in the node. If it exists, set new permission
 	if (msg.Type == messages.PERMISSION_SET) {
-		for _, file := range n.Files {
-			if strings.Contains(file.AbsolutePath, targetSubject) {
-				if msg.SetPermission == "set" {
-					//fmt.Printf("set permission %s to true", msg.Permission)
-					file.SetPermission(msg.Permission, true)
-				} else if msg.SetPermission == "unset" {
-					file.RemovePermission(msg.Permission)
-				} else {
-					fmt.Errorf("%s switch is not valid\n", msg.SetPermission)
-				}
+		if strings.Contains(file.AbsolutePath, targetSubject) {
+			if msg.SetPermission == "set" {
+				//fmt.Printf("set permission %s to true", msg.Permission)
+				file.SetPermission(msg.Permission, true)
+			} else if msg.SetPermission == "unset" {
+				file.RemovePermission(msg.Permission)
+			} else {
+				fmt.Errorf("%s switch is not valid\n", msg.SetPermission)
 			}
 		}
 	} else {
 		fmt.Errorf("%s type is not valid\n", msg.Type)
-	} 
+	}
 
-	// Put this into if branch
+	// Put this into if branch*/
     return []byte(messages.MSG_NEW_PERM_SET), nil
 }
 
@@ -210,4 +210,11 @@ func (n *Node) AppendSubjectFile(file *file.File) {
 
 func (n *Node) SubjectFiles() []*file.File {
 	return n.Files	
+}
+
+func (n *Node) Shutdown() {
+	ifritClient := n.IfritClient()
+	log.Debug("Node", ifritClient.Addr(), "shutting down...")
+	ifritClient.Stop()
+	n.Fs.Shutdown()
 }

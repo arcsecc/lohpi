@@ -9,18 +9,19 @@ _	"math/rand"
 	"errors"
 _	"encoding/gob"
 _	"bytes"
-	"time"
+	//"time"
 	"firestore/core/file"
 	"firestore/core"
 	"firestore/core/messages"
-//	"firestore/utils"
 	"firestore/netutil"
 	"github.com/spf13/viper"
 	"net"
 	"net/http"
 	"bytes"
 	"io"
-_	"io/ioutil"
+	"os"
+	"os/signal"
+	"syscall"
 	"encoding/json"
 
 )
@@ -72,6 +73,7 @@ func main() {
 		log.Error("Could not create several clients")
 	}
 
+	setupApplicationKiller(app)
 	app.Start()
 	//app.Run()
 	//app.Stop()
@@ -86,7 +88,7 @@ func NewApplication() (*Application, error) {
 		return nil, err
 	}
 
-	numFiles := viper.GetInt("files_per_subject")
+	//numFiles := viper.GetInt("files_per_subject")
 	numStorageNodes := viper.GetInt("firestore_nodes")
 	numDataUsers := viper.GetInt("data_users")
 	numSubjects := viper.GetInt("num_subjects")
@@ -104,9 +106,8 @@ func NewApplication() (*Application, error) {
 	app.MasterNode = masterNode
 	app.DataUsers = CreateDataUsers(numDataUsers)
 	app.Subjects = CreateApplicationSubject(numSubjects)
-	app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subjects, numFiles)
+	//app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subjects, numFiles)
 	app.Listener = l
-	time.After(5)
 	return app, nil
 }
 
@@ -404,6 +405,25 @@ func readConfig() error {
 	return nil
 }
 
+func (app *Application) Cleanup() {
+	// Remove nodes 
+	for _, node := range app.StorageNodes {
+		node.Shutdown()
+	}
+
+	// Remove master node
+	app.MasterNode.Shutdown()
+}
+
+func setupApplicationKiller(app *Application) {
+	c := make(chan os.Signal)
+    signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+    go func() {
+        <- c
+		app.Cleanup()
+        os.Exit(1)
+    }()
+}
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {
 	// Get needed application clients
@@ -440,7 +460,10 @@ func (app *Application) RunGossipMessaging() {
 		}
 	}
 }*/
-/*
+/*	StorageNodes []*core.Node
+	
+	// Single point-of-entry node for API calls. Stateless too
+	MasterNode *Masternode
 func (app *Application) gossipMessageHandler(data []byte) ([]byte, error) {
 	fmt.Printf("In simpleGossipHandler() -- message: %s\n", string(data))
 	return data, nil

@@ -94,3 +94,9 @@ func (m *Masternode) IsValidPermission(permission string) bool {
 	}
 	return false
 }
+
+func (m *Masternode) Shutdown() {
+	ifritClient := m.FireflyClient()
+	log.Info("Master node shutting down...")
+	ifritClient.Stop()
+}
