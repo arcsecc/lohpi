@@ -22,6 +22,9 @@ var (
 
 )
 
+//ons 26.02 kl 1445
+//5w 30 full syntetisk
+
 const NODE_DIR = "storage_nodes"
 
 // Storage node used to store "research data"
@@ -30,7 +33,10 @@ type Node struct {
 	Files []*file.File	
 	
 	// The directory in which the node stores data (node-locally)
-	StorageDirectoryPath string		
+	MountPointDir string		
+	
+	// The path to /tmp/*
+	DestinationPointDir string
 	
 	// Underlying Firefly client
 	FireflyClient *ifrit.Client
@@ -38,10 +44,11 @@ type Node struct {
 	// Its unique ID (might change it later to something more bulletproof?)
 	NodeID string
 
+	// TO BE DETERMINED LATER WHAT TO DO WITH THIS ONE
 	GlobalUsagePermission map[string]*file.File
 
 	// Local FUSE-mounted file system
-	Fs *fuse.Filesystem
+	fs *fuse.Ptfs
 }
 
 /** Node interface. Remote firestore node */
@@ -52,17 +59,20 @@ func NewNode(ID string) (*Node, error) {
 		return nil, err
 	}
 
-	dirPath := storageDirectoryPath(ID)
+	localMountPoint := getLocalMountPoint(ID)
+	destinationMountPoint := getDestinationMountPoint(ID)
+	createDirectory(localMountPoint)
+	createDirectory(destinationMountPoint)
+
 	node := &Node {
 		FireflyClient: fireflyClient,
 		NodeID: ID,
 		GlobalUsagePermission: permissionMap,
-		StorageDirectoryPath: dirPath,
+		MountPointDir: localMountPoint,
+		DestinationPointDir: destinationMountPoint,
 	}
 
-	// Mount the FUSE system at /tmp/<node_ID>
-	MAX_FILE_SIZE := 1024
-	node.Fs, err = fuse.FSMount(dirPath, MAX_FILE_SIZE) //err
+	fuse.NewFuseFS(localMountPoint, destinationMountPoint)
 	node.FireflyClient.RegisterGossipHandler(node.GossipMessageHandler)
 	if err != nil {
 		panic(err)
@@ -77,7 +87,7 @@ func NewNode(ID string) (*Node, error) {
 func (n *Node) NodeInfo() string {
 	var b bytes.Buffer
 	str := fmt.Sprintf("****** Node info ******\nLocal directory path: %s\nNode ID: %s\nIfrit address: %s\n\n",
-		n.StorageDirectoryPath, n.NodeID, n.IfritClient().Addr())
+		n.MountPointDir, n.NodeID, n.IfritClient().Addr())
 	_, err := b.WriteString(str)
 	if err != nil {
 		panic(err)
@@ -90,7 +100,6 @@ func (n *Node) NodeInfo() string {
 			panic(err)
 		}
 	}
-
 	return string(b.Bytes())
 }
 
@@ -103,7 +112,7 @@ func (n *Node) IfritClient() *ifrit.Client {
 }
 
 func (n *Node) StorageDirectory() string {
-	return n.StorageDirectoryPath
+	return n.MountPointDir
 }
 
 // Invoked when this client receives a message
@@ -148,19 +157,32 @@ func (n *Node) HasFile(fileMapKey string) bool {
 	return false
 }
 
-// Returns the absolute path of the node's top-level storage directory
-func storageDirectoryPath(nodeName string) string {
-	return fmt.Sprintf("/tmp/%s", nodeName)
+// Returns the path for the local entry point for the FUSE file system
+func getLocalMountPoint(nodeName string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("%s/%s/%s", cwd, NODE_DIR, nodeName)
 }
 
-func createStorageDirectory(dirPath string) {
+// Returns the location to which changes in the node's local storage directory
+// are reflected
+func getDestinationMountPoint(nodeName string) string {
+	return fmt.Sprintf("/tmp/%s/%s", NODE_DIR, nodeName)
+}
+
+// Creates a directory
+func createDirectory(dirPath string) {
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		os.MkdirAll(dirPath, 0755)
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (n *Node) AbsFilePath(fileAbsPath string) string {
-	return filepath.Join(n.StorageDirectoryPath, fileAbsPath)
+	return filepath.Join(n.MountPointDir, fileAbsPath)
 }
 
 /*func (n *Node) SetAbsoluteMessagePath(msg *file.Message) {
@@ -216,5 +238,5 @@ func (n *Node) Shutdown() {
 	ifritClient := n.IfritClient()
 	log.Debug("Node", ifritClient.Addr(), "shutting down...")
 	ifritClient.Stop()
-	n.Fs.Shutdown()
+//	n.fs.Shutdown()
 }
