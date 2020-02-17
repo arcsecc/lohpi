@@ -15,11 +15,12 @@
 package fuse
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
-	"errors"
+	"log"
 
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
@@ -49,7 +50,7 @@ type Ptfs struct {
 
 func NewFuseFS(startDir, mountDir string) {
 	syscall.Umask(0)
-	ptfs := Ptfs{}		
+	ptfs := Ptfs{}
 
 	// Customized parameters. Need to purify them as well. Magic...
 	opts := []string{"", "-o", "nonempty", startDir, mountDir}
@@ -63,11 +64,13 @@ func NewFuseFS(startDir, mountDir string) {
 			panic(errors.New("Could not mount Fuse system"))
 		}
 	}()
+
+	log.Printf("Mounted dir on %s\n", mountDir)
 }
 
 func (fs *Ptfs) Root() string {
 	return fs.root
-} 
+}
 
 func (self *Ptfs) Init() {
 	defer trace()()
@@ -78,8 +81,50 @@ func (self *Ptfs) Init() {
 	}
 }
 
-func (self *Ptfs) Listxattr(path string, fill func(name string) bool) int {
-	defer trace(path)(&errc, stat)
+// TODO: finish it l8r
+func (self *Ptfs) Listxattr(path string, fill func(name string) bool) (errc int) {
+	fmt.Printf("Listxattr() -> path: %v\nname: %v\n", path, fill)
+
+	defer trace(path, fill)(&errc)
+	buf := make([]byte, 100)
+	errc, err := syscall.Listxattr(path, buf)
+	if err != nil {
+		panic(err)
+	}
+	return errc
+}
+
+// TODO: figure out why errc equals 7!
+func (self *Ptfs) Getxattr(path string, attr string) (errc int, res []byte) {	
+	defer trace(path, attr)(&errc, &res)
+	res = make([]byte, 100)
+	path = filepath.Join(self.root, path)
+	errc, err := syscall.Getxattr(path, attr, res)
+	if err != nil {
+		panic(err)
+	}
+ 
+	fmt.Printf("Getxattr() -> path: %v\nattr: %v\nres: %s\nerrc: %v\n", path, attr, res, errc)
+
+	// return errc!!!
+	return 0, res
+}
+
+func (self *Ptfs) Setxattr(path string, attr string, data []byte, flags int) (errc int) {
+	defer trace(path, attr, data, flags)(&errc)
+	path = filepath.Join(self.root, path)
+	errc = errno(syscall.Setxattr(path, attr, data, flags))
+
+	fmt.Printf("Setxattr() -> path: %v\nattr: %v\ndata: %s\nflags: %v\nerrcode: %v\n", path, attr, data, flags, errc)
+
+	return
+}
+
+func (self *Ptfs) Removexattr(path string, attr string) (errc int) {
+	defer trace(path, attr)(&errc)
+	path = filepath.Join(self.root, path)
+	errc = errno(syscall.Removexattr(path, attr))
+	return errc
 }
 
 func (self *Ptfs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
@@ -102,7 +147,6 @@ func (self *Ptfs) Mkdir(path string, mode uint32) (errc int) {
 	defer trace(path, mode)(&errc)
 	defer setuidgid()()
 	path = filepath.Join(self.root, path)
-	fmt.Printf("Mkdir\n")
 	return errno(syscall.Mkdir(path, mode))
 }
 
@@ -285,9 +329,9 @@ func (self *Ptfs) Releasedir(path string, fh uint64) (errc int) {
 }
 
 func (self *Ptfs) Shutdown() {
-	fmt.Printf("Shutdown() not implemented!\n");
-/*	if self.Unmount() != true {
-		fmt.Errorf("Unmount failed\n")
-	}
-	self.Destroy()*/
+	fmt.Printf("Shutdown() not implemented!\n")
+	/*	if self.Unmount() != true {
+			fmt.Errorf("Unmount failed\n")
+		}
+		self.Destroy()*/
 }
