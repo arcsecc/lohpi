@@ -15,6 +15,11 @@ const (
 	PERMISSION_GET Msgtype = "PERMISSION_GET"
 	FILE_GET Msgtype = "FILE_GET"
 	FILE_DISTRIBUTE Msgtype = "FILE_DISTRIBUTE"
+	
+	MSG_TYPE_GET_NODE_INFO = "MSG_TYPE_GET_NODE_INFO"
+	MSG_TYPE_SET_SUBJECT_NODE_PERMISSION = "MSG_TYPE_SET_SUBJECT_NODE_PERMISSION"
+	MSG_TYPE_SET_NODE_PERMISSION = "MSG_TYPE_SET_NODE_PERMISSION"
+	MSG_TYPE_SET_SUBJECT_PERMISSION = "MSG_TYPE_SET_SUBJECT_PERMISSION"
 )
 
 const (
@@ -28,22 +33,23 @@ type Internalmessage struct {
 	Subject string
 	Node string
 	Permission string
-	SetPermission string
+	//SetPermission string
 	Type Msgtype
 }
 
-func NewInternalMessage(subjectID string, messageType Msgtype, permission, setPermission string) *Internalmessage {
+func NewInternalMessage(subjectID string, nodeID string, messageType Msgtype, permission string) *Internalmessage {
 	self := &Internalmessage {
 		Subject: subjectID,
+		Node: nodeID,
 		Type: messageType,
 		Permission: permission,
-		SetPermission: setPermission,
+	//	SetPermission: setPermission,
 	}
 
 	return self
 }
 
-func (m *Internalmessage) EncodedInternal() []byte {
+func (m *Internalmessage) Encoded() []byte {
 	var buffer bytes.Buffer
 	encoder := gob.NewEncoder(&buffer)
 	if err := encoder.Encode(m); err != nil {
@@ -63,7 +69,6 @@ func DecodedInternalMessage(encodedMessage []byte) *Internalmessage {
 
 	return &decodedMessage
 }
-
 
 /*
 // used to send files from a client to the network.

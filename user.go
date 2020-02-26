@@ -2,16 +2,16 @@ package main
 
 import (
 	"errors"
-//	"math"
+	//	"math"
 	//"math/rand"
 	"firestore/core/file"
-	"firestore/core"
+	"firestore/node"
 )
 
 var (
-	errCreateRandomData			= errors.New("Could not create random")
-	errHashClientData 			= errors.New("Could not hash client's data")
-	errAddClientNode 			= errors.New("Could not add ClientNode to User")
+	errCreateRandomData = errors.New("Could not create random")
+	errHashClientData   = errors.New("Could not hash client's data")
+	errAddClientNode    = errors.New("Could not add ClientNode to User")
 )
 
 type User struct {
@@ -23,8 +23,8 @@ type User struct {
 	//ClientNode *core.Clientnode
 	OwnerName string
 
-	// should remove this ugly hack 
-	StorageNodes []*core.Node
+	// should remove this ugly hack
+	StorageNodes []*node.Node
 }
 
 func NewUser(ownerName string) *User {
@@ -60,11 +60,11 @@ func (u *User) StoreFileRemotely(file *file.File) chan []byte {
 }*/
 
 func (u *User) DeleteFile(file *file.File) {
-//	u.ClientNode.DeleteFile(file)
+	//	u.ClientNode.DeleteFile(file)
 }
 
 // HACK
-func (u *User) SetStorageNodesList(storageNodes []*core.Node) {
+func (u *User) SetStorageNodesList(storageNodes []*node.Node) {
 	u.StorageNodes = storageNodes
 }
 

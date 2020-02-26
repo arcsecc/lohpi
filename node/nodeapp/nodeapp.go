@@ -1,5 +1,5 @@
-package core
-
+package nodeapp
+/*
 import (
 	"fmt"
 	"os"
@@ -51,7 +51,7 @@ type Node struct {
 	fs *fuse.Ptfs
 }
 
-/** Node interface. Remote firestore node */
+/** Node interface. Remote firestore node *
 func NewNode(ID string) (*Node, error) {
 	permissionMap := make(map[string]*file.File) 	// subject name -> files that can be read
 	fireflyClient, err := ifrit.NewClient()
@@ -153,7 +153,7 @@ func (n *Node) HasFile(fileMapKey string) bool {
 	/*filenameTable := n.LocalFileNameTable()
 	if _, ok := filenameTable[fileMapKey]; ok {
 		return true
-	}*/
+	}*
 	return false
 }
 
@@ -189,7 +189,7 @@ func (n *Node) AbsFilePath(fileAbsPath string) string {
 	hash := msg.FilePathHash
 	absMsgPath := fmt.Sprintf("%s/%x", n.StorageDirectoryPath, hash)
 	msg.RemoteAbsolutePath = absMsgPath
-}*/
+}*
 
 // This callback will be invoked on each received gossip message.
 func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
@@ -212,7 +212,7 @@ func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
 		fmt.Errorf("%s type is not valid\n", msg.Type)
 	}
 
-	// Put this into if branch*/
+	// Put this into if branch*
     return []byte(messages.MSG_NEW_PERM_SET), nil
 }
 
@@ -239,4 +239,4 @@ func (n *Node) Shutdown() {
 	log.Debug("Node", ifritClient.Addr(), "shutting down...")
 	ifritClient.Stop()
 //	n.fs.Shutdown()
-}
+}*/

@@ -16,9 +16,10 @@ import (
 	"strconv"
 )
 
-var FILE_SHARE 			= "SHARE"		// Cannot be used by data users/analysers
-var FILE_STORE 			= "STORE"		// Cannot be used by data users/analysers
-var FILE_ANALYSIS 		= "ANALYSIS"
+var FILE_ALLOWED	 			= "allow"	
+var FILE_DISALLOWED 			= "disallow"		
+var FILE_PERMISSION_SET 		= "set"
+var FILE_PERMISSION_UNSET 		= "unset"
 
 // gRPC does not allow messages to exceed this size in bytes
 const MAX_SHARD_SIZE = 1000000
@@ -90,18 +91,15 @@ func (f *File) RemovePermission(permission string) {
 }
 
 func (f *File) AllPermissions() {
-	
 	list, err := xattr.List(f.AbsolutePath); 
 	if err != nil {
 		panic(err)
-	}
-	
+	}	
 	for _, attribute := range list {
 		data, err := xattr.Get(f.AbsolutePath, attribute);
 		if err != nil {
 	  		panic(err)
 		}
-
 		fmt.Printf("%s\n", string(data[1:]))
 	}
 }
@@ -158,7 +156,6 @@ func (f *File) EncodeFileInfo() (bytes.Buffer, error) {
 	if err := encoder.Encode(&f.FileInfo); err != nil {
 	   panic(err)
 	}
-
 	return buffer, nil
 }
 

@@ -13,14 +13,14 @@ type Clientmessage struct {
 	Subject string
 	Node string
 	Permission string
-	SetPermission string
+	//SetPermission string
 }
 
 func (c *Clientmessage) IsValidFormat() error {
-	if c.Permission == file.FILE_STORE || c.Permission == file.FILE_ANALYSIS || c.Permission == file.FILE_SHARE {
-		if c.SetPermission == "set" || c.SetPermission == "unset" {
+	if c.Permission == file.FILE_ALLOWED || c.Permission == file.FILE_DISALLOWED {
+		/*if c.SetPermission == "set" || c.SetPermission == "unset" {
 			return nil
-		}
+		}*/
 	}
 	return errors.New("Client message is invalid")
 }

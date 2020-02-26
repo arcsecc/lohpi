@@ -1,14 +1,15 @@
 package main
 
 import (
-_	"fmt"
+	"fmt"
 	log "github.com/inconshreveable/log15"
-//	"github.com/spf13/viper"
-	"ifrit"
+	//	"github.com/spf13/viper"
+	"errors"
+	"firestore/core"
 	"firestore/core/file"
 	"firestore/core/messages"
-	"firestore/core"
-	"errors"
+	"firestore/node"
+	"ifrit"
 )
 
 var (
@@ -18,9 +19,11 @@ var (
 // In order for us to simulate a read-world scenario, we do not maintain
 // any application-like data structures in the masternode. This is because the state of
 // the permissions is supposed to be held by the storage nodes and NOT master. Otherwise,
-// we could simply delegate the enitre 
+// we could simply delegate the enitre
 type Masternode struct {
 	IfritClient *ifrit.Client
+	Nodes       []*node.Node
+	Subjects    []*core.Subject
 }
 
 func NewMasterNode() (*Masternode, error) {
@@ -30,7 +33,7 @@ func NewMasterNode() (*Masternode, error) {
 	}
 
 	go ifritClient.Start()
-	self := &Masternode {
+	self := &Masternode{
 		IfritClient: ifritClient,
 	}
 
@@ -39,30 +42,101 @@ func NewMasterNode() (*Masternode, error) {
 	return self, nil
 }
 
-func (m *Masternode) GossipSubjectPermission(msg *messages.Clientmessage) error {
-	if err := msg.IsValidSubjectQuery(); err != nil {
-		log.Error("ClientMessage (subject-centric) is invalid")
-		return err
+/** PUBLIC METHODS */
+func (m *Masternode) SetNetworkNodes(nodes []*node.Node) {
+	m.Nodes = nodes
+}
+
+func (m *Masternode) SetNetworkSubjects(subjects []*core.Subject) {
+	m.Subjects = subjects
+}
+
+func (m *Masternode) FireflyClient() *ifrit.Client {
+	return m.IfritClient
+}
+
+/* PUBLIC METHODS USED TO RESPOND TO HTTP CALLBACK METHODS */
+// Sets a new permission to be applied to a specific node and a specific client
+func (m *Masternode) SetSubjectNodePermission(msg *messages.Clientmessage) error {
+	// Verify the contents of the HTTP client's message
+	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
+		return fmt.Errorf("Invalid permission constant: %s", msg.Permission)
 	}
-	internalMsg := messages.NewInternalMessage(msg.Subject, "PERMISSION_SET", msg.Permission, msg.SetPermission)
-	encodedMsg := internalMsg.EncodedInternal()
-	m.IfritClient.SetGossipContent([]byte(encodedMsg))
+
+	// Find subject from message, if any. Return if no subject is found
+	if subject := m.GetSubjectById(msg.Subject); subject == nil {
+		return fmt.Errorf("No such subject known to the network: %s", msg.Subject)
+	}
+
+	// If no such node is found, return error
+	var internalMsg *messages.Internalmessage
+	node := m.GetNodeById(msg.Node)
+	if node != nil {
+		internalMsg = messages.NewInternalMessage(msg.Subject, node.ID(), messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION, msg.Permission)
+	} else {
+		return fmt.Errorf("No such node known to the network: %s", msg.Node)
+	}
+
+	encodedMsg := internalMsg.Encoded()
+	recipient := node.FireflyClient().Addr()
+	<-m.FireflyClient().SendTo(recipient, encodedMsg)
 	return nil
 }
 
-func (m *Masternode) UpdateNodePermission(node *core.Node,  msg *messages.Clientmessage) error {
-	if err := msg.IsValidNodeQuery(); err != nil {
-		log.Error("ClientMessage (node-centric) is invalid")
-		return err
+// Sets a new permission to be applied globally to a specific node. Ie. all files maintained
+// by this node are set to the new permission
+func (m *Masternode) SetNodePermission(msg *messages.Clientmessage) error {
+	// Verify the contents of the HTTP client's message
+	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
+		return fmt.Errorf("Invalid permission constant: %s", msg.Permission)
 	}
-	dst := node.IfritClient().Addr()
-	internalMsg := messages.NewInternalMessage(msg.Subject, "PERMISSION_SET", msg.Permission, msg.SetPermission)
-	encodedMsg := internalMsg.EncodedInternal()
-	<- m.FireflyClient().SendTo(dst, encodedMsg)
+
+	// If no such node is found, return error
+	var internalMsg *messages.Internalmessage
+	node := m.GetNodeById(msg.Node)
+	if node != nil {
+		internalMsg = messages.NewInternalMessage(msg.Subject, node.ID(), messages.MSG_TYPE_SET_NODE_PERMISSION, msg.Permission)
+	} else {
+		return fmt.Errorf("No such node known to the network: %s", msg.Node)
+	}
+
+	encodedMsg := internalMsg.Encoded()
+	recipient := node.FireflyClient().Addr()
+	<-m.FireflyClient().SendTo(recipient, encodedMsg)
 	return nil
 }
 
-func (m *Masternode) SendMessage(s *core.Subject, node *core.Node, permission string) {
+// Returns a verbose string about a node
+func (m *Masternode) GetNodeInfo(node *node.Node) string {
+	dst := node.FireflyClient().Addr()
+	msg := messages.NewInternalMessage("", "", messages.MSG_TYPE_GET_NODE_INFO, "")
+	encodedMsg := msg.Encoded()
+	response := <-m.FireflyClient().SendTo(dst, encodedMsg)
+	return string(response)
+}
+
+// Gossip the new subject permission to the entire network
+func (m *Masternode) SetSubjectPermission(msg *messages.Clientmessage) error {
+	// Verify the contents of the HTTP client's message
+	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
+		return fmt.Errorf("Invalid permission constant: %s", msg.Permission)
+	}
+
+	// If no such node is found, return error
+	var internalMsg *messages.Internalmessage
+	subject := m.GetSubjectById(msg.Subject)
+	if subject != nil {
+		internalMsg = messages.NewInternalMessage(msg.Subject, "", messages.MSG_TYPE_SET_SUBJECT_PERMISSION, msg.Permission)
+	} else {
+		return fmt.Errorf("No such subject known to the network: %s", msg.Subject)
+	}
+
+	encodedMsg := internalMsg.Encoded()
+	m.FireflyClient().SetGossipContent(encodedMsg)
+	return nil
+}
+
+func (m *Masternode) SendMessage(s *core.Subject, node *node.Node, permission string) {
 	/*dst := node.FireflyClient().Addr()
 	msg := message.NewMessage(s.Name(), message.PERMISSION_GET, permission)
 	encodedMsg := msg.Encoded()
@@ -81,22 +155,35 @@ func (m *Masternode) GossipMessageHandler(data []byte) ([]byte, error) {
 
 func (m *Masternode) GossipResponseHandler(data []byte) {
 	//fmt.Printf("masternode gossip response handler: %s\n", string(data))
-	//m.IfritClient.SetGossipContent([]byte("kake"))
-}
-
-func (m *Masternode) FireflyClient() *ifrit.Client {
-	return m.IfritClient
-}
-
-func (m *Masternode) IsValidPermission(permission string) bool {
-	if permission == file.FILE_STORE || permission == file.FILE_ANALYSIS || permission == file.FILE_SHARE {
-		return true
-	}
-	return false
+	//m.IfritClien*node.Node {
+	/*for _, n := range m.Nodes {
+		if n.ID() == id {
+			return n, nil
+		}
+	}*/
 }
 
 func (m *Masternode) Shutdown() {
 	ifritClient := m.FireflyClient()
 	log.Info("Master node shutting down...")
 	ifritClient.Stop()
+}
+
+func (m *Masternode) GetNodeById(nodeID string) *node.Node {
+	for _, node := range m.Nodes {
+		if nodeID == node.ID() {
+			return node
+		}
+	}
+	return nil
+}
+
+func (m *Masternode) GetSubjectById(subjectID string) *core.Subject {
+	for _, s := range m.Subjects {
+		fmt.Printf("S = %s\n", s.ID())
+		if subjectID == s.ID() {
+			return s
+		}
+	}
+	return nil
 }

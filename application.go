@@ -3,64 +3,66 @@ package main
 import (
 	"fmt"
 	///"github.com/joonnna/ifrit"
-//	"ifrit"
-	log "github.com/inconshreveable/log15"
-_	"math/rand"
+	//	"ifrit"
+	_ "bytes"
+	_ "encoding/gob"
 	"errors"
-_	"encoding/gob"
-_	"bytes"
+	logger "github.com/inconshreveable/log15"
+	_ "math/rand"
 	//"time"
-	"firestore/core/file"
+	"bytes"
+	"encoding/json"
 	"firestore/core"
+	"firestore/core/file"
 	"firestore/core/messages"
 	"firestore/netutil"
+	"firestore/node"
 	"github.com/spf13/viper"
+	"io"
 	"net"
 	"net/http"
-	"bytes"
-	"io"
 	"os"
 	"os/signal"
 	"syscall"
-	"encoding/json"
-
+//	"log"
 )
 
 var (
-	errCannotCreateApplication 		= errors.New("Cannot create application")
-	errCannotAddClients 			= errors.New("Adding one or more clients to Application.Clients failed")
+	errCannotCreateApplication = errors.New("Cannot create application")
+	errCannotAddClients        = errors.New("Adding one or more clients to Application.Clients failed")
 )
 
 type Application struct {
 	// Data owners
 	Subjects []*core.Subject
-	
+
 	// Data storage units
-	StorageNodes []*core.Node
-	
+	Nodes []*node.Node
+
 	// Single point-of-entry node for API calls. Stateless too
 	MasterNode *Masternode
 
-	// Data users requesting data 
-	DataUsers []*core.Datauser	
-	
+	// Data users requesting data
+	DataUsers []*core.Datauser
+
 	// All files. Only used to print file permissions
-	Files []*file.File			
+	Files []*file.File
 
 	// Http server stuff
 	Listener   net.Listener
-	httpServer *http.Server 
-	
-	// Pass exit signals 
-	ExitChan chan bool 
+	httpServer *http.Server
+
+	// Pass exit signals
+	ExitChan chan bool
 }
 
-// used by /print_node endpoint
-type Msg struct {
+// Used to populate the 
+type AppStateMessage struct {
 	Node string
 	Subject string
-	Permission string
-	SetPermission string
+	Study string
+	NumFiles int
+	FileSize int
 }
 
 func main() {
@@ -70,7 +72,7 @@ func main() {
 	app, err := NewApplication()
 	if err != nil {
 		panic(err)
-		log.Error("Could not create several clients")
+		logger.Error("Could not create several clients")
 	}
 
 	setupApplicationKiller(app)
@@ -79,9 +81,8 @@ func main() {
 	//app.Stop()
 }
 
-
 func NewApplication() (*Application, error) {
-	app := &Application {}
+	app := &Application{}
 
 	l, err := netutil.ListenOnPort(viper.GetInt("server_port"))
 	if err != nil {
@@ -89,23 +90,27 @@ func NewApplication() (*Application, error) {
 	}
 
 	//numFiles := viper.GetInt("files_per_subject")
-	numStorageNodes := viper.GetInt("firestore_nodes")
-	numDataUsers := viper.GetInt("data_users")
+	numNodes := viper.GetInt("firestore_nodes")
+	fmt.Printf("Port num: %d\n", viper.GetInt("server_port"))
+	//numDataUsers := viper.GetInt("data_users")
 	numSubjects := viper.GetInt("num_subjects")
 	masterNode, err := NewMasterNode()
-	if err != nil {
-		panic(err)
-	}
-	
-	storageNodes, err := CreateStorageNodes(numStorageNodes)
+	app.MasterNode = masterNode
 	if err != nil {
 		panic(err)
 	}
 
-	app.StorageNodes = storageNodes
-	app.MasterNode = masterNode
-	app.DataUsers = CreateDataUsers(numDataUsers)
+	nodes, err := CreateNodes(numNodes)
+	app.Nodes = nodes
+	if err != nil {
+		panic(err)
+	}
+
 	app.Subjects = CreateApplicationSubject(numSubjects)
+	//app.DataUsers = CreateDataUsers(numDataUsers)
+	app.MasterNode.SetNetworkNodes(nodes)
+	app.MasterNode.SetNetworkSubjects(app.Subjects)
+
 	//app.assignSubjectFilesToStorageNodes(app.StorageNodes, app.Subjects, numFiles)
 	app.Listener = l
 	return app, nil
@@ -121,17 +126,21 @@ func (app *Application) Run() {
 }
 
 func (app *Application) Start() error {
-	log.Info("Started application server", "addr", app.Listener.Addr().String())
+	logger.Info("Started application server", "addr", app.Listener.Addr().String())
 	return app.httpHandler()
 }
- 
+
+/**** HTTP end-point functions */
 func (app *Application) httpHandler() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/print_files", app.PrintFiles)
 	mux.HandleFunc("/print_node", app.PrintNode)
+	mux.HandleFunc("/subject_node_set_perm", app.SubjectNodeSetPermission)
 	mux.HandleFunc("/subject_set_perm", app.SubjectSetPermission)
 	mux.HandleFunc("/node_set_perm", app.NodeSetPermission)
-
+	mux.HandleFunc("/subjects", app.PrintSubjects)
+	mux.HandleFunc("/shutdown", app.Shutdown)
+	mux.HandleFunc("/set_system_state", app.SetApplicationState)
 	//mux.HandleFunc()
 	/*user_set_perm
 	mux.HandleFunc("/shutdown", app.Shutdown)
@@ -144,10 +153,9 @@ func (app *Application) httpHandler() error {
 
 	err := app.httpServer.Serve(app.Listener)
 	if err != nil {
-		log.Error(err.Error())
+		logger.Error(err.Error())
 		return err
 	}
-
 	return nil
 }
 
@@ -160,7 +168,8 @@ func (app *Application) PrintNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Header.Get("Content-type") != "application/json" {
-		log.Error("Require header to be application/json")
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
 	}
 
 	var incomingMsg messages.Clientmessage
@@ -172,17 +181,17 @@ func (app *Application) PrintNode(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	for _, n := range app.StorageNodes {
-		if incomingMsg.Node == n.Name() {
-			str := n.NodeInfo()
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, "%s", str) 
-			return
-		}
+	node := app.MasterNode.GetNodeById(incomingMsg.Node)
+	if node == nil {
+		w.WriteHeader(http.StatusNotFound)
+		str := fmt.Sprintf("No such node in network: %s\n", incomingMsg.Node)
+		fmt.Fprintf(w, "%s", str)
+		return
 	}
 
-	w.WriteHeader(http.StatusNotFound)
-	log.Error("Node not found")
+	nodeInfo := app.MasterNode.GetNodeInfo(node)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "%s", nodeInfo)
 }
 
 func (app *Application) PrintFiles(w http.ResponseWriter, r *http.Request) {
@@ -194,33 +203,32 @@ func (app *Application) PrintFiles(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	if len(app.Files) < 1 {
 		str := fmt.Sprintf("There are no files in the storage network\n")
-		fmt.Fprintf(w, "%s", str) 
+		fmt.Fprintf(w, "%s", str)
+		return
 	}
 
 	str := string(fmt.Sprintf("**** All known files in the system ****\n\n"))
-	fmt.Fprintf(w, "%s", str) 
+	fmt.Fprintf(w, "%s", str)
 
 	for _, file := range app.Files {
 		str := string(fmt.Sprintf("Path: %s\nOwner: %s\nStorage node: %s\nPermission: %s\n\n\n", file.AbsolutePath, file.SubjectID, file.OwnerID, file.FilePermission()))
-		fmt.Fprintf(w, "%s", str) 
+		fmt.Fprintf(w, "%s", str)
 	}
 }
 
-// TODO: Handle multiple subjects too
-func (app *Application) SubjectSetPermission(w http.ResponseWriter, r *http.Request) {
+func (app *Application) SubjectNodeSetPermission(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != "POST" {
 		respString := fmt.Sprintf("Invalid method: %s for /subject_set_perm\n", r.Method)
 		_, err := w.Write([]byte(respString))
 		if err != nil {
-			log.Error(err.Error())
+			logger.Error(err.Error())
 			return
 		}
 	}
 
-	defer r.Body.Close()
 	if r.Header.Get("Content-type") != "application/json" {
-		log.Error("Require header to be application/json")
+		logger.Error("Require header to be application/json")
 	}
 
 	var body bytes.Buffer
@@ -232,31 +240,64 @@ func (app *Application) SubjectSetPermission(w http.ResponseWriter, r *http.Requ
 		panic(err)
 	}
 
-	// change this when adding several subjects
-	err = app.MasterNode.GossipSubjectPermission(&incomingMsg); 
+	err = app.MasterNode.SetSubjectNodePermission(&incomingMsg)
 	if err != nil {
 		w.WriteHeader(http.StatusNotAcceptable)
-		str := fmt.Sprintf("Invalid request body\n")
-		fmt.Fprintf(w, "%s", str) 
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
 	} else {
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
-
-func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request) {
+func (app *Application) SubjectSetPermission(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != "POST" {
-		respString := fmt.Sprintf("Invalid method: %s for /node_set_perm\n", r.Method)
+		respString := fmt.Sprintf("Invalid method: %s for /subject_set_perm\n", r.Method)
 		_, err := w.Write([]byte(respString))
 		if err != nil {
-			log.Error(err.Error())
+			logger.Error(err.Error())
 			return
 		}
 	}
 
 	if r.Header.Get("Content-type") != "application/json" {
-		log.Error("Require header to be application/json")
+		logger.Error("Require header to be application/json")
+	}
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+
+	var incomingMsg messages.Clientmessage
+	err := json.Unmarshal(body.Bytes(), &incomingMsg)
+	if err != nil {
+		panic(err)
+	}
+
+	err = app.MasterNode.SetSubjectPermission(&incomingMsg)
+	if err != nil {
+		w.WriteHeader(http.StatusNotAcceptable)
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	if r.Method != "POST" {
+		respString := fmt.Sprintf("Invalid method: %s for /node_set_perm\n", r.Method)
+		_, err := w.Write([]byte(respString))
+		if err != nil {
+			logger.Error(err.Error())
+			return
+		}
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		logger.Error("Require header to be application/json")
 	}
 
 	var message messages.Clientmessage
@@ -267,72 +308,86 @@ func (app *Application) NodeSetPermission(w http.ResponseWriter, r *http.Request
 		panic(err)
 	}
 
-	for _, node := range app.StorageNodes {
-		if node.Name() == message.Node {
-			fmt.Printf("found node\n");
-			app.MasterNode.UpdateNodePermission(node, &message)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	err = app.MasterNode.SetNodePermission(&message)
+	if err != nil {
+		w.WriteHeader(http.StatusNotAcceptable)
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
+	} else {
+		w.WriteHeader(http.StatusOK)
 	}
-
-	w.WriteHeader(http.StatusNotFound)
-	str := fmt.Sprintf("Could not find node %s\n", message.Node)
-	fmt.Fprintf(w, "%s", str)
 }
 
 func (app *Application) Shutdown(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	for _, node := range app.StorageNodes {
-		node.IfritClient().Stop()
-	}
-	r.Body.Close()
-	app.MasterNode.FireflyClient().Stop()
-	app.Listener.Close()
+	app.Cleanup()
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "System shutdown OK\n") 
+	fmt.Fprintf(w, "System shutdown OK\n")
 }
 
-// TODO: Handle multiple subjects too
 func (app *Application) PrintSubjects(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-
 	for _, subject := range app.Subjects {
-		for _, file := range app.Files {
-			if (subject.Name() == file.SubjectID) {
-				str := string(fmt.Sprintf("Subject's name: %s\nOwner name: %s\nStorage network path: %s\n\n", subject.Name(), file.OwnerID, file.AbsolutePath))
-				fmt.Fprintf(w, "%s", str) 	
+		str := fmt.Sprintf("Subject's name: %s\n", subject.ID())
+		fmt.Fprintf(w, "%s", str)
+		for _, file := range subject.Files() {
+			if subject.ID() == file.SubjectID {
+				str := string(fmt.Sprintf("Subject's name: %s\nOwner name: %s\nStorage network path: %s\n\n", subject.ID(), file.OwnerID, file.AbsolutePath))
+				fmt.Fprintf(w, "%s", str)
 			}
 		}
 	}
 }
 
-func (app *Application) TestMulticast() {
-//	nodes := app.StorageNodes[:len(app.StorageNodes) / 2]
-//	for _, node := range nodes {
-//		app.MasterNode.SendStoragePermission(app.Subject, node, file.FILE_APPEND)
-//	}
+// Set the entire application state to using a JSON file passed in the POST request
+func (app *Application) SetApplicationState(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Require POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
+	}
+
+	var message AppStateMessage
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &message)
+	if err != nil {
+		panic(err)
+	}
+
+	if !message.isValidMessage() {
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
+	}
 }
 
-func (app *Application) TestGossiping() {
-	//app.MasterNode.GossipStorageNetwork(app.Subject, file.FILE_APPEND)
+func (msg *AppStateMessage) isValidMessage() bool {
+	return true
 }
 
-func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subjects []*core.Subject, numFiles int) {
+/*func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subjects []*core.Subject, numFiles int) {
 	fileSize := viper.GetInt("file_size")
 	app.Files = make([]*file.File, 0)
 
-	// might add more subjects too...
 	for _, subject := range subjects {
 		for i := 0; i < numFiles; i++ {
 			for _, node := range nodes {
+
+
 				path := fmt.Sprintf("%s/%s/file%d.txt", node.StorageDirectory(), subject.Name(), i)
-				file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_STORE)
+				file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_ALLOWED)
 				if err != nil {
 					panic(err)
 				}
@@ -341,45 +396,41 @@ func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, sub
 			}
 		}
 	}
-}
+}*/
 
 func CreateApplicationSubject(numSubjects int) []*core.Subject {
 	subjects := make([]*core.Subject, 0)
 
 	for i := 0; i < numSubjects; i++ {
-		subjectName := fmt.Sprintf("subject_%d", i + 1)
-		subject := core.NewSubject(subjectName)
+		subjectName := fmt.Sprintf("subject_%d", i+1)
+		subjectDirPath := fmt.Sprintf("/tmp/subject_data/subject_%d", i+1)
+		subject := core.NewSubject(subjectName, subjectDirPath)
 		subjects = append(subjects, subject)
 	}
 	return subjects
 }
 
-func CreateDataUsers(numDataUsers int) ([]*core.Datauser) {
+func CreateDataUsers(numDataUsers int) []*core.Datauser {
 	dataUsers := make([]*core.Datauser, 0)
-
 	for i := 0; i < numDataUsers; i++ {
-		id := fmt.Sprintf("dataUser_%d\n", i + 1)
+		id := fmt.Sprintf("dataUser_%d\n", i+1)
 		user := core.NewDataUser(id)
 		dataUsers = append(dataUsers, user)
 	}
-
 	return dataUsers
 }
 
-func CreateStorageNodes(numStorageNodes int) ([]*core.Node, error) {
-	nodes := make([]*core.Node, 0)
-
+func CreateNodes(numStorageNodes int) ([]*node.Node, error) {
+	nodes := make([]*node.Node, 0)
 	for i := 0; i < numStorageNodes; i++ {
-		nodeID := fmt.Sprintf("node_%d", i + 1)
-		node, err := core.NewNode(nodeID)
+		nodeID := fmt.Sprintf("node_%d", i+1)
+		node, err := node.NewNode(nodeID)
 		if err != nil {
-			log.Error("Could not create storage node")
+			logger.Error("Could not create storage node")
 			return nil, err
 		}
-
 		nodes = append(nodes, node)
 	}
-
 	return nodes, nil
 }
 
@@ -400,29 +451,26 @@ func readConfig() error {
 	viper.SetDefault("data_users", 1)
 	viper.SetDefault("files_per_subject", 1)
 	viper.SetDefault("file_size", 256)
+	viper.SetDefault("server_port", 8080)
 	viper.SafeWriteConfig()
-
 	return nil
 }
 
 func (app *Application) Cleanup() {
-	// Remove nodes 
-	for _, node := range app.StorageNodes {
+	for _, node := range app.Nodes {
 		node.Shutdown()
 	}
-
-	// Remove master node
 	app.MasterNode.Shutdown()
 }
 
 func setupApplicationKiller(app *Application) {
 	c := make(chan os.Signal)
-    signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-    go func() {
-        <- c
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
 		app.Cleanup()
-        os.Exit(1)
-    }()
+		os.Exit(0)
+	}()
 }
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {
@@ -454,14 +502,14 @@ func (app *Application) RunGossipMessaging() {
 				//randomClient := app.Clients[rand.Int() % len(app.Clients)]
 				s := fmt.Sprintf("Client %s sends message\n", app.Clients[0].Addr())
 				app.Clients[0].SetGossipContent([]byte(s))
-				
+
 				//ch := ap'p.Clients[0].SendTo(randomClient.Addr(), []byte(s))
 				//response := <- ch
 		}
 	}
 }*/
 /*	StorageNodes []*core.Node
-	
+
 	// Single point-of-entry node for API calls. Stateless too
 	MasterNode *Masternode
 func (app *Application) gossipMessageHandler(data []byte) ([]byte, error) {
@@ -471,7 +519,7 @@ func (app *Application) gossipMessageHandler(data []byte) ([]byte, error) {
 /*
 func (app *Application) gossipResponseHandler(data []byte) {
 	fmt.Printf("In gossipResponseHandler() -- message: %s\n", string(data))
-}	
+}
 */
 
 /****** simple message passing here ******/
@@ -498,7 +546,7 @@ func (app *Application) RunSimpleMessaging(nClients int) {
 					//fmt.Printf("Sends message to %s\n", randomClient.Addr());
 					s := fmt.Sprintf("recipient: %s", recipient.Addr())
 					ch := app.Clients[0].SendTo(recipient.Addr(), []byte(s))
-				
+
 					response := <- ch
 					fmt.Printf("Response: %s\n", response)
 				}
