@@ -11,6 +11,10 @@ _	"firestore/core/file"
 	"ifrit"
 )
 
+/** Note: When the files are set, there is a tiny window in which the application
+ * can gain access to the files because the files need to be assigned to the node.
+ * The permissions are elevated to make this possible, thus 
+*/
 type Node struct {
 	// Used to direct messages to either FUSE or node application
 	mux *mux.Mux
@@ -37,7 +41,7 @@ func NewNode(ID string) (*Node, error) {
 	}
 
 	// Initialize FUSE daemon along with its directories
-	node.fs = fuse.NewFuseFS(ID)
+	//node.fs = fuse.NewFuseFS(ID)
 
 	// Initialize Ifrit client and callback functions
 	node.IfritClient = ifritClient
@@ -66,26 +70,31 @@ func (n *Node) ID() string {
 func (n *Node) MuxMessageReceiver(data []byte) ([]byte, error) {
 	var response string
 	msg := messages.DecodedInternalMessage(data)
-	/*if isValidInternalMessage(msg.Type, *msg) == false {
-		return []byte("Invalid internal message"), nil
-	}*/
+	fmt.Printf("Message received: %s\n", msg.Type)
 
 	switch msgType := msg.Type; msgType {
 		case messages.MSG_TYPE_GET_NODE_INFO:
-			fmt.Printf("Message received: %s\n", msg.Type)
 			response = n.string()
+
 		case messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION:
-			fmt.Printf("Message received: %s\n", msg.Type)
 			fuseDaemon := n.fuseDaemon()
 			err := fuseDaemon.SetNodePermission(msg.Permission)
 			if err != nil {
 				log.Fatalf("Error while setting node permission: %s\n", err)
 				return nil, nil
 			}
+
 		case messages.MSG_TYPE_SET_NODE_PERMISSION:
-			fmt.Printf("Message received: %s\n", msg.Type)
+			break
+
+		case messages.MSG_TYPE_SET_NODE_FILES:
+			log.Fatalf("Setting files from cURL is not implemented. Exiting...\n")
+
+		case messages.MSG_TYPE_NEW_STUDY:
+//			n.CreateNewStudy()
+
 		default:
-			log.Printf("Unkown message")
+			log.Printf("Unkown message type: %s\n", msg.Type)
 			return nil, nil
 	}
     return []byte(response), nil
@@ -108,7 +117,6 @@ func (n *Node) GossipMessageHandler(data []byte) ([]byte, error) {
 
 // Sets the new permission for the entire collection of files owned by 'subject'
 func (n *Node) setNewSubjectPermission(permission, subject string) error {
-
 	fmt.Printf("setNewSubjectPermission\n")
 	return nil
 }
@@ -148,4 +156,12 @@ func isValidInternalMessage(msgType messages.Msgtype, msg messages.Internalmessa
 
 func (n *Node) fuseDaemon() *fuse.Ptfs {
 	return n.fs
+}
+
+func (n *Node) StorageDirectory() string {
+	return fuse.GetLocalMountPoint(n.ID())
+}
+
+func (n *Node) ParentFusePoint() string {
+	return fuse.NODE_DIR
 }

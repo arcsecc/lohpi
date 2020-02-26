@@ -20,14 +20,52 @@ const (
 	MSG_TYPE_SET_SUBJECT_NODE_PERMISSION = "MSG_TYPE_SET_SUBJECT_NODE_PERMISSION"
 	MSG_TYPE_SET_NODE_PERMISSION = "MSG_TYPE_SET_NODE_PERMISSION"
 	MSG_TYPE_SET_SUBJECT_PERMISSION = "MSG_TYPE_SET_SUBJECT_PERMISSION"
+	MSG_TYPE_SET_NODE_FILES = "MSG_TYPE_SET_NODE_FILES"
+	MSG_TYPE_NEW_STUDY = "MSG_TYPE_NEW_STUDY"
 )
 
 const (
 	MSG_EMPTY_FIELD = "Empty message field"
 	MSG_EMPTY_MESSAGE = "Empty message"
-	MSG_NEW_PERM_SET = "new permission set"
-	
+	MSG_NEW_PERM_SET = "new permission set"	
 )
+
+type Studymessage struct {
+	Node string
+	Study string
+	Type Msgtype
+}
+
+func NewStudyMessage(node, study string, messageType Msgtype) *Studymessage {
+	return &Studymessage {
+		Node: node,
+		Study: study,
+		Type: messageType,
+	}
+}
+
+func (s *Studymessage) Encoded() []byte {
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
+	if err := encoder.Encode(s); err != nil {
+	   panic(err)
+	}
+	
+	return buffer.Bytes()
+}
+
+func DecodedStudyMessage(encodedMessage []byte) *Studymessage {
+	var msg Studymessage
+	buffer := bytes.NewBuffer(encodedMessage)
+	decoder := gob.NewDecoder(buffer)
+	if err := decoder.Decode(&msg); err != nil {
+	   panic(err)
+	}
+
+	return &msg
+}
+
+
 
 type Internalmessage struct {
 	Subject string

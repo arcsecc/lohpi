@@ -69,8 +69,8 @@ type Ptfs struct {
 }
 
 func NewFuseFS(nodeID string) *Ptfs {
-	startDir :=getLocalMountPoint(nodeID)
-	mountDir := getDestinationMountPoint(nodeID)
+	startDir := GetLocalMountPoint(nodeID)
+	mountDir := GetDestinationMountPoint(nodeID)
 	createDirectory(startDir)
 	createDirectory(mountDir)
 	syscall.Umask(0)
@@ -452,7 +452,7 @@ func (self *Ptfs) Shutdown() {
 }
 
 // Returns the path for the local entry point for the FUSE file system
-func getLocalMountPoint(nodeName string) string {
+func GetLocalMountPoint(nodeName string) string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		panic(err)
@@ -462,7 +462,7 @@ func getLocalMountPoint(nodeName string) string {
 
 // Returns the location to which changes in the node's local storage directory
 // are reflected
-func getDestinationMountPoint(nodeName string) string {
+func GetDestinationMountPoint(nodeName string) string {
 	return fmt.Sprintf("/tmp/%s/%s", NODE_DIR, nodeName)
 }
 

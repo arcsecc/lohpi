@@ -24,13 +24,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-//	"log"
+	"log"
 )
 
 var (
 	errCannotCreateApplication = errors.New("Cannot create application")
 	errCannotAddClients        = errors.New("Adding one or more clients to Application.Clients failed")
 )
+
+
 
 type Application struct {
 	// Data owners
@@ -56,15 +58,6 @@ type Application struct {
 	ExitChan chan bool
 }
 
-// Used to populate the 
-type AppStateMessage struct {
-	Node string
-	Subject string
-	Study string
-	NumFiles int
-	FileSize int
-}
-
 func main() {
 	// Main entry point. Read configuration to set initial parameters
 	readConfig()
@@ -76,6 +69,7 @@ func main() {
 	}
 
 	setupApplicationKiller(app)
+	app.SetupFileTrees()
 	app.Start()
 	//app.Run()
 	//app.Stop()
@@ -130,6 +124,41 @@ func (app *Application) Start() error {
 	return app.httpHandler()
 }
 
+
+// NOTE: This is used to setup the file trees for demonstative purposes. 
+// TODO: refine this at a later point to keep the abstractions apart
+func (app *Application) SetupFileTrees() {
+	log.Printf("Setting up node's tree structure using config parameters...\n")
+	pwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+
+	// Create a proper file tree for each FUSE points
+	for _, node := range app.Nodes {
+		nodePath := fmt.Sprintf("%s/%s/%s", pwd, node.ParentFusePoint(), node.ID())		
+		err = os.MkdirAll(nodePath, 0755)
+		if err != nil {
+			panic(err)
+		}
+		
+		// Create subject file directory
+		_ = os.Mkdir(nodePath + "/subjects", 0755)
+		
+		// Create study directory 
+		_ = os.Mkdir(nodePath + "/studies", 0755)
+			
+		/*
+		for study_id := 1; study_id <= viper.GetInt("num_studies"); study_id++ {
+			studyDirPath := fmt.Sprintf("%s/study_%d", nodePath, study_id)
+			err = os.Mkdir(studyDirPath, 0755)
+			if err != nil {
+				panic(err)
+			}
+		}*/
+	}
+}
+
 /**** HTTP end-point functions */
 func (app *Application) httpHandler() error {
 	mux := http.NewServeMux()
@@ -140,12 +169,8 @@ func (app *Application) httpHandler() error {
 	mux.HandleFunc("/node_set_perm", app.NodeSetPermission)
 	mux.HandleFunc("/subjects", app.PrintSubjects)
 	mux.HandleFunc("/shutdown", app.Shutdown)
-	mux.HandleFunc("/set_system_state", app.SetApplicationState)
-	//mux.HandleFunc()
-	/*user_set_perm
-	mux.HandleFunc("/shutdown", app.Shutdown)
-	mux.HandleFunc("/subjects", app.PrintSubjects)*/
-	/*mux.HandleFunc("/analysers", app.Shutdown)*/
+	mux.HandleFunc("/set_app_state", app.SetApplicationState)
+	mux.HandleFunc("/node_create_study", app.NodeCreateStudy)
 
 	app.httpServer = &http.Server{
 		Handler: mux,
@@ -349,7 +374,7 @@ func (app *Application) PrintSubjects(w http.ResponseWriter, r *http.Request) {
 func (app *Application) SetApplicationState(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		http.Error(w, "Require POST method", http.StatusMethodNotAllowed)
 		return
 	}
@@ -359,7 +384,7 @@ func (app *Application) SetApplicationState(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var message AppStateMessage
+	var message messages.AppStateMessage
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
 	err := json.Unmarshal(body.Bytes(), &message)
@@ -367,27 +392,61 @@ func (app *Application) SetApplicationState(w http.ResponseWriter, r *http.Reque
 		panic(err)
 	}
 
-	if !message.isValidMessage() {
+	err = app.MasterNode.SetNodeFiles(&message) 
+	if err != nil {
+		errorString := fmt.Sprintf("Could not assign files to nodes. Error: %s\n", err.Error())
+		http.Error(w, errorString, http.StatusUnprocessableEntity)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Assigned files to nodes\n")
+}
+
+func (app *Application) NodeCreateStudy(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Require POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
 		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
 		return
 	}
+
+	var msg struct {
+		Node string `json:"node"`
+		Study string `json:"study"`
+	}
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &msg)
+	if err != nil {
+		panic(err)
+	}
+
+	err = app.MasterNode.NodeCreateStudy(msg.Node, msg.Study)
+	if err != nil {
+		errorString := fmt.Sprintf("Could not create study. Error: %s\n", err.Error())
+		http.Error(w, errorString, http.StatusUnprocessableEntity)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Succsessfully created a new study in node %s\n", msg.Node)
 }
 
-func (msg *AppStateMessage) isValidMessage() bool {
-	return true
-}
-
-/*func (app *Application) assignSubjectFilesToStorageNodes(nodes []*core.Node, subjects []*core.Subject, numFiles int) {
+/*
+func (app *Application) assignSubjectFilesToStorageNodes(nodes []*node.Node, subjects []*core.Subject, numFiles int) {
 	fileSize := viper.GetInt("file_size")
 	app.Files = make([]*file.File, 0)
 
 	for _, subject := range subjects {
 		for i := 0; i < numFiles; i++ {
 			for _, node := range nodes {
-
-
-				path := fmt.Sprintf("%s/%s/file%d.txt", node.StorageDirectory(), subject.Name(), i)
-				file, err := file.NewFile(fileSize, path, subject.Name(), node.Name(), file.FILE_ALLOWED)
+				path := fmt.Sprintf("%s/%s/file%d.txt", node.StorageDirectory(), subject.ID(), i)
+				file, err := file.NewFile(fileSize, path, subject.ID(), node.ID(), file.FILE_ALLOWED)
 				if err != nil {
 					panic(err)
 				}
@@ -396,8 +455,8 @@ func (msg *AppStateMessage) isValidMessage() bool {
 			}
 		}
 	}
-}*/
-
+}
+*/
 func CreateApplicationSubject(numSubjects int) []*core.Subject {
 	subjects := make([]*core.Subject, 0)
 
@@ -448,6 +507,7 @@ func readConfig() error {
 	// Behavior variables
 	viper.SetDefault("firestore_nodes", 1)
 	viper.SetDefault("num_subjects", 2)
+	viper.SetDefault("num_studies", 1)
 	viper.SetDefault("data_users", 1)
 	viper.SetDefault("files_per_subject", 1)
 	viper.SetDefault("file_size", 256)
@@ -490,11 +550,10 @@ func setupApplicationKiller(app *Application) {
 	//fmt.Println("Encoded Struct ", b)
 
 	return masterIfritClient.SendTo(ifritClient.Addr(), b.Bytes())
-}*/
-
-/** Gossip messaging here */
-/*
-func (app *Application) RunGossipMessaging() {
+}
+if err != nil {
+	panic(err)
+}
 	for {
 		select {
 

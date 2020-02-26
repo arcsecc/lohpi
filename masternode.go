@@ -180,10 +180,61 @@ func (m *Masternode) GetNodeById(nodeID string) *node.Node {
 
 func (m *Masternode) GetSubjectById(subjectID string) *core.Subject {
 	for _, s := range m.Subjects {
-		fmt.Printf("S = %s\n", s.ID())
 		if subjectID == s.ID() {
 			return s
 		}
 	}
+	return nil
+}
+
+// Need only to pass strings 
+func (m *Masternode) NodeCreateStudy(nodeName, study string) error {
+	node := m.GetNodeById(nodeName)
+	if node == nil {
+		return fmt.Errorf("No such node known to network: %s", nodeName)
+	}
+
+	// Only send study name
+	msg := messages.NewStudyMessage(nodeName, study, messages.MSG_TYPE_NEW_STUDY)
+	encodedMsg := msg.Encoded()
+	recipient := node.FireflyClient().Addr()
+	<-m.FireflyClient().SendTo(recipient, encodedMsg)
+	return nil	
+}
+
+// Function primarily used by the user to assign files to nodes and to maintain a proper relation
+// between files, subjects, nodes (and users)
+func (m *Masternode) SetNodeFiles(msg *messages.AppStateMessage) error {
+	subject := m.GetSubjectById(msg.Subject)
+	node := m.GetNodeById(msg.Node)
+
+	// Verify the message format
+	if subject == nil || node == nil || msg.Study == "" {
+		return errors.New("Invalid application state message format")
+	}
+
+	// Verify permissions
+	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
+		return errors.New("Invalid application state permission")
+	}
+
+	if msg.NumFiles < 1 {
+		msg.NumFiles = 1
+	}
+
+	if msg.FileSize < 10 {
+		msg.FileSize = 10
+	}
+
+	appState := messages.NewAppStateMessage(messages.MSG_TYPE_SET_NODE_FILES, 
+		msg.Node, 
+		msg.Subject, 
+		msg.Study,
+		msg.Permission,
+		msg.NumFiles,
+		msg.FileSize)
+	encodedAppState := appState.Encoded()
+	recipient := node.FireflyClient().Addr()
+	<-m.FireflyClient().SendTo(recipient, encodedAppState)
 	return nil
 }
