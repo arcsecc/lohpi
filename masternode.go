@@ -10,6 +10,7 @@ import (
 	"firestore/core/messages"
 	"firestore/node"
 	"ifrit"
+	"encoding/json"
 )
 
 var (
@@ -57,29 +58,36 @@ func (m *Masternode) FireflyClient() *ifrit.Client {
 
 /* PUBLIC METHODS USED TO RESPOND TO HTTP CALLBACK METHODS */
 // Sets a new permission to be applied to a specific node and a specific client
-func (m *Masternode) SetSubjectNodePermission(msg *messages.Clientmessage) error {
+func (m *Masternode) SetSubjectNodePermission(nodeID, subjectID, permission string) error {
 	// Verify the contents of the HTTP client's message
-	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
-		return fmt.Errorf("Invalid permission constant: %s", msg.Permission)
+	if string(permission) != file.FILE_ALLOWED && string(permission) != file.FILE_DISALLOWED {
+		return fmt.Errorf("Invalid permission constant: %s", permission)
 	}
 
 	// Find subject from message, if any. Return if no subject is found
-	if subject := m.GetSubjectById(msg.Subject); subject == nil {
-		return fmt.Errorf("No such subject known to the network: %s", msg.Subject)
+	if subject := m.GetSubjectById(subjectID); subject == nil {
+		return fmt.Errorf("No such subject known to the network: %s", subjectID)
 	}
 
-	// If no such node is found, return error
-	var internalMsg *messages.Internalmessage
-	node := m.GetNodeById(msg.Node)
-	if node != nil {
-		internalMsg = messages.NewInternalMessage(msg.Subject, node.ID(), messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION, msg.Permission)
-	} else {
-		return fmt.Errorf("No such node known to the network: %s", msg.Node)
+	node := m.GetNodeById(nodeID)
+	if node == nil {
+		return fmt.Errorf("No such node known to the network: %s", nodeID)
+	} 
+
+	msg := &messages.Message {
+		MessageType: messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION,
+		Node: nodeID,
+		Subject: subjectID,
+		Permission: permission,
 	}
 
-	encodedMsg := internalMsg.Encoded()
+	b, err := json.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+
 	recipient := node.FireflyClient().Addr()
-	<-m.FireflyClient().SendTo(recipient, encodedMsg)
+	<-m.FireflyClient().SendTo(recipient, b)
 	return nil
 }
 
@@ -87,12 +95,12 @@ func (m *Masternode) SetSubjectNodePermission(msg *messages.Clientmessage) error
 // by this node are set to the new permission
 func (m *Masternode) SetNodePermission(msg *messages.Clientmessage) error {
 	// Verify the contents of the HTTP client's message
-	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
+/*	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
 		return fmt.Errorf("Invalid permission constant: %s", msg.Permission)
 	}
 
 	// If no such node is found, return error
-	var internalMsg *messages.Internalmessage
+	var internalMsg *messages.InternalMessage
 	node := m.GetNodeById(msg.Node)
 	if node != nil {
 		internalMsg = messages.NewInternalMessage(msg.Subject, node.ID(), messages.MSG_TYPE_SET_NODE_PERMISSION, msg.Permission)
@@ -103,27 +111,40 @@ func (m *Masternode) SetNodePermission(msg *messages.Clientmessage) error {
 	encodedMsg := internalMsg.Encoded()
 	recipient := node.FireflyClient().Addr()
 	<-m.FireflyClient().SendTo(recipient, encodedMsg)
-	return nil
+*/	return nil
 }
 
 // Returns a verbose string about a node
-func (m *Masternode) GetNodeInfo(node *node.Node) string {
+func (m *Masternode) GetNodeInfo(nodeID string) (string, error) {
+	node := m.GetNodeById(nodeID)
+	if node == nil {
+		return "", errors.New("No such node in network");
+	}
+
 	dst := node.FireflyClient().Addr()
-	msg := messages.NewInternalMessage("", "", messages.MSG_TYPE_GET_NODE_INFO, "")
-	encodedMsg := msg.Encoded()
-	response := <-m.FireflyClient().SendTo(dst, encodedMsg)
-	return string(response)
+	msg := &messages.Message {
+		MessageType: messages.MSG_TYPE_GET_NODE_INFO,
+		Node: nodeID,
+	}
+
+	b, err := json.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+
+	response := <-m.FireflyClient().SendTo(dst, b)
+	return string(response), nil
 }
 
 // Gossip the new subject permission to the entire network
 func (m *Masternode) SetSubjectPermission(msg *messages.Clientmessage) error {
 	// Verify the contents of the HTTP client's message
-	if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
+	/*if msg.Permission != file.FILE_ALLOWED && msg.Permission != file.FILE_DISALLOWED {
 		return fmt.Errorf("Invalid permission constant: %s", msg.Permission)
 	}
 
 	// If no such node is found, return error
-	var internalMsg *messages.Internalmessage
+	var internalMsg *messages.InternalMessage
 	subject := m.GetSubjectById(msg.Subject)
 	if subject != nil {
 		internalMsg = messages.NewInternalMessage(msg.Subject, "", messages.MSG_TYPE_SET_SUBJECT_PERMISSION, msg.Permission)
@@ -133,7 +154,7 @@ func (m *Masternode) SetSubjectPermission(msg *messages.Clientmessage) error {
 
 	encodedMsg := internalMsg.Encoded()
 	m.FireflyClient().SetGossipContent(encodedMsg)
-	return nil
+	*/return nil
 }
 
 func (m *Masternode) SendMessage(s *core.Subject, node *node.Node, permission string) {
@@ -194,11 +215,19 @@ func (m *Masternode) NodeCreateStudy(nodeName, study string) error {
 		return fmt.Errorf("No such node known to network: %s", nodeName)
 	}
 
-	// Only send study name
-	msg := messages.NewStudyMessage(nodeName, study, messages.MSG_TYPE_NEW_STUDY)
-	encodedMsg := msg.Encoded()
+	msg := &messages.Message {
+		MessageType: messages.MSG_TYPE_NEW_STUDY,
+		Node: nodeName,
+		Study: study,
+	}
+
+	b, err := json.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+
 	recipient := node.FireflyClient().Addr()
-	<-m.FireflyClient().SendTo(recipient, encodedMsg)
+	<-m.FireflyClient().SendTo(recipient, b)
 	return nil	
 }
 
@@ -236,5 +265,26 @@ func (m *Masternode) SetNodeFiles(msg *messages.AppStateMessage) error {
 	encodedAppState := appState.Encoded()
 	recipient := node.FireflyClient().Addr()
 	<-m.FireflyClient().SendTo(recipient, encodedAppState)
+	return nil
+}
+
+func (m *Masternode) LoadNodeState(nodeID string) error {
+	node := m.GetNodeById(nodeID)
+	if node == nil {
+		return fmt.Errorf("No such node known to network: %s\n", nodeID)
+	}
+
+	msg := &messages.Message {
+		MessageType: messages.MSG_TYPE_LOAD_NODE,
+		Node: nodeID,
+	}
+
+	b, err := json.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+
+	recipient := node.FireflyClient().Addr()
+	<-m.FireflyClient().SendTo(recipient, b)
 	return nil
 }

@@ -12,7 +12,7 @@ import (
 	"io/ioutil"
 	"strings"
 	"github.com/pkg/xattr"
-	"path/filepath"
+_	"path/filepath"
 	"strconv"
 )
 
@@ -38,7 +38,7 @@ type File struct {
 }
 
 func NewFile(fileSize int, absolutePath, subjectID, ownerID, permission string) (*File, error) {	
-	createDirectoryTree(absolutePath)
+	//createDirectoryTree(absolutePath)
 	emptyFile, err := os.OpenFile(absolutePath, os.O_RDONLY|os.O_CREATE|os.O_WRONLY, 0644)
     if err != nil {
 		log.Error("Could not open a new file")
@@ -266,10 +266,10 @@ func fillEmptyFile(fileSize int, file *os.File) {
 	// close file...
 }
 
-func createDirectoryTree(absolutePath string) {
+/*func createDirectoryTree(absolutePath string) {
 	dir, _ := filepath.Split(absolutePath)
 	err := os.MkdirAll(dir, 0755) 
 	if err != nil {
 		panic(err)
 	}
-}
+}*/

@@ -8,7 +8,6 @@ import (
 	_ "encoding/gob"
 	"errors"
 	logger "github.com/inconshreveable/log15"
-	_ "math/rand"
 	//"time"
 	"bytes"
 	"encoding/json"
@@ -25,6 +24,7 @@ import (
 	"os/signal"
 	"syscall"
 	"log"
+	//"math/rand"
 )
 
 var (
@@ -68,8 +68,10 @@ func main() {
 		logger.Error("Could not create several clients")
 	}
 
+	fmt.Printf("str = %s\n", viper.GetString("fuse_mount"))
+
 	setupApplicationKiller(app)
-	app.SetupFileTrees()
+//	app.SetupFileTrees()
 	app.Start()
 	//app.Run()
 	//app.Stop()
@@ -85,9 +87,8 @@ func NewApplication() (*Application, error) {
 
 	//numFiles := viper.GetInt("files_per_subject")
 	numNodes := viper.GetInt("firestore_nodes")
-	fmt.Printf("Port num: %d\n", viper.GetInt("server_port"))
 	//numDataUsers := viper.GetInt("data_users")
-	numSubjects := viper.GetInt("num_subjects")
+	//numSubjects := viper.GetInt("num_subjects")
 	masterNode, err := NewMasterNode()
 	app.MasterNode = masterNode
 	if err != nil {
@@ -100,7 +101,7 @@ func NewApplication() (*Application, error) {
 		panic(err)
 	}
 
-	app.Subjects = CreateApplicationSubject(numSubjects)
+	//app.Subjects = CreateApplicationSubject(numSubjects)
 	//app.DataUsers = CreateDataUsers(numDataUsers)
 	app.MasterNode.SetNetworkNodes(nodes)
 	app.MasterNode.SetNetworkSubjects(app.Subjects)
@@ -126,37 +127,35 @@ func (app *Application) Start() error {
 
 
 // NOTE: This is used to setup the file trees for demonstative purposes. 
+// It needs to be run prior to enabling the HTTP mux!
 // TODO: refine this at a later point to keep the abstractions apart
 func (app *Application) SetupFileTrees() {
 	log.Printf("Setting up node's tree structure using config parameters...\n")
-	pwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
 
 	// Create a proper file tree for each FUSE points
-	for _, node := range app.Nodes {
-		nodePath := fmt.Sprintf("%s/%s/%s", pwd, node.ParentFusePoint(), node.ID())		
-		err = os.MkdirAll(nodePath, 0755)
+	for _, n := range app.Nodes {
+		nodePath := fmt.Sprintf("%s", n.StorageDirectory())
+		fmt.Printf("nodePath = %s\n", nodePath)
+		/*ok, err := exists(nodePath)
 		if err != nil {
 			panic(err)
-		}
-		
-		// Create subject file directory
-		_ = os.Mkdir(nodePath + "/subjects", 0755)
-		
-		// Create study directory 
-		_ = os.Mkdir(nodePath + "/studies", 0755)
-			
-		/*
-		for study_id := 1; study_id <= viper.GetInt("num_studies"); study_id++ {
-			studyDirPath := fmt.Sprintf("%s/study_%d", nodePath, study_id)
-			err = os.Mkdir(studyDirPath, 0755)
+		} else if ok == false {
+			err := os.Mkdir(nodePath, 0755)
 			if err != nil {
 				panic(err)
 			}
 		}*/
+		// The directories are populated such that we get a many-to-many relation between
+		// studies and subjects
+		//numSubjects := viper.GetInt("num_subjects")
+		//createSubjectDirectories(numSubjects, nodePath)
+
+		// For each node, assign the 
+		//numStudies := viper.GetInt("num_studies")
+		//setupStudyRelations(nodePath, numStudies)
 	}
+
+	// Softlink between metadata directories and the actual files
 }
 
 /**** HTTP end-point functions */
@@ -171,6 +170,7 @@ func (app *Application) httpHandler() error {
 	mux.HandleFunc("/shutdown", app.Shutdown)
 	mux.HandleFunc("/set_app_state", app.SetApplicationState)
 	mux.HandleFunc("/node_create_study", app.NodeCreateStudy)
+	mux.HandleFunc("/load_node", app.LoadNodeState)
 
 	app.httpServer = &http.Server{
 		Handler: mux,
@@ -197,24 +197,24 @@ func (app *Application) PrintNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var incomingMsg messages.Clientmessage
+	var msg struct {
+		Node string `json:"node"`
+	}
+
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
-
-	err := json.Unmarshal(body.Bytes(), &incomingMsg)
+	err := json.Unmarshal(body.Bytes(), &msg)
 	if err != nil {
 		panic(err)
 	}
 
-	node := app.MasterNode.GetNodeById(incomingMsg.Node)
-	if node == nil {
-		w.WriteHeader(http.StatusNotFound)
-		str := fmt.Sprintf("No such node in network: %s\n", incomingMsg.Node)
-		fmt.Fprintf(w, "%s", str)
+	nodeInfo, err := app.MasterNode.GetNodeInfo(msg.Node)
+	if err != nil {
+		errorString := fmt.Sprintf("Could not get info about %s. Error message: %s\n", err.Error())
+		http.Error(w, errorString, http.StatusUnprocessableEntity)
 		return
 	}
 
-	nodeInfo := app.MasterNode.GetNodeInfo(node)
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "%s", nodeInfo)
 }
@@ -253,19 +253,24 @@ func (app *Application) SubjectNodeSetPermission(w http.ResponseWriter, r *http.
 	}
 
 	if r.Header.Get("Content-type") != "application/json" {
-		logger.Error("Require header to be application/json")
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
+	}
+
+	var msg struct {
+		Node string `json:"node"`
+		Subject string `json:"subject"`
+		Permission string `json:"permission"`
 	}
 
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
-
-	var incomingMsg messages.Clientmessage
-	err := json.Unmarshal(body.Bytes(), &incomingMsg)
+	err := json.Unmarshal(body.Bytes(), &msg)
 	if err != nil {
 		panic(err)
 	}
 
-	err = app.MasterNode.SetSubjectNodePermission(&incomingMsg)
+	err = app.MasterNode.SetSubjectNodePermission(msg.Node, msg.Subject, msg.Permission)
 	if err != nil {
 		w.WriteHeader(http.StatusNotAcceptable)
 		str := fmt.Sprintf("%s\n", err)
@@ -371,6 +376,7 @@ func (app *Application) PrintSubjects(w http.ResponseWriter, r *http.Request) {
 }
 
 // Set the entire application state to using a JSON file passed in the POST request
+// TODO: finish later
 func (app *Application) SetApplicationState(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -427,14 +433,64 @@ func (app *Application) NodeCreateStudy(w http.ResponseWriter, r *http.Request) 
 		panic(err)
 	}
 
+	// FIX THIS LATER TO MAKE IT PRETTIER
+	if msg.Node == "" || msg.Study == "" {
+		errorString := fmt.Sprintf("Invalid input: %v\n", msg);
+		http.Error(w, errorString, http.StatusUnprocessableEntity)
+		return
+	}
+
 	err = app.MasterNode.NodeCreateStudy(msg.Node, msg.Study)
 	if err != nil {
 		errorString := fmt.Sprintf("Could not create study. Error: %s\n", err.Error())
 		http.Error(w, errorString, http.StatusUnprocessableEntity)
+		return
 	}
-
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Succsessfully created a new study in node %s\n", msg.Node)
+}
+
+func (app *Application) LoadNodeState(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Require POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
+	}
+
+	var msg struct {
+		Node string `json:"node"`
+	}
+
+	log.Printf("%s is primarily meant to set the node's state after populating it with files and subjects.", r.URL)
+	log.Printf("Use with cation\n")
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &msg)
+	if err != nil {
+		panic(err)
+	}
+
+	// FIX THIS LATER TO MAKE IT PRETTIEEEEEEEER
+	if msg.Node == "" {
+		errorString := fmt.Sprintf("Invalid input: %v\n", msg);
+		http.Error(w, errorString, http.StatusUnprocessableEntity)
+		return
+	}
+
+	err = app.MasterNode.LoadNodeState(msg.Node)
+	if err != nil {
+		errorString := fmt.Sprintf("Could not load node state. Error: %s\n", err.Error())
+		http.Error(w, errorString, http.StatusUnprocessableEntity)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Succsessfully loaded %s state from disk\n", msg.Node)
 }
 
 /*
@@ -507,11 +563,13 @@ func readConfig() error {
 	// Behavior variables
 	viper.SetDefault("firestore_nodes", 1)
 	viper.SetDefault("num_subjects", 2)
-	viper.SetDefault("num_studies", 1)
+	viper.SetDefault("num_studies", 10)
 	viper.SetDefault("data_users", 1)
-	viper.SetDefault("files_per_subject", 1)
+	viper.SetDefault("files_per_study", 2)
 	viper.SetDefault("file_size", 256)
 	viper.SetDefault("server_port", 8080)
+	viper.SetDefault("fuse_mount", "/home/thomas/go_workspace/src/firestore")
+	viper.SetDefault("set_files", true)
 	viper.SafeWriteConfig()
 	return nil
 }
@@ -531,6 +589,98 @@ func setupApplicationKiller(app *Application) {
 		app.Cleanup()
 		os.Exit(0)
 	}()
+}
+
+/********** Initialization of file trees for each node prior to interactions with the system */
+func createSubjectDirectories(numSubjects int, nodePath string) {
+	/*for subject_id := 1; subject_id <= numSubjects; subject_id++ {
+		subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", nodePath, node.SUBJECTS_DIR, subject_id)
+		err := os.Mkdir(subjectDirPath, 0755)
+		if err != nil {
+			panic(err)
+		}
+*/
+//		numStudies := viper.GetInt("num_studies")
+		//createStudyDirectoriesInNodes(numStudies, subjectDirPath)
+	//}
+}
+
+func createStudyDirectoriesInNodes(numStudies int, subjectPath string) {
+/*	for study_id := 1; study_id <= numStudies; study_id++ {
+		studyDirPath := fmt.Sprintf("%s/study_%d", subjectPath, study_id)
+		err := os.Mkdir(studyDirPath, 0755)
+		if err != nil {
+			panic(err)
+		}
+
+		numFiles := viper.GetInt("files_per_subject")
+		createStudyFiles(numFiles, studyDirPath)	
+	}*/
+}
+
+func createStudyFiles(numFiles int, studyDirPath string) {
+/*	for file_id := 1; file_id <= numFiles; file_id++ {
+		filePath := fmt.Sprintf("%s/file_%d", studyDirPath, file_id)
+
+		// Fill file with noise
+		file, err := os.Create(filePath)
+		if err != nil {
+			panic(err)
+		}
+
+		fileSize := viper.GetInt("file_size")
+		fileContents := make([]byte, fileSize)
+		_, err = rand.Read(fileContents)
+		if err != nil { 
+			panic(err)
+		}
+		
+		n, err := file.Write(fileContents)
+		if err != nil {
+			fmt.Errorf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
+			panic(err)
+		}
+		err = file.Close()
+		if err != nil {
+			panic(err)
+		}
+	}*/
+}
+
+// Setup the directories in 'subjects' directory
+func setupStudyRelations(nodePath string, numStudies int) {
+/*	numSubjects := viper.GetInt("num_subjects")
+	for i := 1; i <= numStudies; i++ {
+		studyDirPath := fmt.Sprintf("%s/%s/study_%d/subjects", nodePath, node.STUDIES_DIR, i)
+		err := os.MkdirAll(studyDirPath, 0755)
+		if err != nil {
+			panic(err)
+		}
+
+		// Insert a symlink pointing from 'studies' directory to 'subjects' directory
+		for s := 1; s < numSubjects; s++ {
+			// Path of symlink
+			symlinkPath := fmt.Sprintf("%s/subject_%d", studyDirPath, s)
+			targetPath := fmt.Sprintf("%s/%s/subject_%d/study_%d",nodePath, node.SUBJECTS_DIR, i, i)
+			//fmt.Printf("%s -> %s\n", symlinkPath, targetPath)
+
+			err = os.Symlink(targetPath, symlinkPath)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}*/
+}
+
+func exists(path string) (bool, error) {
+    _, err := os.Stat(path)
+    if err == nil { 
+		return true, nil 
+	}
+    if os.IsNotExist(err) { 
+		return false, nil 
+	}
+    return true, err
 }
 
 /*func (app *Application) SendData(client *Client, payload *Clientdata) chan []byte {

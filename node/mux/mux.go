@@ -6,7 +6,7 @@ import (
 //	"ifrit"
 	"errors"
 //	log "github.com/inconshreveable/log15"
-	"log"
+_	"log"
 //	"path/filepath"
 //	"firestore/node/fuse"
 	"firestore/core/file"
@@ -42,13 +42,13 @@ func NewMux() *Mux {
 
 // Invoked when this client receives a message
 func (m *Mux) MuxMessageReceiver(data []byte) ([]byte, error) {
-	msg := messages.DecodedInternalMessage(data)
+	/*msg := messages.DecodedInternalMessage(data)
 	switch msgType := msg.Type; msgType {
 		case messages.PERMISSION_GET:
 			log.Printf("Message: PERMISSION_GET")
 		default:
 			log.Printf("Unkown message")
-	}
+	}*/
     return []byte("kake"), nil
 }
 

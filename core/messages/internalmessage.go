@@ -3,8 +3,8 @@ package messages
 /** This API is used for message passing between master node and storage node */
 import (
 //	"fmt"
-	"bytes"
-	"encoding/gob"
+//	"bytes"
+	"encoding/json"
 	//"firestore/core/file"
 )
 
@@ -22,6 +22,7 @@ const (
 	MSG_TYPE_SET_SUBJECT_PERMISSION = "MSG_TYPE_SET_SUBJECT_PERMISSION"
 	MSG_TYPE_SET_NODE_FILES = "MSG_TYPE_SET_NODE_FILES"
 	MSG_TYPE_NEW_STUDY = "MSG_TYPE_NEW_STUDY"
+	MSG_TYPE_LOAD_NODE = "MSG_TYPE_LOAD_NODE"
 )
 
 const (
@@ -30,21 +31,40 @@ const (
 	MSG_NEW_PERM_SET = "new permission set"	
 )
 
-type Studymessage struct {
+type Message struct {
+	MessageType Msgtype 
+	Node string 			`json:",omitempty"`
+	Study string 			`json:",omitempty"`
+	Subject string 			`json:",omitempty"`
+	Permission string 		`json:",omitempty"`
+}
+
+// Message used to create a new study
+/*type StudyMessage struct {
 	Node string
 	Study string
 	Type Msgtype
+}*/
+
+func NewMessage(data []byte) *Message {
+	var msg Message
+	err := json.Unmarshal(data, &msg)
+	if err != nil {
+		panic(err)
+	}
+
+	return &msg
 }
 
-func NewStudyMessage(node, study string, messageType Msgtype) *Studymessage {
-	return &Studymessage {
+/*func NewStudyMessage(node, study string, messageType Msgtype) *StudyMessage {
+	return &StudyMessage {
 		Node: node,
 		Study: study,
 		Type: messageType,
 	}
 }
 
-func (s *Studymessage) Encoded() []byte {
+func (s *StudyMessage) Encode() []byte {
 	var buffer bytes.Buffer
 	encoder := gob.NewEncoder(&buffer)
 	if err := encoder.Encode(s); err != nil {
@@ -52,10 +72,10 @@ func (s *Studymessage) Encoded() []byte {
 	}
 	
 	return buffer.Bytes()
-}
+}*/
 
-func DecodedStudyMessage(encodedMessage []byte) *Studymessage {
-	var msg Studymessage
+/*func DecodedStudyMessage(encodedMessage []byte) *StudyMessage {
+	var msg StudyMessage
 	buffer := bytes.NewBuffer(encodedMessage)
 	decoder := gob.NewDecoder(buffer)
 	if err := decoder.Decode(&msg); err != nil {
@@ -63,20 +83,17 @@ func DecodedStudyMessage(encodedMessage []byte) *Studymessage {
 	}
 
 	return &msg
-}
+}*/
 
-
-
-type Internalmessage struct {
+type InternalMessage struct {
 	Subject string
 	Node string
-	Permission string
-	//SetPermission string
 	Type Msgtype
+	Permission string
 }
 
-func NewInternalMessage(subjectID string, nodeID string, messageType Msgtype, permission string) *Internalmessage {
-	self := &Internalmessage {
+func NewInternalMessage(subjectID string, nodeID string, messageType Msgtype, permission string) *InternalMessage {
+	self := &InternalMessage {
 		Subject: subjectID,
 		Node: nodeID,
 		Type: messageType,
@@ -87,7 +104,8 @@ func NewInternalMessage(subjectID string, nodeID string, messageType Msgtype, pe
 	return self
 }
 
-func (m *Internalmessage) Encoded() []byte {
+/*
+func (m *InternalMessage) Encoded() []byte {
 	var buffer bytes.Buffer
 	encoder := gob.NewEncoder(&buffer)
 	if err := encoder.Encode(m); err != nil {
@@ -97,8 +115,8 @@ func (m *Internalmessage) Encoded() []byte {
 	return buffer.Bytes()
 }
 
-func DecodedInternalMessage(encodedMessage []byte) *Internalmessage {
-	var decodedMessage Internalmessage
+func DecodedInternalMessage(encodedMessage []byte) *InternalMessage {
+	var decodedMessage InternalMessage
 	buffer := bytes.NewBuffer(encodedMessage)
 	decoder := gob.NewDecoder(buffer)
 	if err := decoder.Decode(&decodedMessage); err != nil {
@@ -107,6 +125,7 @@ func DecodedInternalMessage(encodedMessage []byte) *Internalmessage {
 
 	return &decodedMessage
 }
+*/
 
 /*
 // used to send files from a client to the network.

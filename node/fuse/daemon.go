@@ -22,16 +22,23 @@ import (
 	"syscall"
 	"log"
 	"sync"
+	"math/rand"
 
 	"firestore/core/file"
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
 	"github.com/pkg/xattr"
+	"github.com/spf13/viper"
 	"golang.org/x/sys/unix"
 )
 
-// The parent directory of the fuse mount point
+// Directory name constants
 const NODE_DIR = "storage_nodes"
+const DATA_USER_DIR = "data users"
+const METADATA_DIR = "metadata"
+const PROTOCOL_DIR = "protcol"
+const SUBJECTS_DIR = "subjects"
+const STUDIES_DIR = "studies"
 
 // A magical prefix used by xattr
 const XATTR_PREFIX = "user."
@@ -69,16 +76,25 @@ type Ptfs struct {
 }
 
 func NewFuseFS(nodeID string) *Ptfs {
-	startDir := GetLocalMountPoint(nodeID)
+	startDir := creataLocalMountPointPath(nodeID)
 	mountDir := GetDestinationMountPoint(nodeID)
 	createDirectory(startDir)
 	createDirectory(mountDir)
+
 	syscall.Umask(0)
 	ptfs := Ptfs{
 		startDir: startDir,
 		mountDir: mountDir,
 		nodeID: nodeID,
 		xattrFlag: false,
+	}
+
+	// Create the file tree the node is to handle
+	ptfs.createStudyDirectoryTree()
+
+	// Set the initial state of the system to 
+	if viper.GetBool("set_files") {
+		ptfs.createSubjectDirectoryTree()
 	}
 
 	// Customized parameters. Need to purify them as well. Magic...
@@ -89,7 +105,7 @@ func NewFuseFS(nodeID string) *Ptfs {
 	// A warm start should verify the files and their attributes by asking the 
 	// rest of the network about the state of the permissions somewhere around here...
 	// restore_permission_state()
-
+	
 	_host = fuse.NewFileSystemHost(&ptfs)
 	go func() {
 		ok := _host.Mount("", opts[1:])
@@ -452,12 +468,8 @@ func (self *Ptfs) Shutdown() {
 }
 
 // Returns the path for the local entry point for the FUSE file system
-func GetLocalMountPoint(nodeName string) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	return fmt.Sprintf("%s/%s/%s", cwd, NODE_DIR, nodeName)
+func creataLocalMountPointPath(nodeName string) string {
+	return fmt.Sprintf("%s/%s/%s", viper.GetString("fuse_mount"), NODE_DIR, nodeName)
 }
 
 // Returns the location to which changes in the node's local storage directory
@@ -480,9 +492,6 @@ func createDirectory(dirPath string) {
 // file tree
 func (self *Ptfs) SetNodePermission(permission string) error {
 	self.nodePermission = permission
-	fmt.Printf("mountDir = %s\n", self.mountDir)
-	fmt.Printf("startDir = %s\n", self.startDir)
-
 	if _, err := os.Stat(self.mountDir); err != nil {
 		if os.IsNotExist(err) {
 			log.Printf("Directory %s does not exist!\n", self.mountDir)
@@ -512,3 +521,112 @@ func (self *Ptfs) isAllowedAccess() bool {
 func (self *Ptfs) canSetXattr() bool {
 	return self.xattrFlag	
 }
+
+func (self *Ptfs) GetLocalMountPoint() string {
+	return self.startDir
+}
+
+func (self *Ptfs) createStudyDirectoryTree() {
+	for i := 1; i <= viper.GetInt("num_studies"); i++ {
+		dirPath := fmt.Sprintf("%s/%s/study_%d", self.startDir, STUDIES_DIR, i)
+		createDirectory(dirPath + "/" + DATA_USER_DIR)
+		createDirectory(dirPath + "/" + METADATA_DIR)
+		createDirectory(dirPath + "/" + PROTOCOL_DIR)
+		createDirectory(dirPath + "/" + SUBJECTS_DIR)
+		
+		for j := 1; j <= viper.GetInt("num_subjects"); j++ {
+			subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", dirPath, SUBJECTS_DIR, j)
+			createDirectory(subjectDirPath)
+		}
+	}	
+}
+
+func (self *Ptfs) createSubjectDirectoryTree() {
+	for i := 1; i <= viper.GetInt("num_subjects"); i++ {
+		subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", self.startDir, SUBJECTS_DIR, i)
+		subjectID := fmt.Sprintf("subject_%d", i)
+		createDirectory(subjectDirPath)
+
+		for j := 1; j <= viper.GetInt("num_studies"); j++ {
+			studyDirPath := fmt.Sprintf("%s/%s/study_%d", subjectDirPath, STUDIES_DIR, j)
+			studyID := fmt.Sprintf("study_%d", j)
+			createDirectory(studyDirPath)
+
+			// Create the files assoicated with a subject and a study with random noise
+			self.createStudyFiles(subjectID, studyID)
+			self.linkStudyFiles(subjectID, studyID)
+		}
+	}
+}
+
+// Link files from 'subjects' directory to 'studies' directory
+func (self *Ptfs) linkStudyFiles(subject, study string) {
+	filePathDir := fmt.Sprintf("%s/%s/%s/%s/%s", self.startDir, SUBJECTS_DIR, subject, STUDIES_DIR, study)
+	targetPathDir := fmt.Sprintf("%s/%s/%s/%s/%s", self.startDir, STUDIES_DIR, study, SUBJECTS_DIR, subject)
+
+	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
+		filePath := fmt.Sprintf("%s/file_%d", filePathDir, i)
+		targetPath := fmt.Sprintf("%s/file_%d", targetPathDir, i)
+		if err := os.Symlink(filePath, targetPath); err != nil {
+			panic(err)
+		}
+	}
+}
+
+// Insert files into 'subjects' directory
+func (self *Ptfs) createStudyFiles(subject, study string) {
+	dirPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.startDir, SUBJECTS_DIR, subject, STUDIES_DIR, study)
+
+	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
+		filePath := fmt.Sprintf("%s/file_%d", dirPath, i)
+		file, err := os.Create(filePath)
+
+		if err != nil {
+			panic(err)
+		}
+	
+		fileSize := viper.GetInt("file_size")
+		fileContents := make([]byte, fileSize)
+		_, err = rand.Read(fileContents)
+		if err != nil { 
+			panic(err)
+		}
+			
+		n, err := file.Write(fileContents)
+		if err != nil {
+			fmt.Errorf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
+			panic(err)
+		}
+		err = file.Close()
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+//home/thomas/go_workspace/src/firestore/storage_nodes/node_1/subjects/subject_1/study_1/file_1:
+
+/*func (self * Ptfs) createStudyFile(filePath string) {
+	// Fill file with noise
+	file, err := os.Create(filePath)
+	if err != nil {
+		panic(err)
+	}
+
+	fileSize := viper.GetInt("file_size")
+	fileContents := make([]byte, fileSize)
+	_, err = rand.Read(fileContents)
+	if err != nil { 
+	panic(err)
+	}
+		
+	n, err := file.Write(fileContents)
+	if err != nil {
+		fmt.Errorf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
+		panic(err)
+	}
+	err = file.Close()
+	if err != nil {
+		panic(err)
+	}
+}*/
