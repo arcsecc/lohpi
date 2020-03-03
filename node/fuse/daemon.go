@@ -23,6 +23,7 @@ import (
 	"log"
 	"sync"
 	"math/rand"
+	"io/ioutil"
 
 	"firestore/core/file"
 	"github.com/billziss-gh/cgofuse/examples/shared"
@@ -148,11 +149,9 @@ func (self *Ptfs) Getxattr(path string, attr string) (errc int, res []byte) {
 	defer trace(path, attr)(&errc, &res)
 	res = make([]byte, 100)
 	path = filepath.Join(self.root, path)
-	errc, err := syscall.Getxattr(path, attr, res)
-	if err != nil {
-		panic(err)
-	}
- 
+	errc, _ = syscall.Getxattr(path, attr, res)
+	
+
 	fmt.Printf("Getxattr() -> path: %v\nattr: %v\nres: %s\nerrc: %v\n", path, attr, res, errc)
 
 	// return errc!!!
@@ -186,7 +185,7 @@ func (self *Ptfs) Removexattr(path string, attr string) (errc int) {
 }
 
 func (self *Ptfs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Statfs = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -199,7 +198,7 @@ func (self *Ptfs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
 }
 
 func (self *Ptfs) Mknod(path string, mode uint32, dev uint64) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Mknod = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -210,7 +209,7 @@ func (self *Ptfs) Mknod(path string, mode uint32, dev uint64) (errc int) {
 }
 
 func (self *Ptfs) Mkdir(path string, mode uint32) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Mkdir = %d\n", int(unix.EPERM))
 		return -int(unix.EPERM)
 	}
@@ -221,7 +220,7 @@ func (self *Ptfs) Mkdir(path string, mode uint32) (errc int) {
 }
 
 func (self *Ptfs) Unlink(path string) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Unlink = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -231,7 +230,7 @@ func (self *Ptfs) Unlink(path string) (errc int) {
 }
 
 func (self *Ptfs) Rmdir(path string) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Rmdir = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -241,7 +240,7 @@ func (self *Ptfs) Rmdir(path string) (errc int) {
 }
 
 func (self *Ptfs) Link(oldpath string, newpath string) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(oldpath) {
 		fmt.Printf("Link = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -253,7 +252,7 @@ func (self *Ptfs) Link(oldpath string, newpath string) (errc int) {
 }
 
 func (self *Ptfs) Symlink(target string, newpath string) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(target) {
 		fmt.Printf("Symlink = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -264,7 +263,7 @@ func (self *Ptfs) Symlink(target string, newpath string) (errc int) {
 }
 
 func (self *Ptfs) Readlink(path string) (errc int, target string) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Readlink = %d\n", int(unix.EPERM))
 		return int(unix.EPERM), ""
 	}
@@ -279,7 +278,7 @@ func (self *Ptfs) Readlink(path string) (errc int, target string) {
 }
 
 func (self *Ptfs) Rename(oldpath string, newpath string) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(oldpath) {
 		fmt.Printf("Rename = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -291,7 +290,7 @@ func (self *Ptfs) Rename(oldpath string, newpath string) (errc int) {
 }
 
 func (self *Ptfs) Chmod(path string, mode uint32) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Chmod = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -301,7 +300,7 @@ func (self *Ptfs) Chmod(path string, mode uint32) (errc int) {
 }
 
 func (self *Ptfs) Chown(path string, uid uint32, gid uint32) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Chown = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -320,7 +319,7 @@ func (self *Ptfs) Utimens(path string, tmsp1 []fuse.Timespec) (errc int) {
 }
 
 func (self *Ptfs) Create(path string, flags int, mode uint32) (errc int, fh uint64) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Create = %d\n", int(unix.EPERM))
 		return int(unix.EPERM), 0
 	}
@@ -330,7 +329,7 @@ func (self *Ptfs) Create(path string, flags int, mode uint32) (errc int, fh uint
 }
 
 func (self *Ptfs) Open(path string, flags int) (errc int, fh uint64) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Open = %d\n", int(unix.EPERM))
 		return int(unix.EPERM), 0
 	}
@@ -339,7 +338,7 @@ func (self *Ptfs) Open(path string, flags int) (errc int, fh uint64) {
 }
 
 func (self *Ptfs) open(path string, flags int, mode uint32) (errc int, fh uint64) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("open = %d\n", int(unix.EPERM))
 		return int(unix.EPERM), ^uint64(0)
 	}
@@ -365,7 +364,7 @@ func (self *Ptfs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) 
 }
 
 func (self *Ptfs) Truncate(path string, size int64, fh uint64) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Truncate = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -380,7 +379,8 @@ func (self *Ptfs) Truncate(path string, size int64, fh uint64) (errc int) {
 }
 
 func (self *Ptfs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
-	if !self.isAllowedAccess() {
+	fmt.Printf("PATH = %s\n", path)
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Read = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -393,7 +393,7 @@ func (self *Ptfs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) 
 }
 
 func (self *Ptfs) Write(path string, buff []byte, ofst int64, fh uint64) (n int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Write = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -416,7 +416,7 @@ func (self *Ptfs) Fsync(path string, datasync bool, fh uint64) (errc int) {
 }
 
 func (self *Ptfs) Opendir(path string) (errc int, fh uint64) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Opendir = %d\n", -int(unix.EPERM))
 		return -int(unix.EPERM), ^uint64(0)
 	}
@@ -430,7 +430,7 @@ func (self *Ptfs) Opendir(path string) (errc int, fh uint64) {
 }
 
 func (self *Ptfs) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64,	fh uint64) (errc int) {
-	if !self.isAllowedAccess() {
+	if !self.isAllowedAccess(path) {
 		fmt.Printf("Readdir = %d\n", int(unix.EPERM))
 		return int(unix.EPERM)
 	}
@@ -491,7 +491,7 @@ func createDirectory(dirPath string) {
 // NOTE: this is only temporarily; the entire system relies on a statically defined
 // file tree
 func (self *Ptfs) SetNodePermission(permission string) error {
-	self.nodePermission = permission
+	/*self.nodePermission = permission
 	if _, err := os.Stat(self.mountDir); err != nil {
 		if os.IsNotExist(err) {
 			log.Printf("Directory %s does not exist!\n", self.mountDir)
@@ -499,23 +499,94 @@ func (self *Ptfs) SetNodePermission(permission string) error {
 			log.Fatal("Some unknown error while checking if directory exists\n")
 		}
 	}
-	
+	*/
 	// Set permission on current working directory
-	self.xattrMux.Lock()
+	/*self.xattrMux.Lock()
 	self.xattrFlag = true
-	if err := xattr.Set(self.mountDir, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
+	fmt.Printf("self.mountDir: %s/\n", self.startDir)
+	if err := xattr.Set(self.startDir, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
 		return err
 	}
 	self.xattrFlag = false
-	self.xattrMux.Unlock()
+	self.xattrMux.Unlock()*/
 	return nil
 }
 
-func (self *Ptfs) isAllowedAccess() bool {
-	if self.nodePermission == file.FILE_ALLOWED {
+// Use only /storage_nodes/node_i/studies/study_i/subjects/subject_x
+func (self *Ptfs) SetSubjectNodePermission(subject, permission string) error {
+	// Fetch directory containing all studies (PUT IN ITS OWN FUNCTION)
+	path := fmt.Sprintf("%s/%s", self.mountDir, STUDIES_DIR)
+	files, err := ioutil.ReadDir(path)
+    if err != nil {
+        return err
+    }
+
+	// For all studies...
+    for _, file := range files {
+		studyDirectoryPath := path + "/" + file.Name()
+		dirEntryInfo, err := os.Stat(studyDirectoryPath)
+		if err != nil {
+			return err
+		}
+
+		// If directory entry is a directory...
+        if dirEntryInfo.IsDir() {
+			subjectsPath := fmt.Sprintf("%s/subjects", studyDirectoryPath)
+			directories, err := ioutil.ReadDir(subjectsPath)
+    		if err != nil {
+        		return err
+    		}
+			
+			// For all subjects...
+			for _, subjectDir := range directories {
+				// Skip non-matching directory entry
+				if subjectDir.Name() != subject {
+					continue 
+				}
+
+				subjectDirectoryPath := subjectsPath + "/" + subjectDir.Name()
+				d, err := os.Stat(subjectDirectoryPath)
+				if err != nil {
+					return err
+				}
+
+				if d.IsDir() {
+					directoryPath := subjectDirectoryPath
+					if err = self.setXattrFlag(directoryPath, permission); err != nil {
+						return err
+					}
+				}
+			}
+		}
+    }
+	return nil
+}
+
+func (self *Ptfs) setXattrFlag(path, permission string) error {
+	// might use lock here...
+	/*self.xattrMux.Lock()
+	self.xattrFlag = true
+	fmt.Printf("Set %s on %s\n", permission, path)*/
+	/*if err := xattr.Set(path, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
+		fmt.Println(err.Error())
+		return err
+	}*/
+	/*self.xattrFlag = false
+	self.xattrMux.Unlock()*/
+	return nil
+}
+
+func (self *Ptfs) isAllowedAccess(path string) bool {
+	path = filepath.Join(self.mountDir, path)
+	fmt.Printf("Path to check: %s\n", path)
+	//data, _ := xattr.Get(path, XATTR_PREFIX + "PERMISSION")	
+	//fmt.Printf("Data is empty = %v\n",  len(string(data)))
+	fmt.Printf("file.FILE_ALLOWED = %s\n", file.FILE_ALLOWED)
+/*	if string(data) == file.FILE_ALLOWED || len(string(data)) == 100 {
 		return true
 	}
-	return false
+	return false*/
+	return true 
 }
 
 func (self *Ptfs) canSetXattr() bool {
@@ -537,6 +608,11 @@ func (self *Ptfs) createStudyDirectoryTree() {
 		for j := 1; j <= viper.GetInt("num_subjects"); j++ {
 			subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", dirPath, SUBJECTS_DIR, j)
 			createDirectory(subjectDirPath)
+			
+			// Set default file permission on study directory
+			if err := xattr.Set(subjectDirPath, XATTR_PREFIX + "PERMISSION", []byte(file.FILE_ALLOWED)); err != nil {
+				log.Fatal(err)
+			}
 		}
 	}	
 }
@@ -579,7 +655,7 @@ func (self *Ptfs) createStudyFiles(subject, study string) {
 
 	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
 		filePath := fmt.Sprintf("%s/file_%d", dirPath, i)
-		file, err := os.Create(filePath)
+		studyFile, err := os.Create(filePath)
 
 		if err != nil {
 			panic(err)
@@ -592,12 +668,12 @@ func (self *Ptfs) createStudyFiles(subject, study string) {
 			panic(err)
 		}
 			
-		n, err := file.Write(fileContents)
+		n, err := studyFile.Write(fileContents)
 		if err != nil {
 			fmt.Errorf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
 			panic(err)
 		}
-		err = file.Close()
+		err = studyFile.Close()
 		if err != nil {
 			panic(err)
 		}

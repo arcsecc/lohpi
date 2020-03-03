@@ -88,7 +88,7 @@ func NewApplication() (*Application, error) {
 	//numFiles := viper.GetInt("files_per_subject")
 	numNodes := viper.GetInt("firestore_nodes")
 	//numDataUsers := viper.GetInt("data_users")
-	//numSubjects := viper.GetInt("num_subjects")
+	numSubjects := viper.GetInt("num_subjects")
 	masterNode, err := NewMasterNode()
 	app.MasterNode = masterNode
 	if err != nil {
@@ -101,7 +101,7 @@ func NewApplication() (*Application, error) {
 		panic(err)
 	}
 
-	//app.Subjects = CreateApplicationSubject(numSubjects)
+	app.Subjects = CreateApplicationSubject(numSubjects)
 	//app.DataUsers = CreateDataUsers(numDataUsers)
 	app.MasterNode.SetNetworkNodes(nodes)
 	app.MasterNode.SetNetworkSubjects(app.Subjects)
@@ -125,44 +125,11 @@ func (app *Application) Start() error {
 	return app.httpHandler()
 }
 
-
-// NOTE: This is used to setup the file trees for demonstative purposes. 
-// It needs to be run prior to enabling the HTTP mux!
-// TODO: refine this at a later point to keep the abstractions apart
-func (app *Application) SetupFileTrees() {
-	log.Printf("Setting up node's tree structure using config parameters...\n")
-
-	// Create a proper file tree for each FUSE points
-	for _, n := range app.Nodes {
-		nodePath := fmt.Sprintf("%s", n.StorageDirectory())
-		fmt.Printf("nodePath = %s\n", nodePath)
-		/*ok, err := exists(nodePath)
-		if err != nil {
-			panic(err)
-		} else if ok == false {
-			err := os.Mkdir(nodePath, 0755)
-			if err != nil {
-				panic(err)
-			}
-		}*/
-		// The directories are populated such that we get a many-to-many relation between
-		// studies and subjects
-		//numSubjects := viper.GetInt("num_subjects")
-		//createSubjectDirectories(numSubjects, nodePath)
-
-		// For each node, assign the 
-		//numStudies := viper.GetInt("num_studies")
-		//setupStudyRelations(nodePath, numStudies)
-	}
-
-	// Softlink between metadata directories and the actual files
-}
-
 /**** HTTP end-point functions */
 func (app *Application) httpHandler() error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/print_files", app.PrintFiles)
-	mux.HandleFunc("/print_node", app.PrintNode)
+	mux.HandleFunc("/print_files", app.PrintFiles) // nope
+	mux.HandleFunc("/print_node", app.PrintNode)	// 
 	mux.HandleFunc("/subject_node_set_perm", app.SubjectNodeSetPermission)
 	mux.HandleFunc("/subject_set_perm", app.SubjectSetPermission)
 	mux.HandleFunc("/node_set_perm", app.NodeSetPermission)
@@ -219,6 +186,7 @@ func (app *Application) PrintNode(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "%s", nodeInfo)
 }
 
+// Nope
 func (app *Application) PrintFiles(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodGet {
@@ -515,10 +483,9 @@ func (app *Application) assignSubjectFilesToStorageNodes(nodes []*node.Node, sub
 */
 func CreateApplicationSubject(numSubjects int) []*core.Subject {
 	subjects := make([]*core.Subject, 0)
-
-	for i := 0; i < numSubjects; i++ {
-		subjectName := fmt.Sprintf("subject_%d", i+1)
-		subjectDirPath := fmt.Sprintf("/tmp/subject_data/subject_%d", i+1)
+	for i := 1; i <= numSubjects; i++ {
+		subjectName := fmt.Sprintf("subject_%d", i)
+		subjectDirPath := fmt.Sprintf("/tmp/subject_data/subject_%d", i)
 		subject := core.NewSubject(subjectName, subjectDirPath)
 		subjects = append(subjects, subject)
 	}
@@ -537,8 +504,8 @@ func CreateDataUsers(numDataUsers int) []*core.Datauser {
 
 func CreateNodes(numStorageNodes int) ([]*node.Node, error) {
 	nodes := make([]*node.Node, 0)
-	for i := 0; i < numStorageNodes; i++ {
-		nodeID := fmt.Sprintf("node_%d", i+1)
+	for i := 1; i <= numStorageNodes; i++ {
+		nodeID := fmt.Sprintf("node_%d", i)
 		node, err := node.NewNode(nodeID)
 		if err != nil {
 			logger.Error("Could not create storage node")

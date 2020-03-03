@@ -89,6 +89,7 @@ func (n *Node) ID() string {
 func (n *Node) MuxMessageReceiver(data []byte) ([]byte, error) {
 	var response string
 	msg := messages.NewMessage(data)
+	fuseDaemon := n.fuseDaemon()
 	fmt.Printf("Message received: %s\n", msg)
 
 	switch msgType := msg.MessageType; msgType {
@@ -96,18 +97,17 @@ func (n *Node) MuxMessageReceiver(data []byte) ([]byte, error) {
 			response = n.string()
 
 		case messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION:
-			fuseDaemon := n.fuseDaemon()
-			err := fuseDaemon.SetNodePermission(msg.Permission)
+			err := fuseDaemon.SetSubjectNodePermission(msg.Subject, msg.Permission)
 			if err != nil {
 				log.Fatalf("Error while setting node permission: %s\n", err)
 				return nil, nil
 			}
 
 		case messages.MSG_TYPE_SET_NODE_PERMISSION:
-			break
+			log.Fatalf("Not implemented. Exiting...\n")
 
 		case messages.MSG_TYPE_SET_NODE_FILES:
-			log.Fatalf("Setting files from cURL is not implemented. Exiting...\n")
+			log.Fatalf("Not implemented. Exiting...\n")
 
 		case messages.MSG_TYPE_NEW_STUDY:
 			err := n.createNewStudyDirectory(msg.Study)
