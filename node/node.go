@@ -97,11 +97,7 @@ func (n *Node) MuxMessageReceiver(data []byte) ([]byte, error) {
 			response = n.string()
 
 		case messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION:
-			err := fuseDaemon.SetSubjectNodePermission(msg.Subject, msg.Permission)
-			if err != nil {
-				log.Fatalf("Error while setting node permission: %s\n", err)
-				return nil, nil
-			}
+			fuseDaemon.SetSubjectNodePermission(msg.Subject, msg.Permission)
 
 		case messages.MSG_TYPE_SET_NODE_PERMISSION:
 			log.Fatalf("Not implemented. Exiting...\n")
