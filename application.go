@@ -8,7 +8,7 @@ import (
 	_ "encoding/gob"
 	"errors"
 	logger "github.com/inconshreveable/log15"
-	//"time"
+	"time"
 	"bytes"
 	"encoding/json"
 	"firestore/core"
@@ -504,9 +504,10 @@ func CreateDataUsers(numDataUsers int) []*core.Datauser {
 
 func CreateNodes(numStorageNodes int) ([]*node.Node, error) {
 	nodes := make([]*node.Node, 0)
-	for i := 1; i <= numStorageNodes; i++ {
+	for i := 1; i < numStorageNodes; i++ {
 		nodeID := fmt.Sprintf("node_%d", i)
 		node, err := node.NewNode(nodeID)
+		<-time.After(time.Second * 1)
 		if err != nil {
 			logger.Error("Could not create storage node")
 			return nil, err

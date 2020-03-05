@@ -112,7 +112,7 @@ func NewFuseFS(nodeID string) *Ptfs {
 	}
 
 	// Customized parameters. Need to purify them as well. Magic...
-	opts := []string{"", "-o", "sync", startDir, mountDir}
+	opts := []string{"", "-o", "nonempty", startDir, mountDir}
 	ptfs.root, _ = filepath.Abs(opts[len(opts) - 2])
 	opts = append(opts[:len(opts) - 2], opts[len(opts) - 1])
 
@@ -589,28 +589,28 @@ func (self *Ptfs) setXattrFlag(path, permission string) error {
 func (self *Ptfs) isAllowedAccess(path string) bool {
 	self.xattrMux.Lock()
 	defer self.xattrMux.Unlock()
-	path = filepath.Join(self.mountDir, path)
-	//fmt.Printf("Path to inspect: %s\n", path)
+	path = filepath.Join(self.startDir, path)
+	fmt.Printf("Path to inspect: %s\n", path)
 	//fmt.Printf("Address of lock: %p\n", &self.xattrMux)
 	//fmt.Printf("Address of self: %p\n", &self)
 
 	// First check if we access a higher-level part of the tree (subjects-side). Always allow
 	if !strings.Contains(path, "subjects") {
-		//fmt.Printf("Accessing higher levels in the tree\n")
+		fmt.Printf("Accessing higher levels in the tree\n")
 		return true
 	}
 
 	// Check if we access a forbidden part of the subject-side of the tree
 	for s, perm := range self.subjectPermissions {
-		lowestDir := self.mountDir + "/" + SUBJECTS_DIR + "/" +  s
-		//fmt.Printf("lowestDir: %s\n", lowestDir)
+		lowestDir := self.startDir + "/" + SUBJECTS_DIR + "/" +  s
+		fmt.Printf("lowestDir: %s\n", lowestDir)
 		ok, err := filepath.Match(lowestDir, path)
 		if err != nil {
 			panic(err)
 		}
 
 		if ok && perm == file.FILE_DISALLOWED {
-		//	fmt.Printf("Match betweel %s and %s\n", lowestDir, path)
+			fmt.Printf("Match between %s and %s\n", lowestDir, path)
 			return false
 		}
 	}
@@ -694,7 +694,7 @@ func (self *Ptfs) linkStudyFiles(subject, study string) {
 	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
 		filePath := fmt.Sprintf("%s/file_%d", filePathDir, i)
 		targetPath := fmt.Sprintf("%s/file_%d", targetPathDir, i)
-		fmt.Printf("s = %s\n", filePathDir)
+		fmt.Printf("LN for %s: filePath:%s\ttargetPath: %s\n", self.nodeID, filePath, targetPath)
 		if err := os.Symlink(filePath, targetPath); err != nil {
 			panic(err)
 		}
