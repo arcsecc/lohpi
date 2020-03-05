@@ -106,6 +106,11 @@ func NewFuseFS(nodeID string) *Ptfs {
 		ptfs.createSubjectDirectoryTree()
 	}
 
+	// Allow all subjects' files to be accessed
+	for idx, _ := range ptfs.subjectPermissions {
+		ptfs.subjectPermissions[idx] = file.FILE_ALLOWED
+	}
+
 	// Customized parameters. Need to purify them as well. Magic...
 	opts := []string{"", "-o", "sync", startDir, mountDir}
 	ptfs.root, _ = filepath.Abs(opts[len(opts) - 2])
@@ -563,8 +568,8 @@ func (self *Ptfs) SetNodePermission(permission string) error {
 
 // Use only /storage_nodes/node_i/studies/study_i/subjects/subject_x
 func (self *Ptfs) SetSubjectNodePermission(subject, permission string) {
-	// key: abs file path. value: permission
 	self.subjectPermissions[subject] = permission
+	//self.subjectPermissions["subject_1"] = file.FILE_DISALLOWED
 }
 
 func (self *Ptfs) setXattrFlag(path, permission string) error {
@@ -585,9 +590,32 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 	self.xattrMux.Lock()
 	defer self.xattrMux.Unlock()
 	path = filepath.Join(self.mountDir, path)
-	fmt.Printf("Path to inspect: %s\n", path)
-	fmt.Printf("Address of map: %p\n", &self.subjectPermissions)
+	//fmt.Printf("Path to inspect: %s\n", path)
+	//fmt.Printf("Address of lock: %p\n", &self.xattrMux)
+	//fmt.Printf("Address of self: %p\n", &self)
 
+	// First check if we access a higher-level part of the tree (subjects-side). Always allow
+	if !strings.Contains(path, "subjects") {
+		//fmt.Printf("Accessing higher levels in the tree\n")
+		return true
+	}
+
+	// Check if we access a forbidden part of the subject-side of the tree
+	for s, perm := range self.subjectPermissions {
+		lowestDir := self.mountDir + "/" + SUBJECTS_DIR + "/" +  s
+		//fmt.Printf("lowestDir: %s\n", lowestDir)
+		ok, err := filepath.Match(lowestDir, path)
+		if err != nil {
+			panic(err)
+		}
+
+		if ok && perm == file.FILE_DISALLOWED {
+		//	fmt.Printf("Match betweel %s and %s\n", lowestDir, path)
+			return false
+		}
+	}
+
+/*
 	for s, perm := range self.subjectPermissions {
 	//	fmt.Printf("Subject: %s\n", s)
 		if strings.Contains(path, "subjects") && !strings.Contains(path, s) {
@@ -607,8 +635,8 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 		return true
 	}
 
-	//fmt.Printf("Denying access to path\n")
-	return false
+	//fmt.Printf("Denying access to path\n")*/
+	return true
 }
 
 func (self *Ptfs) canSetXattr() bool {
@@ -666,6 +694,7 @@ func (self *Ptfs) linkStudyFiles(subject, study string) {
 	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
 		filePath := fmt.Sprintf("%s/file_%d", filePathDir, i)
 		targetPath := fmt.Sprintf("%s/file_%d", targetPathDir, i)
+		fmt.Printf("s = %s\n", filePathDir)
 		if err := os.Symlink(filePath, targetPath); err != nil {
 			panic(err)
 		}
