@@ -1,5 +1,6 @@
 package main
 
+/*
 import (
 	"errors"
 	//	"math"
@@ -34,7 +35,7 @@ func NewUser(ownerName string) *User {
 		//ClientNode: clientNode,
 	}
 
-	return self*/
+	return self*
 	return nil
 }
 
@@ -57,7 +58,7 @@ func (u *User) StoreFileRemotely(file *file.File) chan []byte {
 
 /*func (u *User) FileExists(file *file.File) bool {
 	return u.ClientNode.FileExists(file)
-}*/
+}*
 
 func (u *User) DeleteFile(file *file.File) {
 	//	u.ClientNode.DeleteFile(file)

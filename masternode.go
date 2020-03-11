@@ -1,4 +1,5 @@
 package main
+/*package main
 
 import (
 	"fmt"
@@ -43,7 +44,7 @@ func NewMasterNode() (*Masternode, error) {
 	return self, nil
 }
 
-/** PUBLIC METHODS */
+/** PUBLIC METHODS *
 func (m *Masternode) SetNetworkNodes(nodes []*node.Node) {
 	m.Nodes = nodes
 }
@@ -56,7 +57,7 @@ func (m *Masternode) FireflyClient() *ifrit.Client {
 	return m.IfritClient
 }
 
-/* PUBLIC METHODS USED TO RESPOND TO HTTP CALLBACK METHODS */
+/* PUBLIC METHODS USED TO RESPOND TO HTTP CALLBACK METHODS *
 // Sets a new permission to be applied to a specific node and a specific client
 func (m *Masternode) SetSubjectNodePermission(nodeID, subjectID, permission string) error {
 	// Verify the contents of the HTTP client's message
@@ -111,7 +112,7 @@ func (m *Masternode) SetNodePermission(msg *messages.Clientmessage) error {
 	encodedMsg := internalMsg.Encoded()
 	recipient := node.FireflyClient().Addr()
 	<-m.FireflyClient().SendTo(recipient, encodedMsg)
-*/	return nil
+/	return nil
 }
 
 // Returns a verbose string about a node
@@ -154,14 +155,14 @@ func (m *Masternode) SetSubjectPermission(msg *messages.Clientmessage) error {
 
 	encodedMsg := internalMsg.Encoded()
 	m.FireflyClient().SetGossipContent(encodedMsg)
-	*/return nil
+	/return nil
 }
 
 func (m *Masternode) SendMessage(s *core.Subject, node *node.Node, permission string) {
 	/*dst := node.FireflyClient().Addr()
 	msg := message.NewMessage(s.Name(), message.PERMISSION_GET, permission)
 	encodedMsg := msg.Encoded()
-	<- m.FireflyClient().SendTo(dst, encodedMsg)*/
+	<- m.FireflyClient().SendTo(dst, encodedMsg)*
 }
 
 func (m *Masternode) MessageHandler(data []byte) ([]byte, error) {
@@ -181,8 +182,7 @@ func (m *Masternode) GossipResponseHandler(data []byte) {
 		if n.ID() == id {
 			return n, nil
 		}
-	}*/
-}
+	}*
 
 func (m *Masternode) Shutdown() {
 	ifritClient := m.FireflyClient()
@@ -287,4 +287,4 @@ func (m *Masternode) LoadNodeState(nodeID string) error {
 	recipient := node.FireflyClient().Addr()
 	<-m.FireflyClient().SendTo(recipient, b)
 	return nil
-}
+}*/
