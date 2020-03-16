@@ -71,15 +71,17 @@ func main() {
 	readConfig()
 
 	node := NewNode(nodeName, portNum)
-	if err := node.StartServer(); err != nil {
-		panic(err)
-	}
+	go func () {
+		if err := node.StartServer(); err != nil {
+			panic(err)
+		}
+	}()
 	
 	channel := make(chan os.Signal, 2)
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel
 
-	node.c.Stop()
+	node.Shutdown()
 }
 
 func (n *Node) StartServer() error {
@@ -115,12 +117,29 @@ func NewNode(nodeName string, portnum int) *Node {
 	return node
 }
 
+func (n *Node) Shutdown() {
+	n.c.Stop()
+	fuse.Shutdown()
+}
+
 func (n *Node) httpHandler() error {
 	mux := http.NewServeMux()
+
+	// Node setters and getters
 	mux.HandleFunc("/string", n.PrintNode)
 	mux.HandleFunc("/files", n.PrintFiles)
-	mux.HandleFunc("/node_perm", n.SetNodePermission)
-	mux.HandleFunc("/node_subject_perm", n.SetNodeSubjectPermission)
+	mux.HandleFunc("/set_node_perm", n.SetNodePermission)
+	mux.HandleFunc("/set_subject_perm", n.SetNodeSubjectPermission)
+	mux.HandleFunc("/create_subject", n.CreateSubject)
+
+//	mux.HandleFunc("/subjects", n.Subjects)
+	//mux.HandleFunc("/network", )
+	
+	// Subject-related getters and setters
+	//mux.HandleFunc("/create_subject", )
+	//mux.HandleFunc("/delete_subject", )
+	//mux.HandleFunc("/move_subject", )
+	
 
 	n.httpServer = &http.Server{
 		Handler: mux,
@@ -151,7 +170,7 @@ func readConfig() error {
 	viper.SetDefault("data_users", 1)
 	viper.SetDefault("files_per_study", 2)
 	viper.SetDefault("file_size", 256)
-	viper.SetDefault("fuse_mount", "/home/thomas/go_workspace/src/firestore")
+	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
 	viper.SetDefault("set_files", true)
 	viper.SafeWriteConfig()
 	return nil
@@ -162,7 +181,7 @@ func (n *Node) String() string {
 }
 
 // HTTP endpoints
-// Prints human-readable information about the node's state
+// Prints human-readable information about the node's state. TODO more on this one
 func (n *Node) PrintNode(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodGet {
@@ -190,7 +209,6 @@ func (n *Node) SetNodePermission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Assert JSON format somewhere around here...
-
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
 	err := json.Unmarshal(body.Bytes(), &msg)
@@ -249,6 +267,73 @@ func (n *Node) PrintFiles(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Method not implemented")
 }
 
+func (n *Node) CreateSubject(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		logger.Error("Require header to be application/json")
+	}
+
+	var msg struct {
+		Subject string `json:"subject"`
+		Permission string `json:"permission"`
+	}
+
+	// Assert JSON format somewhere around here...
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &msg)
+	if err != nil {
+		panic(err)
+	}
+
+	err = n.fs.CreateSubject(msg.Subject)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
+		return
+	}
+
+	err = n.fs.SetSubjectPermission(msg.Subject, msg.Permission)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Created subject %s succsessfully", msg.Subject)
+}
+
+func (n *Node) Subjects(w http.ResponseWriter, r *http.Request) {
+	/*
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		logger.Error("Require header to be application/json")
+	}
+
+	subjects, err := n.fs.Subjects()
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
+	} else {
+		w.WriteHeader(http.StatusOK)
+		str := fmt.Sprintf("%s", subjects)
+		fmt.Fprintf(w, "%s", str)
+	}*/
+}
 /*
 func NewApplication() (*Application, error) {
 	app := &Application{}
