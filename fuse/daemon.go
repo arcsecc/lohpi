@@ -235,11 +235,6 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 		return false
 	}
 
-	// First check if we access a higher-level part of the tree. Always allow
-	if !strings.Contains(path, SUBJECTS_DIR) || strings.Contains(path, STUDIES_DIR) {
-		return true
-	}
-
 	// Check if we access a forbidden part of the tree, with respect to the subjects
 	for s, perm := range self.subjectPermissions {
 //		fmt.Printf("Perm: %s\ts = %s\n", perm, s)
