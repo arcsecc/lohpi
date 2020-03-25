@@ -1,5 +1,5 @@
-package messages
-
+package message
+/*
 import (
 	"bytes"
 	"encoding/gob"
@@ -37,4 +37,4 @@ func (m *AppStateMessage) Encoded() []byte {
 	}
 	
 	return buffer.Bytes()
-}
+}*/

@@ -1,17 +1,19 @@
-package main
-/*package main
+package mux
 
 import (
 	"fmt"
-	log "github.com/inconshreveable/log15"
+	logging "github.com/inconshreveable/log15"
 	//	"github.com/spf13/viper"
 	"errors"
-	"firestore/core"
-	"firestore/core/file"
-	"firestore/core/messages"
-	"firestore/node"
+	"net"
+	"net/http"
+	"log"
+	//"firestore/core/file"
+	//"firestore/core/message"
+	"firestore/core/node"
+	"firestore/netutil"
 	"ifrit"
-	"encoding/json"
+//	"encoding/json"
 )
 
 var (
@@ -21,41 +23,126 @@ var (
 // In order for us to simulate a read-world scenario, we do not maintain
 // any application-like data structures in the masternode. This is because the state of
 // the permissions is supposed to be held by the storage nodes and NOT master. Otherwise,
-// we could simply delegate the enitre
-type Masternode struct {
+// we could simply delegate the enitre...
+type Mux struct {
 	IfritClient *ifrit.Client
-	Nodes       []*node.Node
-	Subjects    []*core.Subject
+	nodes       map[string]*node.Node
+
+	// Port number the on which we can reach the application
+	// Other HTTP-related stuff as well
+	portNum int
+	listener   net.Listener
+	httpServer *http.Server
 }
 
-func NewMasterNode() (*Masternode, error) {
+func NewMux(portNum int) (*Mux, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
 	go ifritClient.Start()
-	self := &Masternode{
-		IfritClient: ifritClient,
+	//ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
+	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
+
+	listener, err := netutil.ListenOnPort(portNum)
+	if err != nil {
+		panic(err)
 	}
 
-	ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
-	ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
-	return self, nil
+	log.Printf("Mux started at port %d\n", portNum)
+	return &Mux{
+		portNum: 		portNum,
+		IfritClient: 	ifritClient,
+		listener: 		listener,
+	}, nil
 }
 
-/** PUBLIC METHODS *
-func (m *Masternode) SetNetworkNodes(nodes []*node.Node) {
-	m.Nodes = nodes
+/** PUBLIC METHODS */
+func (m *Mux) AddNetworkNodes(numNodes int) {
+	m.nodes = make(map[string]*node.Node, 0)
+	for i := 0; i < numNodes; i++ {
+		nodeName := fmt.Sprintf("node_%d", i)
+		node := node.NewNode(nodeName)
+		m.nodes[nodeName] = node
+		//node.Start()
+	}
 }
 
-func (m *Masternode) SetNetworkSubjects(subjects []*core.Subject) {
+func (m *Mux) HttpHandler() error {
+	mux := http.NewServeMux()
+
+	// Public methods exposed to data users (usually through cURL)
+//	mux.HandleFunc("/kake", m.kake)
+
+	// Utilities used in experiments
+	mux.HandleFunc("/create_study", m.CreateStudy)
+	//	mux.HandleFunc("/subjects", n.Subjects)
+	//mux.HandleFunc("/network", )
+	
+	// Subject-related getters and setters
+	//mux.HandleFunc("/create_subject", )
+	//mux.HandleFunc("/delete_subject", )
+	//mux.HandleFunc("/move_subject", )
+	
+	m.httpServer = &http.Server{
+		Handler: mux,
+	}
+
+	err := m.httpServer.Serve(m.listener)
+	if err != nil {
+		logging.Error(err.Error())
+		return err
+	}
+	return nil
+}
+
+// Used primarily for 
+func (m *Mux) CreateStudy(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	/*
+	if r.Header.Get("Content-type") != "application/json" {
+		logger.Error("Require header to be application/json")
+	}
+
+	var msg struct {
+		Node string `json:"node"`
+		Subject string `json:"subject"`
+		Permission string `json:"permission"`
+	}
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &msg)
+	if err != nil {
+		panic(err)
+	}
+
+
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		str := fmt.Sprintf("%s\n", err)
+		fmt.Fprintf(w, "%s", str)
+	} else {
+		w.WriteHeader(http.StatusOK)
+		str := fmt.Sprintf("%s", subjects)
+		fmt.Fprintf(w, "%s", str)
+	}*/
+}
+
+
+/*func (m *Masternode) SetNetworkSubjects(subjects []*core.Subject) {
 	m.Subjects = subjects
 }
 
 func (m *Masternode) FireflyClient() *ifrit.Client {
 	return m.IfritClient
-}
+}*/
 
 /* PUBLIC METHODS USED TO RESPOND TO HTTP CALLBACK METHODS *
 // Sets a new permission to be applied to a specific node and a specific client

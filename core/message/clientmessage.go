@@ -1,4 +1,4 @@
-package messages
+package message
 
 /** This API is used for message passing between master node and storage node */
 import (

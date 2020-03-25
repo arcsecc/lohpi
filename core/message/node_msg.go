@@ -1,4 +1,4 @@
-package messages
+package message
 
 /** This API is used for message passing between master node and storage node */
 import (
@@ -8,13 +8,13 @@ import (
 	//"firestore/core/file"
 )
 
-type Msgtype string 
+type MsgType string 
 
 const (
-	PERMISSION_SET Msgtype = "PERMISSION_SET"
-	PERMISSION_GET Msgtype = "PERMISSION_GET"
-	FILE_GET Msgtype = "FILE_GET"
-	FILE_DISTRIBUTE Msgtype = "FILE_DISTRIBUTE"
+	PERMISSION_SET MsgType = "PERMISSION_SET"
+	PERMISSION_GET MsgType = "PERMISSION_GET"
+	FILE_GET MsgType = "FILE_GET"
+	FILE_DISTRIBUTE MsgType = "FILE_DISTRIBUTE"
 	
 	MSG_TYPE_GET_NODE_INFO = "MSG_TYPE_GET_NODE_INFO"
 	MSG_TYPE_SET_SUBJECT_NODE_PERMISSION = "MSG_TYPE_SET_SUBJECT_NODE_PERMISSION"
@@ -32,7 +32,7 @@ const (
 )
 
 type Message struct {
-	MessageType Msgtype 
+	MessageType MsgType 
 	Node string 			`json:",omitempty"`
 	Study string 			`json:",omitempty"`
 	Subject string 			`json:",omitempty"`
@@ -43,7 +43,7 @@ type Message struct {
 /*type StudyMessage struct {
 	Node string
 	Study string
-	Type Msgtype
+	Type MsgType
 }*/
 
 func NewMessage(data []byte) *Message {
@@ -56,7 +56,7 @@ func NewMessage(data []byte) *Message {
 	return &msg
 }
 
-/*func NewStudyMessage(node, study string, messageType Msgtype) *StudyMessage {
+/*func NewStudyMessage(node, study string, messageType MsgType) *StudyMessage {
 	return &StudyMessage {
 		Node: node,
 		Study: study,
@@ -88,11 +88,11 @@ func (s *StudyMessage) Encode() []byte {
 type InternalMessage struct {
 	Subject string
 	Node string
-	Type Msgtype
+	Type MsgType
 	Permission string
 }
 
-func NewInternalMessage(subjectID string, nodeID string, messageType Msgtype, permission string) *InternalMessage {
+func NewInternalMessage(subjectID string, nodeID string, messageType MsgType, permission string) *InternalMessage {
 	self := &InternalMessage {
 		Subject: subjectID,
 		Node: nodeID,

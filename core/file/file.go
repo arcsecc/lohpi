@@ -1,5 +1,6 @@
 package file
 
+/*
 import (
 	"os"
 	"bytes"
@@ -15,15 +16,15 @@ import (
 _	"path/filepath"
 	"strconv"
 )
-
+*/
 var FILE_ALLOWED	 			= "allow"	
 var FILE_DISALLOWED 			= "disallow"		
 var FILE_PERMISSION_SET 		= "set"
 var FILE_PERMISSION_UNSET 		= "unset"
 
 // gRPC does not allow messages to exceed this size in bytes
-const MAX_SHARD_SIZE = 1000000
-
+//const MAX_SHARD_SIZE = 1000000
+/*
 // API used by clients and storage nodes to handle files
 type File struct {
 	File *os.File
@@ -164,7 +165,7 @@ func (f *File) EncodeHashString() (bytes.Buffer, error) {
 	_ = gob.NewEncoder(&buffer)
 	/*if err := encoder.Encode(f.Hash); err != nil {
 	   panic(err)
-	}*/
+	}*
 
 	return buffer, nil
 }
@@ -189,7 +190,7 @@ func Decoded(data []byte) *File {
 		FilePathHash: message.FilePathHash,
 		OwnerID: message.OwnerID,
 	}
-*/
+*
 	return nil
 }
 
@@ -216,7 +217,7 @@ func CreateFileFromBytes(absFilePath string, fileContents []byte) (*os.File, err
 	return file, nil
 }
 
-/******************** Private methods ***********************/
+/******************** Private methods ***********************
 func computeFileContentHash(filePath string) string {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -241,11 +242,11 @@ func (f *File) computeFilePathHash() string {
 	return string(hash.Sum(nil)[:])
 }
 
-/*
+
 func createUserDirectory(wd, userDir string) {
 	fullPath := fmt.Sprintf("%s/%s/%s/", wd, FILE_DIRECTORY, userDir)
 	_ = os.Mkdir(fullPath, 0774)
-}*/
+}
 
 func fillEmptyFile(fileSize int, file *os.File) {
 	// open file...
@@ -265,7 +266,7 @@ func fillEmptyFile(fileSize int, file *os.File) {
 	}
 	// close file...
 }
-
+*/
 /*func createDirectoryTree(absolutePath string) {
 	dir, _ := filepath.Split(absolutePath)
 	err := os.MkdirAll(dir, 0755) 
