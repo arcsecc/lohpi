@@ -3,14 +3,16 @@ package node
 import (
 	"errors"
 _	"fmt"
+	"time"
 	"firestore/core/node/fuse"
 _	"net/http"
 	_ "net/http/pprof"
 	"github.com/joonnna/ifrit"
 	"log"
 _	"bytes"
-_	"io"
+_	"strconv"
 _	"encoding/json"
+_	"strings"
 	"github.com/spf13/viper"
 
 	logger "github.com/inconshreveable/log15"
@@ -24,7 +26,7 @@ const (
 
 var (
 	errNoAddr = errors.New("No certificate authority address provided, can't continue")
-	logging   = logger.New("module", "ifritclient/main")
+	logging   = logger.New("module", "node/main")
 )
 
 type Node struct {
@@ -42,11 +44,6 @@ type Node struct {
 	//httpServer *http.Server
 }
 
-/*func (n *Node) StartServer() error {
-	log.Printf("Started node at address %s\n", n.Listener.Addr().String())
-	return n.httpHandler()
-}*/
-
 func NewNode(nodeName string) *Node {
 	if err := readConfig(); err != nil {
 		panic(err)
@@ -57,15 +54,17 @@ func NewNode(nodeName string) *Node {
 		panic(err)
 	}
 
+	logger.Info(c.Addr(), " spawned")
+
 	node := &Node {
 		nodeName: nodeName,
 		c: c,
 	}
-
 	return node
 }
 
 func (n *Node) StartIfritClient() {
+	n.c.RegisterMsgHandler(n.messageHandler)
 	go n.c.Start()
 }
 
@@ -82,10 +81,25 @@ func (n *Node) FireflyClient() *ifrit.Client {
 	return n.c
 }
 
+func (n *Node) Addr() string {
+	return n.c.Addr()
+}
+
+func (n *Node) NodeName() string {
+	return n.nodeName
+}
+
 func (n *Node) Shutdown() {
 	log.Printf("Shutting down...\n")
 	n.c.Stop()
 	fuse.Shutdown() // might fail...
+}
+
+func (n *Node) messageHandler(data []byte) ([]byte, error) {
+	<-time.After(time.Second * 1)
+	logger.Debug(string(data))
+	logger.Debug("kake asuidaiosuoij\n")
+	return []byte("koaspkdpaos\n"), nil
 }
 
 /*
@@ -381,7 +395,7 @@ func (app *Application) SubjectNodeSetPermission(w http.ResponseWriter, r *http.
 }
 
 func (app *Application) SubjectSetPermission(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+	defer r.Body.Close()g
 	if r.Method != "POST" {
 		respString := fmt.Sprintf("Invalid method: %s for /subject_set_perm\n", r.Method)
 		_, err := w.Write([]byte(respString))

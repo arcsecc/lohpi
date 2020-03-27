@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"strconv"
 	"net"
-	"log"
+_	"log"
 
 	"firestore/core/mux"
 	"firestore/netutil"
@@ -64,7 +64,7 @@ func main() {
 
 	// Life-cycle of the system here
 	app := NewApplication(numNodes, portNum, execPath)
-	app.StartNodes()
+	app.Start()
 	app.Run()
 
 	// Wait for SIGTERM. Clean up everything when that happpens
@@ -72,62 +72,36 @@ func main() {
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel
 
+	fmt.Printf("apsoidiasp")
+
 	// Stop the entire system
 	app.Stop()
 }
 
 func NewApplication(numNodes, portNum int, execPath string) *Application {
-	m, err := mux.NewMux(portNum)
+	m, err := mux.NewMux(portNum, execPath)
 	if err != nil {
 		panic(err)
 	}
 
+	m.AddNetworkNodes(numNodes)
+
 	return &Application {
 		mux: 		m,
 		numNodes: 	numNodes,
-		execPath: 	execPath,
 	}
 }
 
+func (app *Application) Start() {
+	app.mux.Start()
+}
+
 func (app *Application) Stop() {
-	StopProcesses(app.childProcs)
+	app.mux.ShutdownNodes()
 }
 
 func (app *Application) Run() error {
 	return app.mux.HttpHandler()
-}
-
-func (app *Application) StartNodes() {
-	app.childProcs = make(map[string]*exec.Cmd, 0)
-	for i := 0; i < app.numNodes; i++ {
-		nodeName := fmt.Sprintf("node_%d", i)
-		logfileName := fmt.Sprintf("%s_logfile", nodeName)
-		nodeProc := exec.Command(app.execPath, "-name", nodeName, "-logfile", logfileName)
-		app.childProcs[nodeName] = nodeProc
-
-		if err := nodeProc.Start(); err != nil {
-			panic(err)
-		}
-
-		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		//fmt.Printf("%v\n", nodeProc.SysProcAttr)
-		go func() {
-			err := nodeProc.Wait()
-			if err != nil {
-				panic(err)
-			}
-		}()
-		log.Printf("Added %s to network\n", nodeName)
-	}
-}
-
-func StopProcesses(childProcs map[string]*exec.Cmd) {
-	for _, cmd := range childProcs {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-			// might allow ourselves to fail silently here instead of panicing...
-			panic(err)
-		}
-	}
 }
 
 func fileExists(path string) bool {

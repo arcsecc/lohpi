@@ -10,10 +10,18 @@ import (
 	"log"
 	//"firestore/core/file"
 	//"firestore/core/message"
-	"firestore/core/node"
+	//"firestore/core/node"
+	"os/exec"
+	"syscall"
 	"firestore/netutil"
 	"ifrit"
-//	"encoding/json"
+	"bytes"
+	"io"
+	"os"
+	"bufio"
+	"encoding/json"
+_	"encoding/binary"
+_	"io/ioutil"
 )
 
 var (
@@ -25,23 +33,24 @@ var (
 // the permissions is supposed to be held by the storage nodes and NOT master. Otherwise,
 // we could simply delegate the enitre...
 type Mux struct {
-	IfritClient *ifrit.Client
-	nodes       map[string]*node.Node
+	ifritClient *ifrit.Client
+	nodeProcs 		map[string]*exec.Cmd
+	nodes			map[string]string
+	execPath	string
 
 	// Port number the on which we can reach the application
 	// Other HTTP-related stuff as well
-	portNum int
-	listener   net.Listener
-	httpServer *http.Server
+	portNum 	int
+	listener   	net.Listener
+	httpServer 	*http.Server
 }
 
-func NewMux(portNum int) (*Mux, error) {
+func NewMux(portNum int, execPath string) (*Mux, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
 	}
 
-	go ifritClient.Start()
 	//ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
@@ -50,23 +59,58 @@ func NewMux(portNum int) (*Mux, error) {
 		panic(err)
 	}
 
+
 	log.Printf("Mux started at port %d\n", portNum)
 	return &Mux{
+		nodes:			make(map[string]string),
 		portNum: 		portNum,
-		IfritClient: 	ifritClient,
+		execPath: 		execPath,
+		ifritClient: 	ifritClient,
 		listener: 		listener,
 	}, nil
 }
 
 /** PUBLIC METHODS */
 func (m *Mux) AddNetworkNodes(numNodes int) {
-	m.nodes = make(map[string]*node.Node, 0)
+	
+	m.nodeProcs = make(map[string]*exec.Cmd, 0)
+
+	// Start the child processes aka. the internal Fireflies nodes
 	for i := 0; i < numNodes; i++ {
+		
 		nodeName := fmt.Sprintf("node_%d", i)
-		node := node.NewNode(nodeName)
-		m.nodes[nodeName] = node
-		//node.Start()
+		logfileName := fmt.Sprintf("%s_logfile", nodeName)
+		nodeProc := exec.Command(m.execPath, "-name", nodeName, "-logfile", logfileName)
+		
+		m.nodeProcs[nodeName] = nodeProc
+		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		go func() {
+			if err := nodeProc.Start(); err != nil {
+				panic(err)
+			}
+
+		/*	if err := nodeProc.Wait(); err != nil {
+				panic(err)
+			}*/
+		}()
 	}
+}
+
+func (m *Mux) Start() {
+	log.Printf("Started node %s\n", m.ifritClient.Addr())
+	go m.ifritClient.Start()
+}
+
+func (m *Mux) ShutdownNodes() {
+	fmt.Printf("KILL: %v\n",m.nodeProcs )
+	for _, cmd := range m.nodeProcs {
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
+			// might allow ourselves to fail silently here instead of panicing...
+			panic(err)
+		}
+	}
+
+	m.ifritClient.Stop()
 }
 
 func (m *Mux) HttpHandler() error {
@@ -76,12 +120,12 @@ func (m *Mux) HttpHandler() error {
 //	mux.HandleFunc("/kake", m.kake)
 
 	// Utilities used in experiments
-	mux.HandleFunc("/create_study", m.CreateStudy)
-	//	mux.HandleFunc("/subjects", n.Subjects)
-	//mux.HandleFunc("/network", )
+	mux.HandleFunc("/populate_node", m.PopulateNode)
+	mux.HandleFunc("/network", m.Network)
+	mux.HandleFunc("/debug", m.DebugNode)
 	
 	// Subject-related getters and setters
-	//mux.HandleFunc("/create_subject", )
+	mux.HandleFunc("/set_port", m.SetPortNumber)
 	//mux.HandleFunc("/delete_subject", )
 	//mux.HandleFunc("/move_subject", )
 	
@@ -97,23 +141,36 @@ func (m *Mux) HttpHandler() error {
 	return nil
 }
 
-// Used primarily for 
-func (m *Mux) CreateStudy(w http.ResponseWriter, r *http.Request) {
+func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodGet {
+		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Flireflies nodes in this network:\nMux: %s\n", m.ifritClient.Addr())
+	for n, addr := range m.nodes {
+		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", n, addr)
+	}
+}
+
+func (m *Mux) PopulateNode(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
 		return
 	}
 
-	/*
 	if r.Header.Get("Content-type") != "application/json" {
-		logger.Error("Require header to be application/json")
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
 	}
 
 	var msg struct {
-		Node string `json:"node"`
-		Subject string `json:"subject"`
-		Permission string `json:"permission"`
+		Node 	string 	`json:"node"`
+		Subject string 	`json:"subject"`
+		StudyID string 	`json:"study"`
 	}
 
 	var body bytes.Buffer
@@ -123,18 +180,108 @@ func (m *Mux) CreateStudy(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
+	if node, exists := m.nodes[msg.Node]; exists {
+		fmt.Printf("Sending msg to %s\n", node)
+		ch := m.ifritClient.SendTo(node, []byte("kake"))
+		select {
+			case msg := <- ch: 
+				fmt.Printf("Response: %s\n", msg)
+			}
 
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		str := fmt.Sprintf("%s\n", err)
-		fmt.Fprintf(w, "%s", str)
+		//w.WriteHeader(http.StatusOK)
+		//str := fmt.Sprintf("Populated node %s\n", msg.Node)
+		/fmt.Fprintf(w, "%s", str)
 	} else {
-		w.WriteHeader(http.StatusOK)
-		str := fmt.Sprintf("%s", subjects)
-		fmt.Fprintf(w, "%s", str)
+		/*w.WriteHeader(http.StatusNotFound)
+		str := fmt.Sprintf("No such node: %s\n", msg.Node)
+		fmt.Fprintf(w, "%s", str)*
 	}*/
 }
 
+func (m *Mux) DebugNode(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+		return
+	}
+
+	var msg struct {
+		Node string 	`json:"node"`
+	}
+
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	err := json.Unmarshal(body.Bytes(), &msg)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Sending msg to %s\n", msg.Node)
+
+	ch := m.ifritClient.SendTo(msg.Node, []byte("kake"))
+	select {
+		case msg := <- ch: 
+			fmt.Printf("Response: %s\n", msg)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	str := fmt.Sprintf("Populated node %s\n", msg.Node)
+	fmt.Fprintf(w, "%s", str)
+}
+
+func (m *Mux) SetPortNumber(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("kake\n")
+	defer r.Body.Close()
+	if r.Method != http.MethodPost {
+		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if r.Header.Get("Content-type") != "application/json" {
+		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+	}
+
+	var msg struct {
+		Node 	string 		`json:"node"`
+		Address string 		`json:"address"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+    err := decoder.Decode(&msg)
+    if err != nil {
+		errMsg := fmt.Sprintf("Error: %s\n", err)
+		http.Error(w, errMsg, http.StatusBadRequest)
+	}
+
+	if _, ok := m.nodeProcs[msg.Node]; ok {
+		m.nodes[msg.Node] = msg.Address
+	} else {
+		errMsg := fmt.Sprintf("No such node: %s\n", msg.Node)
+		http.Error(w, errMsg, http.StatusNotFound)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (m *Mux) getNetworkPorts(path string) ([]string, error) {
+    file, err := os.Open(path)
+    if err != nil {
+        return nil, err
+    }
+    defer file.Close()
+
+    var lines []string
+    scanner := bufio.NewScanner(file)
+    for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		fmt.Printf("Line: %s\n", scanner.Text())
+    }
+    return lines, scanner.Err()
+}
 
 /*func (m *Masternode) SetNetworkSubjects(subjects []*core.Subject) {
 	m.Subjects = subjects
