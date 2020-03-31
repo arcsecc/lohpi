@@ -6,13 +6,27 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	lohpi_ca "firestore/cauth"
 
 	log "github.com/inconshreveable/log15"
-	"github.com/joonnna/ifrit/cauth"
+	ifrit_ca "github.com/joonnna/ifrit/cauth"
 )
 
 // saveState saves ca private key and public certificates to disk.
-func saveState(ca *cauth.Ca) {
+func saveState(ca *ifrit_ca.Ca) {
+	err := ca.SavePrivateKey()
+	if err != nil {
+		panic(err)
+	}
+
+	err = ca.SaveCertificate()
+	if err != nil {
+		panic(err)
+	}
+}
+
+// saveState saves ca private key and public certificates to disk.
+func saveLohpiState(ca *lohpi_ca.Ca) {
 	err := ca.SavePrivateKey()
 	if err != nil {
 		panic(err)
@@ -44,15 +58,25 @@ func main() {
 
 	r.SetHandler(h)
 
-	ca, err := cauth.NewCa()
+	// This is the Ifrit CA
+	ca, err := ifrit_ca.NewCa()
 	if err != nil {
 		panic(err)
 	}
 
 	saveState(ca)
 	defer saveState(ca)
-
 	go ca.Start()
+
+	// This is the Lohpi CA
+	l_ca, err := lohpi_ca.NewCa()
+	if err != nil {
+		panic(err)
+	}
+
+	saveLohpiState(l_ca)
+	defer saveLohpiState(l_ca)
+	go l_ca.Start()
 
 	channel := make(chan os.Signal, 2)
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)

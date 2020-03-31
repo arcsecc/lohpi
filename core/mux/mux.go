@@ -7,10 +7,11 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"crypto/tls"
 	"log"
 	//"firestore/core/file"
 	//"firestore/core/message"
-	//"firestore/core/node"
+	"firestore/comm"
 	"os/exec"
 	"syscall"
 	"firestore/netutil"
@@ -22,6 +23,12 @@ import (
 	"encoding/json"
 _	"encoding/binary"
 _	"io/ioutil"
+
+	//"crypto/x509"
+	"crypto/x509/pkix"
+	//"crypto/ecdsa"
+
+	"github.com/spf13/viper"
 )
 
 var (
@@ -38,14 +45,24 @@ type Mux struct {
 	nodes			map[string]string
 	execPath	string
 
-	// Port number the on which we can reach the application
-	// Other HTTP-related stuff as well
+	// HTTPS-related
 	portNum 	int
 	listener   	net.Listener
 	httpServer 	*http.Server
+	serverConfig *tls.Config
+
+	// HTTP-related stuff. Used by the demonstrator using cURL
+	_httpPortNum 	int
+	_httpListener   net.Listener
+	_httpServer 	*http.Server
 }
 
-func NewMux(portNum int, execPath string) (*Mux, error) {
+// Consider using 
+func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
+	if err := readConfig(); err != nil {
+		panic(err)
+	}
+
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -54,27 +71,58 @@ func NewMux(portNum int, execPath string) (*Mux, error) {
 	//ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
+	// Initiate HTTPS connection using TLS configuration
 	listener, err := netutil.ListenOnPort(portNum)
 	if err != nil {
 		panic(err)
 	}
 
+	logging.Debug("addrs", "rpc", listener.Addr().String(), "udp")
 
-	log.Printf("Mux started at port %d\n", portNum)
+	pk := pkix.Name{
+		Locality: []string{listener.Addr().String()},
+	}
+
+	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
+	if err != nil {
+		return nil, err
+	}
+
+	// Used for HTTPS purposes
+	serverConfig := comm.ServerConfig(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+
+	// Initiate HTTP connection without TLS. Used by demonstrator
+	_httpListener, err := netutil.ListenOnPort(_portNum)
+	if err != nil {
+		panic(err)
+	}
+
 	return &Mux{
-		nodes:			make(map[string]string),
-		portNum: 		portNum,
-		execPath: 		execPath,
 		ifritClient: 	ifritClient,
+		nodes:			make(map[string]string),
+		execPath: 		execPath,
+
+		// HTTPS
+		portNum: 		portNum,
 		listener: 		listener,
+		serverConfig: 	serverConfig,
+
+		// HTTP
+		_httpPortNum: 	_portNum,
+		_httpListener:  _httpListener,
 	}, nil
+}
+
+func (m *Mux) RunServers() {
+	go m.HttpHandler()
+	go m.HttpsHandler()
 }
 
 /** PUBLIC METHODS */
 func (m *Mux) AddNetworkNodes(numNodes int) {
+	m.nodeProcs = make(map[string]*exec.Cmd)
+	m.nodes 	= make(map[string]string)
 	
-	m.nodeProcs = make(map[string]*exec.Cmd, 0)
-
 	// Start the child processes aka. the internal Fireflies nodes
 	for i := 0; i < numNodes; i++ {
 		
@@ -82,26 +130,27 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 		logfileName := fmt.Sprintf("%s_logfile", nodeName)
 		nodeProc := exec.Command(m.execPath, "-name", nodeName, "-logfile", logfileName)
 		
+		// Process tree map
 		m.nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 		go func() {
 			if err := nodeProc.Start(); err != nil {
 				panic(err)
 			}
 
-		/*	if err := nodeProc.Wait(); err != nil {
+			if err := nodeProc.Wait(); err != nil {
 				panic(err)
-			}*/
+			}
 		}()
 	}
 }
 
 func (m *Mux) Start() {
-	log.Printf("Started node %s\n", m.ifritClient.Addr())
 	go m.ifritClient.Start()
 }
 
-func (m *Mux) ShutdownNodes() {
+func (m *Mux) Stop() {
 	fmt.Printf("KILL: %v\n",m.nodeProcs )
 	for _, cmd := range m.nodeProcs {
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
@@ -110,30 +159,50 @@ func (m *Mux) ShutdownNodes() {
 		}
 	}
 
+	// Stop the underlying Ifrit client
 	m.ifritClient.Stop()
 }
 
 func (m *Mux) HttpHandler() error {
+	log.Printf("MUX: Started HTTP server on port %d\n", m._httpPortNum)
 	mux := http.NewServeMux()
 
 	// Public methods exposed to data users (usually through cURL)
-//	mux.HandleFunc("/kake", m.kake)
-
-	// Utilities used in experiments
-	mux.HandleFunc("/populate_node", m.PopulateNode)
 	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/debug", m.DebugNode)
+	mux.HandleFunc("/populate_node", m.PopulateNode)
+	//mux.HandleFunc("/debug", m.DebugNode)
 	
 	// Subject-related getters and setters
-	mux.HandleFunc("/set_port", m.SetPortNumber)
 	//mux.HandleFunc("/delete_subject", )
 	//mux.HandleFunc("/move_subject", )
 	
-	m.httpServer = &http.Server{
+	m._httpServer = &http.Server{
 		Handler: mux,
 	}
 
-	err := m.httpServer.Serve(m.listener)
+	err := m._httpServer.Serve(m._httpListener)
+	if err != nil {
+		logging.Error(err.Error())
+		return err
+	}
+	return nil
+}
+
+func (m *Mux) HttpsHandler() error {
+	log.Printf("MUX: Started HTTPS server on port %d\n", m.portNum)
+	mux := http.NewServeMux()
+
+	// Utilities used in experiments
+	mux.HandleFunc("/set_port", m.SetPortNumber)
+	mux.HandleFunc("/network", m.Network)
+	mux.HandleFunc("/debug", m.DebugNode)
+	
+	m.httpServer = &http.Server{
+		Handler: mux,
+		TLSConfig: m.serverConfig,
+	}
+
+	err := m.httpServer.ServeTLS(m.listener, "", "")
 	if err != nil {
 		logging.Error(err.Error())
 		return err
@@ -149,6 +218,8 @@ func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Mux's HTTP server running on port %d\n", m._httpPortNum)
+	fmt.Fprintf(w, "Mux's HTTPS server running on port %d\n", m.portNum)
 	fmt.Fprintf(w, "Flireflies nodes in this network:\nMux: %s\n", m.ifritClient.Addr())
 	for n, addr := range m.nodes {
 		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", n, addr)
@@ -171,6 +242,7 @@ func (m *Mux) PopulateNode(w http.ResponseWriter, r *http.Request) {
 		Node 	string 	`json:"node"`
 		Subject string 	`json:"subject"`
 		StudyID string 	`json:"study"`
+
 	}
 
 	var body bytes.Buffer
@@ -186,16 +258,16 @@ func (m *Mux) PopulateNode(w http.ResponseWriter, r *http.Request) {
 		select {
 			case msg := <- ch: 
 				fmt.Printf("Response: %s\n", msg)
-			}
+		}
 
-		//w.WriteHeader(http.StatusOK)
-		//str := fmt.Sprintf("Populated node %s\n", msg.Node)
-		/fmt.Fprintf(w, "%s", str)
+		w.WriteHeader(http.StatusOK)
+		str := fmt.Sprintf("Populated node %s\n", msg.Node)
+		fmt.Fprintf(w, "%s", str)
 	} else {
-		/*w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusNotFound)
 		str := fmt.Sprintf("No such node: %s\n", msg.Node)
-		fmt.Fprintf(w, "%s", str)*
-	}*/
+		fmt.Fprintf(w, "%s", str)
+	}
 }
 
 func (m *Mux) DebugNode(w http.ResponseWriter, r *http.Request) {
@@ -252,19 +324,22 @@ func (m *Mux) SetPortNumber(w http.ResponseWriter, r *http.Request) {
 	}
 
 	decoder := json.NewDecoder(r.Body)
-    err := decoder.Decode(&msg)
+	err := decoder.Decode(&msg)
     if err != nil {
-		errMsg := fmt.Sprintf("Error: %s\n", err)
+		errMsg := fmt.Sprintf("Error kake\n")
+		log.Printf("Error: %s\n", errMsg)
 		http.Error(w, errMsg, http.StatusBadRequest)
+		return
 	}
 
 	if _, ok := m.nodeProcs[msg.Node]; ok {
 		m.nodes[msg.Node] = msg.Address
+		w.WriteHeader(http.StatusOK)
+		fmt.Printf("Added %s to map\n", msg.Node)
 	} else {
 		errMsg := fmt.Sprintf("No such node: %s\n", msg.Node)
 		http.Error(w, errMsg, http.StatusNotFound)
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 func (m *Mux) getNetworkPorts(path string) ([]string, error) {
@@ -282,6 +357,66 @@ func (m *Mux) getNetworkPorts(path string) ([]string, error) {
     }
     return lines, scanner.Err()
 }
+
+func readConfig() error {
+	viper.SetConfigName("firestore_config")
+	viper.AddConfigPath("/var/tmp")
+	viper.AddConfigPath(".")
+	viper.SetConfigType("yaml")
+
+	err := viper.ReadInConfig()
+	if err != nil {
+		return err
+	}
+
+	// Behavior variables
+	viper.SetDefault("num_subjects", 2)
+	viper.SetDefault("num_studies", 10)
+	viper.SetDefault("data_users", 1)
+	viper.SetDefault("files_per_study", 2)
+	viper.SetDefault("file_size", 256)
+	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
+	viper.SetDefault("set_files", true)
+	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
+	viper.SafeWriteConfig()
+	return nil
+}
+
+/*
+func (n *Node) MuxMessageReceiver(data []byte) ([]byte, error) {
+	var response string
+	msg := messages.NewMessage(data)
+	fuseDaemon := n.fuseDaemon()
+	fmt.Printf("Message received: %s\n", msg)
+
+	switch msgType := msg.MessageType; msgType {
+		case messages.MSG_TYPE_GET_NODE_INFO:
+			response = n.string()
+
+		case messages.MSG_TYPE_SET_SUBJECT_NODE_PERMISSION:
+			fuseDaemon.SetSubjectNodePermission(msg.Subject, msg.Permission)
+
+		case messages.MSG_TYPE_SET_NODE_PERMISSION:
+			log.Fatalf("Not implemented. Exiting...\n")
+
+		case messages.MSG_TYPE_SET_NODE_FILES:
+			log.Fatalf("Not implemented. Exiting...\n")
+
+		case messages.MSG_TYPE_NEW_STUDY:
+			err := n.createNewStudyDirectory(msg.Study)
+			if err != nil {
+				return nil, err
+			}
+		
+		case messages.MSG_TYPE_LOAD_NODE:
+//			n.LoadNodeState()
+
+		default:
+			log.Printf("Unkown message type: %s\n", msg.MessageType)
+			return nil, nil
+	}
+    return []byte(response), nil
+}*/
 
 /*func (m *Masternode) SetNetworkSubjects(subjects []*core.Subject) {
 	m.Subjects = subjects

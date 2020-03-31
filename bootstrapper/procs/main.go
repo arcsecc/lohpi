@@ -9,10 +9,12 @@ import (
 	"syscall"
 	"strconv"
 	"net"
-_	"log"
+	"log"
 
 	"firestore/core/mux"
 	"firestore/netutil"
+
+
 )
 
 type Application struct {
@@ -32,12 +34,14 @@ type Application struct {
 func main() {
 	var numNodes int
 	var portNum int
+	var httpPortNum int
 	var execPath string = ""
 	
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.IntVar(&numNodes, "n", 0, "Number of initial nodes in the network.")
 	arg.StringVar(&execPath, "e", "", "Lohpi node's executable path.")
 	arg.IntVar(&portNum, "p", 0, "Port number at which Lohpi runs. If not set or the selected port is busy, select an open port.")
+	arg.IntVar(&httpPortNum, "http_port", 0, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
 	arg.Parse(os.Args[1:])
 
 	if numNodes == 0 {
@@ -61,9 +65,10 @@ func main() {
 
 	// Safely set the port number of the application
 	validatePortNumber(&portNum)
+	validatePortNumber(&httpPortNum)
 
 	// Life-cycle of the system here
-	app := NewApplication(numNodes, portNum, execPath)
+	app := NewApplication(numNodes, portNum, httpPortNum, execPath)
 	app.Start()
 	app.Run()
 
@@ -72,18 +77,17 @@ func main() {
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel
 
-	fmt.Printf("apsoidiasp")
-
 	// Stop the entire system
 	app.Stop()
 }
 
-func NewApplication(numNodes, portNum int, execPath string) *Application {
-	m, err := mux.NewMux(portNum, execPath)
+func NewApplication(numNodes, portNum, httpPortNum int, execPath string) *Application {
+	m, err := mux.NewMux(portNum, httpPortNum, execPath)
 	if err != nil {
 		panic(err)
 	}
 
+	// Call this to create a process tree from the node module
 	m.AddNetworkNodes(numNodes)
 
 	return &Application {
@@ -97,11 +101,13 @@ func (app *Application) Start() {
 }
 
 func (app *Application) Stop() {
-	app.mux.ShutdownNodes()
+	log.Printf("Cleaning up Lohpi resources...\n")
+	app.mux.Stop()
+	log.Printf("Done cleaning up\n")
 }
 
-func (app *Application) Run() error {
-	return app.mux.HttpHandler()
+func (app *Application) Run()  {
+	app.mux.RunServers()
 }
 
 func fileExists(path string) bool {
@@ -137,3 +143,4 @@ func validatePortNumber(portNum *int) {
 		}
 	} 
 }
+

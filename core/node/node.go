@@ -1,18 +1,20 @@
 package node
 
 import (
+	"fmt"
+	"strconv"
+	"encoding/json"
+	"net/http"
+	"bytes"
 	"errors"
-_	"fmt"
 	"time"
-	"firestore/core/node/fuse"
-_	"net/http"
-	_ "net/http/pprof"
-	"github.com/joonnna/ifrit"
 	"log"
-_	"bytes"
-_	"strconv"
-_	"encoding/json"
-_	"strings"
+	"crypto/x509/pkix"
+	"crypto/tls"
+	"firestore/core/node/fuse"
+	"firestore/comm"
+
+	"github.com/joonnna/ifrit"
 	"github.com/spf13/viper"
 
 	logger "github.com/inconshreveable/log15"
@@ -42,9 +44,10 @@ type Node struct {
 	// HTTP-related variables
 	//Listener   net.Listener
 	//httpServer *http.Server
+	clientConfig *tls.Config
 }
 
-func NewNode(nodeName string) *Node {
+func NewNode(nodeName string) (*Node, error) {
 	if err := readConfig(); err != nil {
 		panic(err)
 	}
@@ -56,11 +59,24 @@ func NewNode(nodeName string) *Node {
 
 	logger.Info(c.Addr(), " spawned")
 
-	node := &Node {
-		nodeName: nodeName,
-		c: c,
+	pk := pkix.Name{
+		Locality: []string{c.Addr()},
 	}
-	return node
+
+	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
+	if err != nil {
+		return nil, err
+	}
+
+	clientConfig := comm.ClientConfig(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+
+	node := &Node {
+		nodeName: 		nodeName,
+		c: 				c,
+		clientConfig: 	clientConfig,
+	}
+
+	return node, nil
 }
 
 func (n *Node) StartIfritClient() {
@@ -100,6 +116,41 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	logger.Debug(string(data))
 	logger.Debug("kake asuidaiosuoij\n")
 	return []byte("koaspkdpaos\n"), nil
+}
+
+func (n *Node) SendPortNumber(nodeName, addr string, muxPort uint) error {
+	URL := "https://127.0.1.1:" + strconv.Itoa(int(muxPort)) + "/set_port"
+	fmt.Printf("URL:> %s\n", URL)
+
+	var msg struct {
+		Node 	string 		`json:"node"`
+		Address string 		`json:"address"`
+	}
+
+	msg.Node = nodeName
+	msg.Address = addr
+	jsonStr, err := json.Marshal(msg)
+	if err != nil {
+        return err
+    }
+
+	req, err := http.NewRequest("POST", URL, bytes.NewBuffer(jsonStr))
+	req.Header.Set("Content-Type", "application/json")
+
+	transport := &http.Transport{
+		TLSClientConfig: n.clientConfig,
+	}
+	client := &http.Client{Transport: transport}
+	response, err := client.Do(req)
+    if err != nil {
+        return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != int(http.StatusOK) {
+		errMsg := fmt.Sprintf("%s", response.Body)
+		return errors.New(errMsg)
+	}
+	return nil
 }
 
 /*
@@ -232,6 +283,7 @@ func readConfig() error {
 	viper.SetDefault("file_size", 256)
 	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
 	viper.SetDefault("set_files", true)
+	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
 	viper.SafeWriteConfig()
 	return nil
 }

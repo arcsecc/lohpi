@@ -27,7 +27,7 @@ _	"time"
 	"strings"
 //	"io/ioutil"
 
-	"firestore/core/file"
+//	"firestore/core/file"
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
 	"github.com/pkg/xattr"
@@ -231,7 +231,7 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 	//fmt.Printf("Path to inspect: %s\n", path)
 
 	// Node-centric access
-	if self.nodePermission == file.FILE_DISALLOWED {
+	if self.nodePermission == "disallow" {
 		return false
 	}
 
@@ -239,7 +239,7 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 	for s, perm := range self.subjectPermissions {
 //		fmt.Printf("Perm: %s\ts = %s\n", perm, s)
 		ok := strings.Contains(path, s)
-		if ok && perm == file.FILE_DISALLOWED {
+		if ok && perm == "disallow" {
 			return false
 		}
 	}
@@ -268,7 +268,7 @@ func (self *Ptfs) createStudyDirectoryTree() {
 			createDirectory(subjectDirPath)
 			
 			// Set default file permission on study directory
-			if err := xattr.Set(subjectDirPath, XATTR_PREFIX + "PERMISSION", []byte(file.FILE_ALLOWED)); err != nil {
+			if err := xattr.Set(subjectDirPath, XATTR_PREFIX + "PERMISSION", []byte("allow")); err != nil {
 				log.Fatal(err)
 			}
 		}
@@ -286,7 +286,7 @@ func (self *Ptfs) createSubjectDirectoryTree() {
 			panic(err)
 		}
 		
-		if err := self.SetSubjectPermission(subjectID, file.FILE_ALLOWED); err != nil {
+		if err := self.SetSubjectPermission(subjectID, "allow"); err != nil {
 			panic(err)
 		}
 
