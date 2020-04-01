@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/http"
 	"crypto/tls"
-	"log"
+_	"log"
 	//"firestore/core/file"
 	//"firestore/core/message"
 	"firestore/comm"
@@ -16,11 +16,11 @@ import (
 	"syscall"
 	"firestore/netutil"
 	"ifrit"
-	"bytes"
-	"io"
+_	"bytes"
+_	"io"
 	"os"
 	"bufio"
-	"encoding/json"
+_	"encoding/json"
 _	"encoding/binary"
 _	"io/ioutil"
 
@@ -43,6 +43,7 @@ type Mux struct {
 	ifritClient *ifrit.Client
 	nodeProcs 		map[string]*exec.Cmd
 	nodes			map[string]string
+	subjects 		map[string][]string		// subjectID -> {node_1, node_2, ...}
 	execPath	string
 
 	// HTTPS-related
@@ -113,6 +114,10 @@ func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
 	}, nil
 }
 
+func (m *Mux) Start() {
+	go m.ifritClient.Start()
+}
+
 func (m *Mux) RunServers() {
 	go m.HttpHandler()
 	go m.HttpsHandler()
@@ -134,7 +139,7 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 		m.nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-		go func() {
+		/*go func() {
 			if err := nodeProc.Start(); err != nil {
 				panic(err)
 			}
@@ -142,12 +147,8 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 			if err := nodeProc.Wait(); err != nil {
 				panic(err)
 			}
-		}()
+		}()*/
 	}
-}
-
-func (m *Mux) Start() {
-	go m.ifritClient.Start()
 }
 
 func (m *Mux) Stop() {
@@ -161,185 +162,6 @@ func (m *Mux) Stop() {
 
 	// Stop the underlying Ifrit client
 	m.ifritClient.Stop()
-}
-
-func (m *Mux) HttpHandler() error {
-	log.Printf("MUX: Started HTTP server on port %d\n", m._httpPortNum)
-	mux := http.NewServeMux()
-
-	// Public methods exposed to data users (usually through cURL)
-	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/populate_node", m.PopulateNode)
-	//mux.HandleFunc("/debug", m.DebugNode)
-	
-	// Subject-related getters and setters
-	//mux.HandleFunc("/delete_subject", )
-	//mux.HandleFunc("/move_subject", )
-	
-	m._httpServer = &http.Server{
-		Handler: mux,
-	}
-
-	err := m._httpServer.Serve(m._httpListener)
-	if err != nil {
-		logging.Error(err.Error())
-		return err
-	}
-	return nil
-}
-
-func (m *Mux) HttpsHandler() error {
-	log.Printf("MUX: Started HTTPS server on port %d\n", m.portNum)
-	mux := http.NewServeMux()
-
-	// Utilities used in experiments
-	mux.HandleFunc("/set_port", m.SetPortNumber)
-	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/debug", m.DebugNode)
-	
-	m.httpServer = &http.Server{
-		Handler: mux,
-		TLSConfig: m.serverConfig,
-	}
-
-	err := m.httpServer.ServeTLS(m.listener, "", "")
-	if err != nil {
-		logging.Error(err.Error())
-		return err
-	}
-	return nil
-}
-
-func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodGet {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Mux's HTTP server running on port %d\n", m._httpPortNum)
-	fmt.Fprintf(w, "Mux's HTTPS server running on port %d\n", m.portNum)
-	fmt.Fprintf(w, "Flireflies nodes in this network:\nMux: %s\n", m.ifritClient.Addr())
-	for n, addr := range m.nodes {
-		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", n, addr)
-	}
-}
-
-func (m *Mux) PopulateNode(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
-		return
-	}
-
-	var msg struct {
-		Node 	string 	`json:"node"`
-		Subject string 	`json:"subject"`
-		StudyID string 	`json:"study"`
-
-	}
-
-	var body bytes.Buffer
-	io.Copy(&body, r.Body)
-	err := json.Unmarshal(body.Bytes(), &msg)
-	if err != nil {
-		panic(err)
-	}
-
-	if node, exists := m.nodes[msg.Node]; exists {
-		fmt.Printf("Sending msg to %s\n", node)
-		ch := m.ifritClient.SendTo(node, []byte("kake"))
-		select {
-			case msg := <- ch: 
-				fmt.Printf("Response: %s\n", msg)
-		}
-
-		w.WriteHeader(http.StatusOK)
-		str := fmt.Sprintf("Populated node %s\n", msg.Node)
-		fmt.Fprintf(w, "%s", str)
-	} else {
-		w.WriteHeader(http.StatusNotFound)
-		str := fmt.Sprintf("No such node: %s\n", msg.Node)
-		fmt.Fprintf(w, "%s", str)
-	}
-}
-
-func (m *Mux) DebugNode(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
-		return
-	}
-
-	var msg struct {
-		Node string 	`json:"node"`
-	}
-
-	var body bytes.Buffer
-	io.Copy(&body, r.Body)
-	err := json.Unmarshal(body.Bytes(), &msg)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("Sending msg to %s\n", msg.Node)
-
-	ch := m.ifritClient.SendTo(msg.Node, []byte("kake"))
-	select {
-		case msg := <- ch: 
-			fmt.Printf("Response: %s\n", msg)
-	}
-
-	w.WriteHeader(http.StatusOK)
-	str := fmt.Sprintf("Populated node %s\n", msg.Node)
-	fmt.Fprintf(w, "%s", str)
-}
-
-func (m *Mux) SetPortNumber(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("kake\n")
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
-	}
-
-	var msg struct {
-		Node 	string 		`json:"node"`
-		Address string 		`json:"address"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&msg)
-    if err != nil {
-		errMsg := fmt.Sprintf("Error kake\n")
-		log.Printf("Error: %s\n", errMsg)
-		http.Error(w, errMsg, http.StatusBadRequest)
-		return
-	}
-
-	if _, ok := m.nodeProcs[msg.Node]; ok {
-		m.nodes[msg.Node] = msg.Address
-		w.WriteHeader(http.StatusOK)
-		fmt.Printf("Added %s to map\n", msg.Node)
-	} else {
-		errMsg := fmt.Sprintf("No such node: %s\n", msg.Node)
-		http.Error(w, errMsg, http.StatusNotFound)
-	}
 }
 
 func (m *Mux) getNetworkPorts(path string) ([]string, error) {

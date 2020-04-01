@@ -1,28 +1,11 @@
 package message
 
-/** This API is used for message passing between master node and storage node */
-import (
-//	"fmt"
-	//"bytes"
-	//"encoding/gob"
-	"firestore/core/file"
-	"errors"
-)
-
+/*-
 type Clientmessage struct {
 	Subject string
 	Node string
 	Permission string
 	//SetPermission string
-}
-
-func (c *Clientmessage) IsValidFormat() error {
-	if c.Permission == file.FILE_ALLOWED || c.Permission == file.FILE_DISALLOWED {
-		/*if c.SetPermission == "set" || c.SetPermission == "unset" {
-			return nil
-		}*/
-	}
-	return errors.New("Client message is invalid")
 }
 
 func (c *Clientmessage) IsValidSubjectQuery() error {
@@ -41,7 +24,7 @@ func (c *Clientmessage) IsValidNodeQuery() error {
 		} 
 	}
 	return errors.New("Node query is invalid")
-}
+}/
 
 /*func NewClientMessage(subjectID string, messageType Msgtype, permission, setPermission string) *Message {
 	self := &Message {

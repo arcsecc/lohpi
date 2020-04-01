@@ -1,10 +1,9 @@
 package message
 
-/** This API is used for message passing between master node and storage node */
+/** This API is used for message passing between mux and storage nodes */
 import (
 //	"fmt"
 //	"bytes"
-	"encoding/json"
 	//"firestore/core/file"
 )
 
@@ -31,29 +30,15 @@ const (
 	MSG_NEW_PERM_SET = "new permission set"	
 )
 
-type Message struct {
-	MessageType MsgType 
-	Node string 			`json:",omitempty"`
-	Study string 			`json:",omitempty"`
-	Subject string 			`json:",omitempty"`
-	Permission string 		`json:",omitempty"`
-}
-
-// Message used to create a new study
-/*type StudyMessage struct {
-	Node string
-	Study string
-	Type MsgType
-}*/
-
-func NewMessage(data []byte) *Message {
-	var msg Message
-	err := json.Unmarshal(data, &msg)
-	if err != nil {
-		panic(err)
-	}
-
-	return &msg
+type BulkDataCreator struct {
+	MessageType MsgType
+	Node 	string 				`json:"node"`
+	Subject string 				`json:"subject"`
+	Study string 				`json:"study"`
+	Attributes map[string]interface {}	 	`json:"allowed_attributes"`
+	DefaultAccess bool  		`json:"default_access"`
+	NumFiles float64 				`json:"num_files"`
+	FileSize float64 				`json:"file_size"`
 }
 
 /*func NewStudyMessage(node, study string, messageType MsgType) *StudyMessage {

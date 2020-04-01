@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"bytes"
 	"errors"
-	"time"
 	"log"
 	"crypto/x509/pkix"
 	"crypto/tls"
 	"firestore/core/node/fuse"
 	"firestore/comm"
+	"firestore/core/message"
 
 	"github.com/joonnna/ifrit"
 	"github.com/spf13/viper"
@@ -111,11 +111,32 @@ func (n *Node) Shutdown() {
 	fuse.Shutdown() // might fail...
 }
 
+// Main entry point for handling Ifrit direct messaging
 func (n *Node) messageHandler(data []byte) ([]byte, error) {
-	<-time.After(time.Second * 1)
-	logger.Debug(string(data))
-	logger.Debug("kake asuidaiosuoij\n")
-	return []byte("koaspkdpaos\n"), nil
+	var bulk message.BulkDataCreator
+	err := json.Unmarshal(data, &bulk)
+	if err != nil {
+		panic(err)
+	}
+
+	switch msgType := bulk.MessageType; msgType {
+	case message.MSG_TYPE_LOAD_NODE: 
+		fmt.Printf("About to load node\n")
+		
+		// Create study files as well, regardless of wether or not the subject exists. 
+		// If the study exists, we still add the subject's at the node and link to them using
+		// 'ln -s'. The operations performed by this call sets the finite state of the 
+		// study. This means that any already existing files are deleted.
+		if err := n.fs.FeedBulkData(&bulk); err != nil {
+			panic(err)
+		}
+
+	default:
+		fmt.Printf("Unknown message type: %s\n", bulk.MessageType)
+		return []byte("ERROR"), nil
+	}
+
+	return []byte("OK"), nil
 }
 
 func (n *Node) SendPortNumber(nodeName, addr string, muxPort uint) error {
@@ -153,117 +174,6 @@ func (n *Node) SendPortNumber(nodeName, addr string, muxPort uint) error {
 	return nil
 }
 
-/*
-func (n *Node) SetNodeSubjectPermission(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		logger.Error("Require header to be application/json")
-	}
-
-	var msg struct {
-		Subject string `json:"subject"`
-		Permission string `json:"permission"`
-	}
-
-	// Assert JSON format somewhere around here...
-
-	var body bytes.Buffer
-	io.Copy(&body, r.Body)
-	err := json.Unmarshal(body.Bytes(), &msg)
-	if err != nil {
-		panic(err)
-	}
-
-	err = n.fs.SetSubjectPermission(msg.Subject, msg.Permission)
-	if err != nil {
-		w.WriteHeader(http.StatusNotAcceptable)
-		str := fmt.Sprintf("%s\n", err)
-		fmt.Fprintf(w, "%s", str)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
-}
-
-func (n *Node) PrintFiles(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Method not implemented")
-}
-
-func (n *Node) CreateSubject(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		logger.Error("Require header to be application/json")
-	}
-
-	var msg struct {
-		Subject string `json:"subject"`
-		Permission string `json:"permission"`
-	}
-
-	// Assert JSON format somewhere around here...
-
-	var body bytes.Buffer
-	io.Copy(&body, r.Body)
-	err := json.Unmarshal(body.Bytes(), &msg)
-	if err != nil {
-		panic(err)
-	}
-
-	err = n.fs.CreateSubject(msg.Subject)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		str := fmt.Sprintf("%s\n", err)
-		fmt.Fprintf(w, "%s", str)
-		return
-	}
-
-	err = n.fs.SetSubjectPermission(msg.Subject, msg.Permission)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		str := fmt.Sprintf("%s\n", err)
-		fmt.Fprintf(w, "%s", str)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Created subject %s succsessfully", msg.Subject)
-}
-
-func (n *Node) Subjects(w http.ResponseWriter, r *http.Request) {
-	/*
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		logger.Error("Require header to be application/json")
-	}
-
-	subjects, err := n.fs.Subjects()
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		str := fmt.Sprintf("%s\n", err)
-		fmt.Fprintf(w, "%s", str)
-	} else {
-		w.WriteHeader(http.StatusOK)
-		str := fmt.Sprintf("%s", subjects)
-		fmt.Fprintf(w, "%s", str)
-	}*
-}
-*/
-
 func readConfig() error {
 	viper.SetConfigName("firestore_config")
 	viper.AddConfigPath("/var/tmp")
@@ -276,13 +186,13 @@ func readConfig() error {
 	}
 
 	// Behavior variables
-	viper.SetDefault("num_subjects", 2)
-	viper.SetDefault("num_studies", 10)
-	viper.SetDefault("data_users", 1)
-	viper.SetDefault("files_per_study", 2)
-	viper.SetDefault("file_size", 256)
+	//viper.SetDefault("num_subjects", 2)
+	//viper.SetDefault("num_studies", 10)          
+	//viper.SetDefault("data_users", 1)
+	//viper.SetDefault("files_per_study", 2)
+	//viper.SetDefault("file_size", 256)
 	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
-	viper.SetDefault("set_files", true)
+	//viper.SetDefault("set_files", true)
 	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
 	viper.SafeWriteConfig()
 	return nil

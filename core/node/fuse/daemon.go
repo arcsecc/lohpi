@@ -47,7 +47,6 @@ const STUDIES_DIR = "studies"
 const XATTR_PREFIX = "user."
 
 var (
-	errSubjectExists 			= errors.New("Subject already exists")
 	errSetSubjectPermission 	= errors.New("Could not set permission related to a non-existing subject")
 )
 
@@ -84,7 +83,10 @@ type Ptfs struct {
 
 	// Collection of subject-centric data structures
 	// TODO: more bullet-proof identification of subjects..?
-	subjects map[string]interface{}			// subectID -> 
+	subjects map[string][]string			// subectID -> *
+	studies map[string]interface{}			// studyID -> *
+
+	// WAT??
 	subjectPermissions map[string]string // subjectID -> permission
 
 	// Used to wait until FUSE in mounted
@@ -94,8 +96,12 @@ type Ptfs struct {
 func NewFuseFS(nodeID string) (*Ptfs, error) {
 	startDir := creataLocalMountPointPath(nodeID)
 	mountDir := GetDestinationMountPoint(nodeID)
-	createDirectory(startDir)
-	createDirectory(mountDir)
+
+	// restoreFuseState() should fill all in-memory structures with the on-disk 
+	// contents. This ensures a fault-tolerant model of the fuse
+
+	CreateDirectory(startDir)
+	CreateDirectory(mountDir)
 
 	syscall.Umask(0)
 	ptfs := Ptfs{
@@ -103,7 +109,8 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 		mountDir: mountDir,
 		nodeID: nodeID,
 		xattrFlag: false,
-		subjects: make(map[string]interface{}, 0),
+		subjects: make(map[string][]string, 0),
+		studies: make(map[string]interface{}, 0),
 		subjectPermissions: make(map[string]string, 0),
 		ch: make(chan bool, 0),
 	}
@@ -156,16 +163,15 @@ func (self *Ptfs) initiate_daemon() {
 	// We start by creating the mounting point. Each change in the mount point shall we reflected into
 	// the start directory
 	fmt.Printf("P: %s\n", self.mountDir + "/" + STUDIES_DIR)
-	createDirectory(self.mountDir + "/" + STUDIES_DIR)
-	createDirectory(self.mountDir + "/" + SUBJECTS_DIR)
+	CreateDirectory(self.mountDir + "/" + STUDIES_DIR)
+	CreateDirectory(self.mountDir + "/" + SUBJECTS_DIR)
 		
-	if viper.GetBool("set_files") {
+	/*if viper.GetBool("set_files") {
 		fmt.Printf("Creating tree...\n")
 		self.createStudyDirectoryTree()
 		self.createSubjectDirectoryTree()
-	}
+	}*/
 }
-
 
 // Returns the path for the local entry point for the FUSE file system
 func creataLocalMountPointPath(nodeName string) string {
@@ -177,16 +183,6 @@ func creataLocalMountPointPath(nodeName string) string {
 // are reflected
 func GetDestinationMountPoint(nodeName string) string {
 	return fmt.Sprintf("/tmp/%s/%s", NODE_DIR, nodeName)
-}
-
-// Creates a directory tree using dirPath
-func createDirectory(dirPath string) {
-	fmt.Printf("Dir path: %s\n", dirPath)
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			panic(err)
-		}
-	}
 }
 
 // Sets the permission globally for the entire node to which this is attatched 
@@ -205,11 +201,12 @@ func (self *Ptfs) SetNodePermission(permission string) error {
 }
 
 func (self *Ptfs) SetSubjectPermission(subject, permission string) error {	
-	if self.SubjectExists(subject) {
+/*	if self.SubjectExists(subject) {
 		self.subjectPermissions[subject] = permission
 		return nil
 	}
-	return errSetSubjectPermission
+	return errSetSubjectPermission*/
+	return nil
 }
 
 func (self *Ptfs) setXattrFlag(path, permission string) error {
@@ -258,14 +255,14 @@ func (self *Ptfs) createStudyDirectoryTree() {
 	for i := 1; i <= viper.GetInt("num_studies"); i++ {
 		dirPath := fmt.Sprintf("%s/%s/study_%d", self.mountDir, STUDIES_DIR, i)
 		fmt.Printf("DIRPATH: %s\n", dirPath)
-		createDirectory(dirPath + "/" + DATA_USER_DIR)
-		createDirectory(dirPath + "/" + METADATA_DIR)
-		createDirectory(dirPath + "/" + PROTOCOL_DIR)
-		createDirectory(dirPath + "/" + SUBJECTS_DIR)
+		CreateDirectory(dirPath + "/" + DATA_USER_DIR)
+		CreateDirectory(dirPath + "/" + METADATA_DIR)
+		CreateDirectory(dirPath + "/" + PROTOCOL_DIR)
+		CreateDirectory(dirPath + "/" + SUBJECTS_DIR)
 		
 		for j := 1; j <= viper.GetInt("num_subjects"); j++ {
 			subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", dirPath, SUBJECTS_DIR, j)
-			createDirectory(subjectDirPath)
+			CreateDirectory(subjectDirPath)
 			
 			// Set default file permission on study directory
 			if err := xattr.Set(subjectDirPath, XATTR_PREFIX + "PERMISSION", []byte("allow")); err != nil {
@@ -277,10 +274,11 @@ func (self *Ptfs) createStudyDirectoryTree() {
 
 // Move to another file!
 func (self *Ptfs) createSubjectDirectoryTree() {
+	/**
 	for i := 1; i <= viper.GetInt("num_subjects"); i++ {
 		subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", self.mountDir, SUBJECTS_DIR, i)
 		subjectID := fmt.Sprintf("subject_%d", i)
-		createDirectory(subjectDirPath)
+		CreateDirectory(subjectDirPath)
 
 		if err := self.addSubject(subjectID); err != nil {
 			panic(err)
@@ -293,13 +291,13 @@ func (self *Ptfs) createSubjectDirectoryTree() {
 		for j := 1; j <= viper.GetInt("num_studies"); j++ {
 			studyDirPath := fmt.Sprintf("%s/%s/study_%d", subjectDirPath, STUDIES_DIR, j)
 			studyID := fmt.Sprintf("study_%d", j)
-			createDirectory(studyDirPath)
+			CreateDirectory(studyDirPath)
 
 			// Create the files assoicated with a subject and a study with random noise
 			self.createStudyFiles(self.mountDir, subjectID, studyID)
 			self.linkStudyFiles(self.mountDir, subjectID, studyID)
 		}
-	}
+	}*/
 }
 
 // Link files from 'subjects' directory to 'studies' directory
@@ -346,33 +344,6 @@ func (self *Ptfs) createStudyFiles(parentTree, subject, study string) {
 			panic(err)
 		}
 	}
-}
-
-func (self *Ptfs) CreateSubject(subjectID string) error {
-	if err := self.addSubject(subjectID); err != nil {
-		return err
-	}
-	dirPath := fmt.Sprintf("%s/%s/%s", self.mountDir, SUBJECTS_DIR, subjectID)
-	createDirectory(dirPath)
-	return nil
-}
-
-func (self *Ptfs) addSubject(subjectID string) error {
-	if self.SubjectExists(subjectID) {
-		return errSubjectExists
-	}
-	//fmt.Printf("Adding %s to the map\n", subjectID)
-	self.subjects[subjectID] = ""
-	return nil
-}
-
-func (self *Ptfs) SubjectExists(subjectID string) bool {
-	if _, ok := self.subjects[subjectID]; ok {
-		//fmt.Printf("%s exists in map\n", subjectID)
-		return true
-	}
-	//fmt.Printf("%s does not exist in map\n", subjectID)
-	return false
 }
 
 func (self *Ptfs) RemoveSubject(subjectID string) error {

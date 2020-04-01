@@ -13,35 +13,6 @@ var (
 	errNilPriv = errors.New("Given private key was nil")
 )
 
-type Comm struct {
-	config *tls.Config
-}
-
-/*
-func NewComm(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey, l net.Listener) (*Comm, error) {
-	if cert == nil {
-		return nil, errNilCert
-	}
-
-	if priv == nil {
-		return nil, errNilPriv
-	}
-
-	serverConf := serverConfig(cert, caCert, priv)
-
-	server, err := newServer(serverConf, l)
-	if err != nil {
-		return nil, err
-	}
-
-	clientConf := clientConfig(cert, caCert, priv)
-
-	client, err := newClient(clientConf)
-	if err != nil {
-		return nil, err
-	}
-}*/
-
 func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Config {
 	tlsCert := tls.Certificate{
 		Certificate: [][]byte{c.Raw},
