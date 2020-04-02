@@ -40,8 +40,8 @@ func main() {
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.IntVar(&numNodes, "n", 0, "Number of initial nodes in the network.")
 	arg.StringVar(&execPath, "e", "", "Lohpi node's executable path.")
-	arg.IntVar(&portNum, "p", 0, "Port number at which Lohpi runs. If not set or the selected port is busy, select an open port.")
-	arg.IntVar(&httpPortNum, "http_port", 0, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
+	arg.IntVar(&portNum, "p", -1, "Port number at which Lohpi runs. If not set or the selected port is busy, select an open port.")
+	arg.IntVar(&httpPortNum, "http_port", -1, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
 	arg.Parse(os.Args[1:])
 
 	if numNodes == 0 {
@@ -66,7 +66,10 @@ func main() {
 	// Safely set the port number of the application
 	validatePortNumber(&portNum)
 	validatePortNumber(&httpPortNum)
-
+	if portNum == httpPortNum {
+		fmt.Fprintf(os.Stderr, "HTTP server port and HTTPS server port cannot be the same! Exiting\n")
+		os.Exit(2)
+	}
 	// Life-cycle of the system here
 	app := NewApplication(numNodes, portNum, httpPortNum, execPath)
 	app.Start()
@@ -87,7 +90,9 @@ func NewApplication(numNodes, portNum, httpPortNum int, execPath string) *Applic
 		panic(err)
 	}
 
-	// Call this to create a process tree from the node module
+	// Call this to create a process tree from the node module. Add them to the 
+	// collection of known nodes in the network. We are allowed to spawn and kill other nodes
+	// at later points in time
 	m.AddNetworkNodes(numNodes)
 
 	return &Application {
@@ -126,11 +131,12 @@ func fileIsExecutable(path string) bool {
 // Validates the port number of the application by checking if it is free. If it is
 // not, select an open port number
 func validatePortNumber(portNum *int) {
-	// Set port number. Check if it is in use -- abort if so
+	// Set portNum to a valid port if it is not set
 	if *portNum == -1 {
 		*portNum = netutil.GetOpenPort()
-		fmt.Printf("Port number not set. Picking %d as port num...\n", *portNum)
+		log.Printf("Port number not set. Picking %d as port num...\n", *portNum)
 	} else {
+		// Check if port number is set. If the port number is not open, find another port number
 		host := ":0" + strconv.Itoa(*portNum)
 		l, err := net.Listen("tcp4", host)
 		if err != nil {

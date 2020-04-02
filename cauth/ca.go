@@ -1,7 +1,6 @@
 package cauth
 
 import (
-	"fmt"
 	"crypto"
 	"crypto/rsa"
 	"crypto/rand"
@@ -69,8 +68,6 @@ func NewCa() (*Ca, error) {
 		return nil, err
 	}
 
-	fmt.Printf("CA's cert: %v\n", caCert)
-
 	c := &Ca{
 		privKey:      privKey,
 		pubKey:       privKey.Public(),
@@ -95,7 +92,7 @@ func (c *Ca) SavePrivateKey() error {
 		return err
 	}
 
-	log.Info("Save CA private key.", "file", c.keyFilePath)
+	log.Info("Save Lohpi CA private key.", "file", c.keyFilePath)
 
 	b := x509.MarshalPKCS1PrivateKey(c.privKey)
 
@@ -119,7 +116,7 @@ func (c *Ca) SaveCertificate() error {
 		return err
 	}
 
-	log.Info("Save CA certificate.", "file", c.certFilePath)
+	log.Info("Save Lohpi CA certificate.", "file", c.certFilePath)
 
 	b := c.caCert.Raw
 	block := &pem.Block{

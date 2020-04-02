@@ -132,6 +132,7 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 	for i := 0; i < numNodes; i++ {
 		
 		nodeName := fmt.Sprintf("node_%d", i)
+		fmt.Printf("Adding %s\n", nodeName)
 		logfileName := fmt.Sprintf("%s_logfile", nodeName)
 		nodeProc := exec.Command(m.execPath, "-name", nodeName, "-logfile", logfileName)
 		
