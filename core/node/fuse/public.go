@@ -11,6 +11,13 @@ import (
 	"firestore/core/message"
 )
 func (self *Ptfs) FeedBulkData(bulk *message.BulkDataCreator) error {
+
+	fmt.Printf("DATA: %v\n", bulk.Attributes)
+	attrMap, err := message.FilterStringAttributes(bulk.Attributes)
+	if err != nil {
+		return err
+	}
+
 	// Check if subject's data is already stored by FUSE
 	if self.subjectExists(bulk.Subject) {
 		fmt.Printf("Subject exists. Continuing...\n")
@@ -31,7 +38,8 @@ func (self *Ptfs) FeedBulkData(bulk *message.BulkDataCreator) error {
 	// To begin with, we take care of the "subjects" part of the FUSE file tree.
 	// We assume that the subject exists (although ensure that it actually does!).
 	// If the given bulk's study does not exist, create it and populate the "bulk.Study"
-	// directory.
+	// directory. What "enrollSubjectIntoStudy" is simply add bulk.Study into the bulk.Subject map
+	// Later, we realize those changes on disk -- these are just in-memory states.
 	if !self.subjectIsEnrolledInStudy(bulk.Subject, bulk.Study) {
 		fmt.Printf("Enrolling %s in study %s\n", bulk.Subject, bulk.Study)
 		self.enrollSubjectIntoStudy(bulk.Subject, bulk.Study)
@@ -39,19 +47,20 @@ func (self *Ptfs) FeedBulkData(bulk *message.BulkDataCreator) error {
 		fmt.Printf("Subject %s is already enrolled in study %s\n", bulk.Subject, bulk.Study)
 	}
 
-	//fmt.Printf("KAKASPASKPADOSK: %v\n", bulk.Attributes)
-
-	// Create the files in the "subjects" part of the FUSE file tree
-	if err := self.createSubjectStudyFiles(
-		bulk.Subject, 
-		bulk.Study, 
-		int(bulk.NumFiles), 
-		int(bulk.FileSize)); err != nil {
+	// Create the files in the "subjects" part of the FUSE file tree. Any existing files are deleted and replaced by
+	// the files given by the bulk parameters, 
+	if err := self.createSubjectStudyFiles(bulk.Subject, bulk.Study, int(bulk.NumFiles), int(bulk.FileSize)); err != nil {
 		return err
 	}
 
 	// Create the directories in the "studies" part of the file tree
-	if err := self.addSubjectStudyFilesToStudy(bulk.Subject, bulk.Study, int(bulk.NumFiles), ); err != nil {
+	if err := self.addSubjectStudyFilesToStudy(bulk.Subject, bulk.Study, int(bulk.NumFiles)); err != nil {
+		return err
+	}
+
+	// Create the policies that formalize the access control list parameters enforced by the FUSE.
+	// The policies are assigned to "this subject" participating in "this study"
+	if err := self.SetSubjectPolicy(bulk.Subject, bulk.Study, attrMap); err != nil {
 		return err
 	}
 

@@ -130,10 +130,8 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 				msg.Subject = v.(string)
 			case "study":
 				msg.Study = v.(string)
-			case "allowed_attributes":
+			case "required_attributes":
 				msg.Attributes = v.(map[string]interface {})
-			case "default_access":
-				msg.DefaultAccess = v.(bool)
 			case "num_files":
 				msg.NumFiles = v.(float64)
 			case "file_size":

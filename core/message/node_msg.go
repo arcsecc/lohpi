@@ -2,7 +2,8 @@ package message
 
 /** This API is used for message passing between mux and storage nodes */
 import (
-//	"fmt"
+	"fmt"
+	"errors"
 //	"bytes"
 	//"firestore/core/file"
 )
@@ -30,6 +31,8 @@ const (
 	MSG_NEW_PERM_SET = "new permission set"	
 )
 
+var errInvalidMessageType = errors.New("Invalid message type. Expected map[string]interface{}")
+
 type BulkDataCreator struct {
 	MessageType MsgType
 	Node 	string 				`json:"node"`
@@ -41,6 +44,50 @@ type BulkDataCreator struct {
 	FileSize float64 				`json:"file_size"`
 }
 
+
+
+// Returns a map of attributes -> [value1, value2, ...]. Can extended even further!!1!
+func FilterStringAttributes(attributes map[string]interface{}) (map[string]string, error) {
+	attrCollection := make(map[string]string)
+	
+	for attrKey, attrArray := range attributes {
+		fmt.Printf("%s\t%s\n", attrKey, attrArray)
+		/*if attrArray, ok := attrArray.([]interface{}); ok {
+			attrStringArray := make([]string, 0)
+			for _, key:= range attrArray {
+				s := fmt.Sprintf("%s", key)
+				attrStringArray = append(attrStringArray, s)
+			}
+			attrCollection[attrKey] = attrStringArray
+		} else {
+			return nil, errInvalidMessageType
+		}*/
+	}
+
+	return attrCollection, nil
+}
+
+// Used for arbitrarily long map[string]interface{} collections
+/*func FilterStringAttributes(attributes map[string]interface{}) (map[string][]string, error) {
+	
+	attrCollection := make(map[string][]string)
+	
+	for attrKey, attrArray := range attributes {
+		if attrArray, ok := attrArray.([]interface{}); ok {
+			attrStringArray := make([]string, 0)
+			for _, key:= range attrArray {
+				s := fmt.Sprintf("%s", key)
+				attrStringArray = append(attrStringArray, s)
+			}
+			attrCollection[attrKey] = attrStringArray
+		} else {
+			return nil, errInvalidMessageType
+		}
+	}
+
+	return attrCollection, nil
+}
+*/
 /*func NewStudyMessage(node, study string, messageType MsgType) *StudyMessage {
 	return &StudyMessage {
 		Node: node,

@@ -153,6 +153,7 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 }
 
 func (m *Mux) Stop() {
+	/*
 	fmt.Printf("KILL: %v\n",m.nodeProcs )
 	for _, cmd := range m.nodeProcs {
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
@@ -160,7 +161,7 @@ func (m *Mux) Stop() {
 			panic(err)
 		}
 	}
-
+*/
 	// Stop the underlying Ifrit client
 	m.ifritClient.Stop()
 }

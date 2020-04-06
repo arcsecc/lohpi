@@ -1,20 +1,18 @@
 package main
 
 import (
-	"fmt"
 	"flag"
-	"os"
-	"os/signal"
-	"os/exec"
-	"syscall"
-	"strconv"
-	"net"
+	"fmt"
 	"log"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strconv"
+	"syscall"
 
 	"firestore/core/mux"
 	"firestore/netutil"
-
-
 )
 
 type Application struct {
@@ -36,7 +34,7 @@ func main() {
 	var portNum int
 	var httpPortNum int
 	var execPath string = ""
-	
+
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.IntVar(&numNodes, "n", 0, "Number of initial nodes in the network.")
 	arg.StringVar(&execPath, "e", "", "Lohpi node's executable path.")
@@ -53,7 +51,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Requires -e <path to executable Fireflies node>. Exiting\n")
 		os.Exit(2)
 	}
-	
+
 	if !fileExists(execPath) {
 		fmt.Fprintf(os.Stderr, "Executable path '%s' is invalid. Exiting\n", execPath)
 		os.Exit(2)
@@ -90,14 +88,14 @@ func NewApplication(numNodes, portNum, httpPortNum int, execPath string) *Applic
 		panic(err)
 	}
 
-	// Call this to create a process tree from the node module. Add them to the 
+	// Call this to create a process tree from the node module. Add them to the
 	// collection of known nodes in the network. We are allowed to spawn and kill other nodes
 	// at later points in time
 	m.AddNetworkNodes(numNodes)
 
-	return &Application {
-		mux: 		m,
-		numNodes: 	numNodes,
+	return &Application{
+		mux:      m,
+		numNodes: numNodes,
 	}
 }
 
@@ -111,16 +109,16 @@ func (app *Application) Stop() {
 	log.Printf("Done cleaning up\n")
 }
 
-func (app *Application) Run()  {
+func (app *Application) Run() {
 	app.mux.RunServers()
 }
 
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
-    if os.IsNotExist(err) {
-        return false
-    }
-    return !info.IsDir()
+	if os.IsNotExist(err) {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // TODO: complete this function
@@ -147,6 +145,5 @@ func validatePortNumber(portNum *int) {
 			fmt.Fprintf(os.Stderr, "Can't close connection on port %d: %s", *portNum, err)
 			panic(err)
 		}
-	} 
+	}
 }
-
