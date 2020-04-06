@@ -113,26 +113,31 @@ func (n *Node) Shutdown() {
 
 // Main entry point for handling Ifrit direct messaging
 func (n *Node) messageHandler(data []byte) ([]byte, error) {
-	var bulk message.BulkDataCreator
-	err := json.Unmarshal(data, &bulk)
+	var msg message.NodeMessage
+	err := json.Unmarshal(data, &msg)
 	if err != nil {
 		panic(err)
 	}
 
-	switch msgType := bulk.MessageType; msgType {
-	case message.MSG_TYPE_LOAD_NODE: 
-		fmt.Printf("About to load node\n")
+	switch msgType := msg.MessageType; msgType {
+	//case message.MSG_TYPE_LOAD_NODE: 
+	//	fmt.Printf("About to load node\n")
 		
 		// Create study files as well, regardless of wether or not the subject exists. 
 		// If the study exists, we still add the subject's at the node and link to them using
 		// 'ln -s'. The operations performed by this call sets the finite state of the 
 		// study. This means that any already existing files are deleted.
-		if err := n.fs.FeedBulkData(&bulk); err != nil {
-			panic(err)
-		}
-
+		/*if err := n.fs.FeedBulkData(&bulk); err != nil {
+			panic(err)jsonStr
+		*/
+	
+	case message.MSG_TYPE_GET_NODE_ID:
+		resp := fmt.Sprintf("%sADDRESS_DELIMITER%s", n.nodeName, n.Addr())
+		fmt.Printf("ADDR: %s\n", n.Addr())
+		return []byte(resp), nil
+		
 	default:
-		fmt.Printf("Unknown message type: %s\n", bulk.MessageType)
+		fmt.Printf("Unknown message type: %s\n", msg.MessageType)
 		return []byte("ERROR"), nil
 	}
 

@@ -10,7 +10,7 @@ import (
 	"crypto/tls"
 _	"log"
 	//"firestore/core/file"
-	//"firestore/core/message"
+	"firestore/core/message"
 	"firestore/comm"
 	"os/exec"
 	"syscall"
@@ -18,9 +18,10 @@ _	"log"
 	"ifrit"
 _	"bytes"
 _	"io"
+	"strings"
 	"os"
 	"bufio"
-_	"encoding/json"
+	"encoding/json"
 _	"encoding/binary"
 _	"io/ioutil"
 
@@ -68,7 +69,8 @@ func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	
+	go ifritClient.Start()
 	//ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
@@ -115,7 +117,7 @@ func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
 }
 
 func (m *Mux) Start() {
-	go m.ifritClient.Start()
+	//go m.ifritClient.Start()
 }
 
 func (m *Mux) RunServers() {
@@ -126,11 +128,9 @@ func (m *Mux) RunServers() {
 /** PUBLIC METHODS */
 func (m *Mux) AddNetworkNodes(numNodes int) {
 	m.nodeProcs = make(map[string]*exec.Cmd)
-	m.nodes 	= make(map[string]string)
-	
+
 	// Start the child processes aka. the internal Fireflies nodes
 	for i := 0; i < numNodes; i++ {
-		
 		nodeName := fmt.Sprintf("node_%d", i)
 		fmt.Printf("Adding %s\n", nodeName)
 		logfileName := fmt.Sprintf("%s_logfile", nodeName)
@@ -140,7 +140,7 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 		m.nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-		/*go func() {
+		go func() {
 			if err := nodeProc.Start(); err != nil {
 				panic(err)
 			}
@@ -148,20 +148,63 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 			if err := nodeProc.Wait(); err != nil {
 				panic(err)
 			}
-		}()*/
+		}()
+	}
+
+	// Wait for all nodes to become available
+	m.AssignNodeIdentifiers(numNodes)
+}
+
+// Assign the node identifier to the IP address in the Ifrit network
+func (m *Mux) AssignNodeIdentifiers(numNodes int) {
+	m.nodes = make(map[string]string)
+
+	for {
+		if len(m.ifritClient.Members()) == numNodes {
+			//fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
+			break
+		}
+
+		//fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
+		//fmt.Printf("This node: %s\n", m.ifritClient.Addr())
+	}
+
+	for _, dest := range m.ifritClient.Members() {
+		//fmt.Printf("Dest: %s\n", dest)
+		msg := message.NodeMessage{
+			MessageType: message.MSG_TYPE_GET_NODE_ID,
+		}
+
+		jsonStr, err := json.Marshal(msg)
+		if err != nil {
+			panic(err)
+		}
+	
+		// Request node identfier from the node known to the underlying Ifrit network
+		ch := m.ifritClient.SendTo(dest, jsonStr)
+
+		select {
+		case nodeID := <- ch: 
+			nodeName := strings.Split(string(nodeID), "ADDRESS_DELIMITER")[0]
+			nodeIP := strings.Split(string(nodeID), "ADDRESS_DELIMITER")[1]
+			if nodeName == "" || nodeIP == "" {
+				panic(errors.New("NodeID is nil!"))
+			}
+
+			// Add the node identifier to the known set of nodes
+			m.nodes[nodeName] = nodeIP
+		}
 	}
 }
 
 func (m *Mux) Stop() {
-	/*
-	fmt.Printf("KILL: %v\n",m.nodeProcs )
 	for _, cmd := range m.nodeProcs {
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
 			// might allow ourselves to fail silently here instead of panicing...
 			panic(err)
 		}
 	}
-*/
+
 	// Stop the underlying Ifrit client
 	m.ifritClient.Stop()
 }

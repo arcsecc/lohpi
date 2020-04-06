@@ -23,6 +23,7 @@ const (
 	MSG_TYPE_SET_NODE_FILES = "MSG_TYPE_SET_NODE_FILES"
 	MSG_TYPE_NEW_STUDY = "MSG_TYPE_NEW_STUDY"
 	MSG_TYPE_LOAD_NODE = "MSG_TYPE_LOAD_NODE"
+	MSG_TYPE_GET_NODE_ID = "MSG_TYPE_GET_NODE_ID"
 )
 
 const (
@@ -44,7 +45,9 @@ type BulkDataCreator struct {
 	FileSize float64 				`json:"file_size"`
 }
 
-
+type NodeMessage struct {
+	MessageType MsgType
+}
 
 // Returns a map of attributes -> [value1, value2, ...]. Can extended even further!!1!
 func FilterStringAttributes(attributes map[string]interface{}) (map[string]string, error) {

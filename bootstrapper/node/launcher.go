@@ -59,9 +59,9 @@ func main() {
 	}
 	
 	// POST the port number to the mux
-	if err := node.SendPortNumber(node.NodeName(), node.Addr(), muxPort); err != nil {
+	/*if err := node.SendPortNumber(node.NodeName(), node.Addr(), muxPort); err != nil {
 		panic(err)
-	}
+	}*/
 
 	// Wait for SIGTERM signal from the environment
 	channel := make(chan os.Signal, 2)

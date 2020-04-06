@@ -38,7 +38,24 @@ func (m *Mux) HttpHandler() error {
 	return nil
 }
 
+
 func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if r.Method != http.MethodGet {
+		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Mux's HTTP server running on port %d\n", m._httpPortNum)
+	fmt.Fprintf(w, "Mux's HTTPS server running on port %d\n", m.portNum)
+	fmt.Fprintf(w, "Flireflies nodes in this network:\nMux: %s\n", m.ifritClient.Addr())
+	for nodeID, addr := range m.nodes {
+	//	fmt.Fprintf(w, "IP address: %s\n", addr)
+		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", nodeID, addr)
+	}
+	
+	/*
 	defer r.Body.Close()
 	if r.Method != http.MethodGet {
 		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
@@ -51,7 +68,7 @@ func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Flireflies nodes in this network:\nMux: %s\n", m.ifritClient.Addr())
 	for n, addr := range m.nodes {
 		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", n, addr)
-	}
+	}*/
 }
 
 func (m *Mux) PopulateNode(w http.ResponseWriter, r *http.Request) {
