@@ -16,6 +16,7 @@ func (m *Mux) HttpsHandler() error {
 	// Utilities used in experiments
 	mux.HandleFunc("/set_port", m.SetPortNumber)
 	mux.HandleFunc("/network", m.Network)
+	//mux.HandleFunc("/get_data", m.GetData)
 	
 	m.httpServer = &http.Server{
 		Handler: mux,

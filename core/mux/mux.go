@@ -140,6 +140,7 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 		m.nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+		/*
 		go func() {
 			if err := nodeProc.Start(); err != nil {
 				panic(err)
@@ -148,7 +149,7 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 			if err := nodeProc.Wait(); err != nil {
 				panic(err)
 			}
-		}()
+		}()*/
 	}
 
 	// Wait for all nodes to become available

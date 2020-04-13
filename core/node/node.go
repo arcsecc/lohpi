@@ -120,16 +120,17 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	}
 
 	switch msgType := msg.MessageType; msgType {
-	//case message.MSG_TYPE_LOAD_NODE: 
-	//	fmt.Printf("About to load node\n")
+	case message.MSG_TYPE_LOAD_NODE: 
+		fmt.Printf("About to load node\n")
 		
 		// Create study files as well, regardless of wether or not the subject exists. 
 		// If the study exists, we still add the subject's at the node and link to them using
 		// 'ln -s'. The operations performed by this call sets the finite state of the 
 		// study. This means that any already existing files are deleted.
-		/*if err := n.fs.FeedBulkData(&bulk); err != nil {
-			panic(err)jsonStr
-		*/
+		if err := n.fs.FeedBulkData(&msg); err != nil {
+			return nil, err
+		}
+		
 	
 	case message.MSG_TYPE_GET_NODE_ID:
 		resp := fmt.Sprintf("%sADDRESS_DELIMITER%s", n.nodeName, n.Addr())

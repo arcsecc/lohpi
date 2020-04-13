@@ -127,7 +127,7 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var msg message.BulkDataCreator 
+	var msg message.NodeMessage 
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
 	var v interface{}
@@ -141,17 +141,48 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 
 	for k, v := range data {
 		switch k {
-			case "node":
+			case message.Node:
 				msg.Node = v.(string)
-			case "subject":
+			case message.Subject:
 				msg.Subject = v.(string)
-			case "study":
+			case message.Study:
 				msg.Study = v.(string)
-			case "required_attributes":
-				msg.Attributes = v.(map[string]interface {})
-			case "num_files":
+			case message.Required_attributes:
+				// Check if the incoming collection of attributes is valid
+				attrMap, ok := v.(map[string]interface{})
+				if ok {
+					fmt.Printf("k\tv: %v\t%v\n", k, v)
+				} else {
+					errMsg := fmt.Sprintf("Error: unknown attribute collection: %s", attrMap)
+					http.Error(w, errMsg, http.StatusUnprocessableEntity)
+					return
+				}
+
+				// Create the attributes collection to be used internally
+				msg.Attributes = make(map[string]string)
+
+				// Iterate the collection coming from the client.
+				// Make sure that the type and the string value of the key are valid
+				// Return error to the client if something fails
+				for attrKey, attr := range attrMap {
+					switch attrKey {
+					
+					// We might adjust the agility of the program here...
+					case message.Country, message.Research_network, message.Purpose:
+						attrValue, ok := attr.(string)
+						if ok {
+							msg.Attributes[attrKey] = attrValue
+							continue
+						}
+					default:
+						errMsg := fmt.Sprintf("Error: invalid attribute pair: %v\t%v", attrKey, attr)
+						http.Error(w, errMsg, http.StatusUnprocessableEntity)
+						return
+					}
+				}
+			case message.Num_files:
 				msg.NumFiles = v.(float64)
-			case "file_size":
+			case message.File_size:
 				msg.FileSize = v.(float64)
 			default:
 				errMsg := fmt.Sprintf("Error: unknown key: %s", k)
@@ -168,8 +199,6 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 
 	// Set the proper message type and marshall it to json
 	msg.MessageType = message.MSG_TYPE_LOAD_NODE
-	fmt.Printf("Data to send to node %s: %v\n", msg.Node, data)
-
 	serialized, err := json.Marshal(msg)
 	if err != nil {
 		panic(err)
@@ -177,8 +206,8 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 
 	ch := m.ifritClient.SendTo(m.nodes[msg.Node], serialized)
 	select {
-		case msg := <- ch: 
-			fmt.Printf("Response: %s\n", msg)
+		case resp := <- ch: 
+			fmt.Printf("Response: %s\n", resp)
 	}
 
 	w.WriteHeader(http.StatusOK)

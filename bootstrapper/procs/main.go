@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"firestore/core/mux"
+	"firestore/core/client"
 	"firestore/netutil"
 )
 
@@ -21,6 +22,9 @@ type Application struct {
 
 	// The collection of child processes
 	childProcs map[string]*exec.Cmd
+
+	// The collection of data users to query the Lohpi system
+	clients map[string]*client.Client
 
 	// The path to the executable node
 	execPath string
@@ -33,10 +37,12 @@ func main() {
 	var numNodes int
 	var portNum int
 	var httpPortNum int
+	var numClients int 
 	var execPath string = ""
 
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.IntVar(&numNodes, "n", 0, "Number of initial nodes in the network.")
+	arg.IntVar(&numClients, "c", 0, "Number of initial clients to interact with the network.")
 	arg.StringVar(&execPath, "e", "", "Lohpi node's executable path.")
 	arg.IntVar(&portNum, "p", -1, "Port number at which Lohpi runs. If not set or the selected port is busy, select an open port.")
 	arg.IntVar(&httpPortNum, "http_port", -1, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
@@ -44,6 +50,11 @@ func main() {
 
 	if numNodes == 0 {
 		fmt.Fprintf(os.Stderr, "Requires -n <number of initial nodes>. Exiting\n")
+		os.Exit(2)
+	}
+
+	if numClients == 0 {
+		fmt.Fprintf(os.Stderr, "Requires -c <number of initial client>. Exiting\n")
 		os.Exit(2)
 	}
 
@@ -69,7 +80,7 @@ func main() {
 		os.Exit(2)
 	}
 	// Life-cycle of the system here
-	app := NewApplication(numNodes, portNum, httpPortNum, execPath)
+	app := NewApplication(numNodes, numClients, portNum, httpPortNum, execPath)
 	app.Start()
 	app.Run()
 
@@ -82,8 +93,13 @@ func main() {
 	app.Stop()
 }
 
-func NewApplication(numNodes, portNum, httpPortNum int, execPath string) *Application {
+func NewApplication(numNodes, numClients, portNum, httpPortNum int, execPath string) *Application {
 	m, err := mux.NewMux(portNum, httpPortNum, execPath)
+	if err != nil {
+		panic(err)
+	}
+
+	clients, err := AddNetworkClients(numClients)
 	if err != nil {
 		panic(err)
 	}
@@ -94,8 +110,8 @@ func NewApplication(numNodes, portNum, httpPortNum int, execPath string) *Applic
 	m.AddNetworkNodes(numNodes)
 
 	return &Application{
-		mux:      m,
-		numNodes: numNodes,
+		mux:     m,
+		clients: clients,
 	}
 }
 
@@ -111,6 +127,11 @@ func (app *Application) Stop() {
 
 func (app *Application) Run() {
 	app.mux.RunServers()
+	
+	// Start the clients so that they can interact with Lohpi
+	for _, c := range app.clients {
+		go c.Run()
+	}
 }
 
 func fileExists(path string) bool {
@@ -119,6 +140,22 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+func AddNetworkClients(numClients int) (map[string]*client.Client, error) {
+	clients := make(map[string]*client.Client)
+
+	for i := 0; i < numClients; i++ {
+		clientName := fmt.Sprintf("Client_%d", i + 1)
+		c, err := client.NewClient(clientName)
+		if err != nil {
+			panic(err)
+			return nil, err
+		}
+		fmt.Printf("Added client with identifier '%s'\n", clientName)
+		clients[clientName] = c
+	}
+	return clients, nil
 }
 
 // TODO: complete this function

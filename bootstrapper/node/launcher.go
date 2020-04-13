@@ -19,7 +19,7 @@ func main() {
 	var logfile string
 	var nodeName string
 	var h logger.Handler
-	var muxPort uint
+	//var muxPort uint
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
@@ -27,7 +27,7 @@ func main() {
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.StringVar(&logfile, "logfile", "", "Absolute or relative path to log file.")
 	arg.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	arg.UintVar(&muxPort, "mp", 8080, "Port at which the mux runs.")
+	//arg.UintVar(&muxPort, "mp", 8080, "Port at which the mux runs.")
 
 	arg.Parse(os.Args[1:])
 

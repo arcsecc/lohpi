@@ -10,6 +10,7 @@ import (
 
 type MsgType string 
 
+// Different message types
 const (
 	PERMISSION_SET MsgType = "PERMISSION_SET"
 	PERMISSION_GET MsgType = "PERMISSION_GET"
@@ -26,11 +27,26 @@ const (
 	MSG_TYPE_GET_NODE_ID = "MSG_TYPE_GET_NODE_ID"
 )
 
+// Field states
 const (
 	MSG_EMPTY_FIELD = "Empty message field"
 	MSG_EMPTY_MESSAGE = "Empty message"
 	MSG_NEW_PERM_SET = "new permission set"	
 )
+
+// Required format of the bulk data creator 
+const (
+	Node = "node"
+	Subject = "subject"
+	Study = "study"
+	Required_attributes = "required_attributes"
+	Country = "country"
+	Research_network = "research_network"
+	Purpose = "purpose"
+	Num_files = "num_files"
+	File_size = "file_size"
+)
+
 
 var errInvalidMessageType = errors.New("Invalid message type. Expected map[string]interface{}")
 
@@ -40,13 +56,21 @@ type BulkDataCreator struct {
 	Subject string 				`json:"subject"`
 	Study string 				`json:"study"`
 	Attributes map[string]interface {}	 	`json:"allowed_attributes"`
-	DefaultAccess bool  		`json:"default_access"`
+	DefaultAccess bool  		`json:"default_access, omitempty"`
 	NumFiles float64 				`json:"num_files"`
 	FileSize float64 				`json:"file_size"`
 }
 
+// Type used to pass messages between the nodes. Always check the MsgType before
+// processing it any further
 type NodeMessage struct {
 	MessageType MsgType
+	Node 	string 				`json:"node"`
+	Subject string 				`json:"subject"`
+	Study string 				`json:"study"`
+	Attributes map[string]string	 	`json:"allowed_attributes"`
+	NumFiles float64 				`json:"num_files, omitempty"`
+	FileSize float64 				`json:"file_size"`
 }
 
 // Returns a map of attributes -> [value1, value2, ...]. Can extended even further!!1!

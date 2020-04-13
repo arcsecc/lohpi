@@ -12,7 +12,10 @@ import (
 	"io/ioutil"
 	"path"
 
-_	"firestore/core/policy"
+	"firestore/core/message"
+
+	"github.com/casbin/casbin"
+	"github.com/casbin/casbin/model"
 )
 
 var errSubjectExists = errors.New("Subject already exists")
@@ -213,13 +216,57 @@ func (self *Ptfs) addSubjectStudyFilesToStudy(subject, study string, numFiles in
 	enforced by the node.
 */
 func (self *Ptfs) SetSubjectPolicy(subject, study string, attrMap map[string]string) error {
+	fmt.Println("Setting new subject-study policy...")
 	fmt.Printf("Attributes map: %v\n", attrMap)
-	/*
-	pol := policy.NewSubjectPolicy(subject, study, attrMap)
-	self.policies[study] = pol
+	
+	// Constants required by Casbin library
+	/*const REQUEST_DEFINITION := "[request_definition]"
+	const POLICY_DEFINITION := "[policy_definition]"
+	const POLICY_EFFECT := "[policy_effect]"
 */
+	// This is the model describing the relation between the subject's policy and 
+	// the request from any data user who wants to see study data
+	/*policyModel := fmt.Sprintf("%sr = sub, obj, act\\
+								%sp = sub, obj, act\\
+*/
+
+	modelText := self.createPolicyModelString(attrMap)
+	m := model.Model{}
+	m.LoadModelFromText(modelText)
+	e, err := casbin.NewEnforcer(m)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("ModelText: %s\n", modelText)
+
+	// Create the map containing the policy enforcement. // Safely overwrite
+	// any previous map entries (and underlying maps)
+	self.policies[study] = make(map[string]*casbin.Enforcer)
+	self.policies[study][subject] = e
+
 	// Create a file in the protocol directory which contains all the policies 
 	// for the data in this study
+	// TODO store model text here!
+	// self.StoreModelText(modelText, args...)
 
 	return nil
+}
+
+// Returns the policy against which requests will be matched 
+func (self *Ptfs) createPolicyModelString(attrMap map[string]string) string {
+	modelText := fmt.Sprintf(`
+		[request_definition]
+		r = sub, obj, act
+		[policy_definition]
+		p = sub, obj, act
+		[policy_effect]
+		e = some(where (p.eft == allow))
+		[matchers]
+		m = r.sub.%s == r.obj.%s && r.sub.%s == r.obj.%s && r.sub.%s == r.obj.%s
+		`, attrMap[message.Country], attrMap[message.Country], 
+		attrMap[message.Research_network], attrMap[message.Research_network], 
+		attrMap[message.Purpose], attrMap[message.Purpose])
+
+	return modelText
 }

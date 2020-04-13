@@ -27,13 +27,14 @@ _	"time"
 	"strings"
 //	"io/ioutil"
 
-	"firestore/core/policy"
+//	"firestore/core/policy"
 
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
 	"github.com/pkg/xattr"
 	"github.com/spf13/viper"
 	"golang.org/x/sys/unix"
+	"github.com/casbin/casbin"
 )
 
 // Directory name constants
@@ -43,6 +44,9 @@ const METADATA_DIR = "metadata"
 const PROTOCOL_DIR = "protcol"
 const SUBJECTS_DIR = "subjects"
 const STUDIES_DIR = "studies"
+
+// Used by the policy manager to set the action requested
+const ACCESS = "read"
 
 // A magical prefix used by xattr
 const XATTR_PREFIX = "user."
@@ -86,7 +90,7 @@ type Ptfs struct {
 	// TODO: more bullet-proof identification of subjects..?
 	subjects map[string][]string			// subectID -> studies they participate in
 	studies map[string]interface{}			// studyID -> "". Used only for O(1) indexing
-	policies map[string]*policy.SubjectPolicy					// studyID -> policy.SubjectPolicy
+	policies map[string]map[string]*casbin.Enforcer					// studyID -> policy.SubjectPolicy
 
 	// WAT??
 	subjectPermissions map[string]string // subjectID -> permission
@@ -114,7 +118,7 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 		subjects: 				make(map[string][]string, 0),
 		studies: 				make(map[string]interface{}, 0),
 		subjectPermissions: 	make(map[string]string, 0),
-		policies:   			make(map[string]*policy.SubjectPolicy),
+		policies:   			make(map[string]map[string]*casbin.Enforcer),
 		ch: 					make(chan bool, 0),
 	}
 

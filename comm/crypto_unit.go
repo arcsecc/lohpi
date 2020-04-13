@@ -55,6 +55,7 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	var certs *certSet
 	var extValue []byte
 
+	/*
 	serviceAddr := strings.Split(identity.Locality[0], ":")
 	if len(serviceAddr) <= 0 {
 		return nil, errNoIp
@@ -63,7 +64,7 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	ip := net.ParseIP(serviceAddr[0])
 	if ip == nil {
 		return nil, errNoIp
-	}
+	}*/
 
 	priv, err := genKeys()
 	if err != nil {
@@ -74,6 +75,7 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 		addr := fmt.Sprintf("http://%s/certificateRequest", caAddr)
 		certs, err = sendCertRequest(priv, addr, identity)
 		if err != nil {
+			panic(err)
 			return nil, err
 		}
 	} else {
