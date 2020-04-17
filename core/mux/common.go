@@ -3,6 +3,12 @@ package mux
 import (
 	"firestore/core/message"
 
+	_"fmt"
+	"errors"
+	"math/rand"
+	"reflect"
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 )
 
@@ -18,7 +24,7 @@ func (m *Mux) nodeExists(node string) bool {
 
 // Returns true if the study is known to the network, returns false otherwise
 // In addition to checking the local cache, it broadcasts a query to the Lohpi network 
-// asking for the newest lists of studies known to all nodes
+// asking for the newest lists of studies known to all nodes.
 func (m *Mux) studyExists(study string) bool {
 	if _, ok := m.studyToNode[study]; ok {
 		return true
@@ -27,7 +33,7 @@ func (m *Mux) studyExists(study string) bool {
 	// If the study is unknown to the mux, ask the entire network 
 	// to push their newest list of studies they store
 	// TODO: Run the RPC in parallel
-	for _, dest := range m.ifritClient.Members() {
+	for nodeName, dest := range m.nodes {
 		msg := message.NodeMessage{
 			MessageType: 	message.MSG_TYPE_GET_STUDY_LIST,
 		}
@@ -39,11 +45,18 @@ func (m *Mux) studyExists(study string) bool {
 	
 		// Request node identfier from the node known to the underlying Ifrit network
 		ch := m.ifritClient.SendTo(dest, jsonStr)
-
+		studies := make([]string, 0)
 		select {
-		case resp := <- ch: 
-			_ = resp
+			case response := <- ch: 
+				reader := bytes.NewReader(response)
+				dec := gob.NewDecoder(reader)
+				if err := dec.Decode(&studies); err != nil {
+					panic(err)
+				}
 		}
+	
+		// Add the node to the list of studies the node stores 
+		m.addNodeToListOfStudies(nodeName, studies)
 	}
 
 	// Check the local chache again
@@ -85,4 +98,19 @@ func (m *Mux) getStudyNodes(study string) []string {
 		storageNodes = append(storageNodes, node)
 	}
 	return storageNodes
+}
+
+// Returns the node's string and IP that is selected to monitor access patterns in a given query
+func ( m *Mux) getMonitorNode() (string, string) {
+	keys := reflect.ValueOf(m.nodes).MapKeys()
+	nodeName, ok := keys[rand.Intn(len(keys))].Interface().(string)
+	if !ok {
+		panic(errors.New("Not a string type"))
+	}
+
+	nodeIP, ok := m.nodes[nodeName]
+	if !ok {
+		panic(errors.New("Not a string type"))
+	} 
+	return nodeName, nodeIP
 }

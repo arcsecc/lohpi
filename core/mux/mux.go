@@ -175,14 +175,15 @@ func (m *Mux) AssignNodeIdentifiers(numNodes int) {
 			break
 		}
 
-		fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
-		fmt.Printf("This node: %s\n", m.ifritClient.Addr())
+		//fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
+		//fmt.Printf("This node: %s\n", m.ifritClient.Addr())
 	}
 
+	// Broadcast a handshake to the network so that the mux's IP is known to the nodes.
+	// At the same time, the node's IP address and their string identifier are fetched.
 	for _, dest := range m.ifritClient.Members() {
-		//fmt.Printf("Dest: %s\n", dest)
 		msg := message.NodeMessage{
-			MessageType: 	message.MSG_TYPE_GET_NODE_ID,
+			MessageType: 	message.MSG_TYPE_MUX_HANDSHAKE,
 			MuxIP:			m.ifritClient.Addr(),
 		}
 

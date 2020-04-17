@@ -20,7 +20,6 @@ func (m *Mux) HttpHandler() error {
 
 	// Public methods exposed to data users (usually through cURL)
 	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/info", m.Info)
 	mux.HandleFunc("/make_bulk_data", m.CreateBulkData)
 	mux.HandleFunc("/node_info", m.NodeInfo)
 
@@ -44,7 +43,7 @@ func (m *Mux) HttpHandler() error {
 	return nil
 }
 
-
+// Returns network information and studies known to the network
 func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodGet {
@@ -59,18 +58,15 @@ func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
 	for nodeID, addr := range m.nodes {
 		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", nodeID, addr)
 	}
-}
 
-func (m *Mux) Info(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodGet {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
-		return
+	fmt.Fprintf(w, "Studies stored in the network:\n")
+	for study, nodes := range m.studyToNode {
+		fmt.Fprintf(w, "Study identifier: '%s'\tstorage node: ", study)
+		for _, node := range nodes {
+			fmt.Fprintf(w, "'%s' ", node)
+		}
+		fmt.Fprintf(w, "\n")
 	}
-
-	w.WriteHeader(http.StatusOK)
-	resp := fmt.Sprintf("Studies: %v\n", m.studyToNode)
-	fmt.Fprintf(w, "%s", resp)
 }
 
 // An end-point used to tell a node to generate data and associated policies that
@@ -190,7 +186,6 @@ func (m *Mux) NodeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var msg message.NodeMessage
-	
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&msg)
     if err != nil {
@@ -292,7 +287,7 @@ func (m *Mux) NodeRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	statusCode, result, err := m.GetStudyData(msg)
+	statusCode, result, err := m.GetStudyDataFromNode(msg)
 	if err != nil {
 		http.Error(w, err.Error(), statusCode)
 		return

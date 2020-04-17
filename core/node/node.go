@@ -183,7 +183,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// send the entire thing if we don't have to!
 		return n.StudyList()
 		
-	case message.MSG_TYPE_GET_NODE_ID:
+	case message.MSG_TYPE_MUX_HANDSHAKE:
 		n.muxIP = msg.MuxIP
 		resp := fmt.Sprintf("%sADDRESS_DELIMITER%s", n.nodeName, n.Addr())
 		return []byte(resp), nil
@@ -197,6 +197,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_DATA:
 		return n.StudyData(msg)
 
+	case message.MSG_TYPE_MONITORING_NODE:
+		fmt.Println("TODO: implement access monitoring")
+
 	default:
 		fmt.Printf("Unknown message type: %s\n", msg.MessageType)
 		return []byte("ERROR"), nil
@@ -206,8 +209,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 }
 
 func (n *Node) NodeInfo() ([]byte, error) {
-	str := fmt.Sprintf("Info about node '%s':\n->Ifrit IP: %s\n->Ifrit ID: %s\n->Stored studies: %s\n",
-	n.nodeName, n.Addr(), n.c.Id(), n.fs.Studies())
+	str := fmt.Sprintf("Info about node '%s':\n->Ifrit IP: %s\n->Stored studies: %s\n",
+	n.nodeName, n.Addr(), n.fs.Studies())
 	return []byte(str), nil
 }
 

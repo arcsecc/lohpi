@@ -178,7 +178,7 @@ func addNetworkNodes(numNodes int, execPath string) {
 		// Process tree map
 		nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		/*
+		
 		go func() {
 			if err := nodeProc.Start(); err != nil {
 				panic(err)
@@ -187,7 +187,7 @@ func addNetworkNodes(numNodes int, execPath string) {
 			if err := nodeProc.Wait(); err != nil {
 				panic(err)
 			}
-		}()*/
+		}()
 	}
 }
 
