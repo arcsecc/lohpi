@@ -85,6 +85,7 @@ func (self *Ptfs) studyExists(study string) bool {
 }
 
 func (self *Ptfs) createStudy(study string) error {
+	// Add the study string to the map of known studies
 	self.studies[study] = ""
 	dirPath := fmt.Sprintf("%s/%s/%s", self.mountDir, STUDIES_DIR, study)
 	if err := CreateDirectory(dirPath); err != nil {

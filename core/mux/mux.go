@@ -8,7 +8,7 @@ import (
 	"net"
 	"net/http"
 	"crypto/tls"
-_	"log"
+	"log"
 	//"firestore/core/file"
 	"firestore/core/message"
 	"firestore/comm"
@@ -16,14 +16,15 @@ _	"log"
 	"syscall"
 	"firestore/netutil"
 	"ifrit"
-_	"bytes"
+	"bytes"
 _	"io"
 	"strings"
 	"os"
 	"bufio"
 	"encoding/json"
-_	"encoding/binary"
+	"encoding/gob"
 _	"io/ioutil"
+	"sync"
 
 	//"crypto/x509"
 	"crypto/x509/pkix"
@@ -42,10 +43,11 @@ var (
 // we could simply delegate the enitre...
 type Mux struct {
 	ifritClient *ifrit.Client
-	nodeProcs 		map[string]*exec.Cmd
-	nodes			map[string]string
-	subjects 		map[string][]string		// subjectID -> {node_1, node_2, ...}
-	execPath	string
+	nodeProcs 		map[string]*exec.Cmd		// nodeName -> process
+
+	nodeListLock 	sync.RWMutex
+	nodes			map[string]string			// nodeName -> IP address
+	studyToNode 		map[string][]string 	//study_1 -> {node_1, node_2, ...}
 
 	// HTTPS-related
 	portNum 	int
@@ -60,7 +62,7 @@ type Mux struct {
 }
 
 // Consider using 
-func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
+func NewMux(portNum, _portNum int) (*Mux, error) {
 	if err := readConfig(); err != nil {
 		panic(err)
 	}
@@ -85,7 +87,7 @@ func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
 	pk := pkix.Name{
 		Locality: []string{listener.Addr().String()},
 	}
-
+	
 	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
 	if err != nil {
 		return nil, err
@@ -103,7 +105,7 @@ func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
 	return &Mux{
 		ifritClient: 	ifritClient,
 		nodes:			make(map[string]string),
-		execPath: 		execPath,
+		studyToNode: 	make(map[string][]string),
 
 		// HTTPS
 		portNum: 		portNum,
@@ -113,11 +115,20 @@ func NewMux(portNum, _portNum int, execPath string) (*Mux, error) {
 		// HTTP
 		_httpPortNum: 	_portNum,
 		_httpListener:  _httpListener,
+
+		// Sync
+		nodeListLock: sync.RWMutex{},
 	}, nil
 }
 
 func (m *Mux) Start() {
-	//go m.ifritClient.Start()
+	go m.ifritClient.Start()
+	
+	// Build an initial collection of the studies associated with a subject
+	// by broadcasting a message telling each network members to return a map of 
+	// study -> subject. Apart from calling UpdateStudyCache() now, call it somewhere
+	// else in regular time intervals
+	//m.FullUpdateCache()
 }
 
 func (m *Mux) RunServers() {
@@ -126,20 +137,20 @@ func (m *Mux) RunServers() {
 }
 
 /** PUBLIC METHODS */
+/*
 func (m *Mux) AddNetworkNodes(numNodes int) {
 	m.nodeProcs = make(map[string]*exec.Cmd)
 
 	// Start the child processes aka. the internal Fireflies nodes
 	for i := 0; i < numNodes; i++ {
 		nodeName := fmt.Sprintf("node_%d", i)
-		fmt.Printf("Adding %s\n", nodeName)
+		//fmt.Printf("Adding %s\n", nodeName)
 		logfileName := fmt.Sprintf("%s_logfile", nodeName)
 		nodeProc := exec.Command(m.execPath, "-name", nodeName, "-logfile", logfileName)
 		
 		// Process tree map
 		m.nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
 		/*
 		go func() {
 			if err := nodeProc.Start(); err != nil {
@@ -149,31 +160,30 @@ func (m *Mux) AddNetworkNodes(numNodes int) {
 			if err := nodeProc.Wait(); err != nil {
 				panic(err)
 			}
-		}()*/
-	}
-
-	// Wait for all nodes to become available
-	m.AssignNodeIdentifiers(numNodes)
+		}()
+	}*
 }
-
+*/
 // Assign the node identifier to the IP address in the Ifrit network
 func (m *Mux) AssignNodeIdentifiers(numNodes int) {
 	m.nodes = make(map[string]string)
 
+	// TODO: Timeout after n attempts to add the members to the list
 	for {
 		if len(m.ifritClient.Members()) == numNodes {
 			//fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
 			break
 		}
 
-		//fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
-		//fmt.Printf("This node: %s\n", m.ifritClient.Addr())
+		fmt.Printf("Len members: %v\t\n", m.ifritClient.Members())
+		fmt.Printf("This node: %s\n", m.ifritClient.Addr())
 	}
 
 	for _, dest := range m.ifritClient.Members() {
 		//fmt.Printf("Dest: %s\n", dest)
 		msg := message.NodeMessage{
-			MessageType: message.MSG_TYPE_GET_NODE_ID,
+			MessageType: 	message.MSG_TYPE_GET_NODE_ID,
+			MuxIP:			m.ifritClient.Addr(),
 		}
 
 		jsonStr, err := json.Marshal(msg)
@@ -193,7 +203,69 @@ func (m *Mux) AssignNodeIdentifiers(numNodes int) {
 			}
 
 			// Add the node identifier to the known set of nodes
+			m.nodeListLock.Lock() // do we really need this?
 			m.nodes[nodeName] = nodeIP
+			m.nodeListLock.Unlock()
+			log.Printf("Added %s to the network\n", nodeName)
+		}
+	}
+}
+
+// Ask the network for a global view of the sets of studies 
+// all nodes have. Should be called as early as possible to update its view
+// as it is used to handle client requests
+func (m *Mux) FullUpdateCache() {
+	for nodeID, dest := range m.nodes {
+		studies := make([]string, 0)
+		msg := message.NodeMessage{
+			MessageType: message.MSG_TYPE_GET_STUDY_LIST,
+		}
+	
+		jsonStr, err := json.Marshal(msg)
+		if err != nil {
+			panic(err)
+		}
+
+		// Request node identfier from the node known to the underlying Ifrit network
+		ch := m.ifritClient.SendTo(dest, jsonStr)
+	
+		// TOOD: Use goroutines to optimize gathering of data!
+		select {
+		case response := <- ch: 
+			reader := bytes.NewReader(response)
+			dec := gob.NewDecoder(reader)
+			if err := dec.Decode(&studies); err != nil {
+				panic(err)
+			}
+		}
+
+		// TODO: do not create new string array for each invocation;
+		// instead check if the study exists. If so, append the node to the
+		// list if it does not exist in the map entry's string array
+		m.addNodeToListOfStudies(nodeID, studies)
+	}
+}
+
+// Broadcast the mux's IP address to the Lohpi network
+func (m *Mux) BroadcastIP() {
+	for _, dest := range m.nodes {
+		msg := message.NodeMessage{
+			MessageType: message.MSG_TYPE_SET_MUX_IP,
+			MuxIP: m.ifritClient.Addr(),
+		}
+	
+		jsonStr, err := json.Marshal(msg)
+		if err != nil {
+			panic(err)
+		}
+
+		// Request node identfier from the node known to the underlying Ifrit network
+		ch := m.ifritClient.SendTo(dest, jsonStr)
+	
+		// TOOD: Use goroutines to optimize broadcast of data!
+		select {
+		case response := <- ch: 
+			fmt.Printf("Resp: %s\n", response)
 		}
 	}
 }

@@ -59,3 +59,10 @@ func (self *Ptfs) FeedBulkData(msg *message.NodeMessage) error {
 	return nil
 }
 
+func (self *Ptfs) Studies() []string {
+	studies := make([]string, 0)
+	for study := range self.studies {
+		studies = append(studies, study)
+	}
+	return studies
+}

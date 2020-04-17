@@ -113,10 +113,10 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 	ptfs := Ptfs{
 		startDir: 				startDir,
 		mountDir: 				mountDir,
-		nodeID: 				nodeID,
-		xattrFlag: 				false,
-		subjects: 				make(map[string][]string, 0),
-		studies: 				make(map[string]interface{}, 0),
+		nodeID: 				nodeID,	
+		xattrFlag: 				false, // can we set xattr?
+		subjects: 				make(map[string][]string, 0),		
+		studies: 				make(map[string]interface{}, 0),	
 		subjectPermissions: 	make(map[string]string, 0),
 		policies:   			make(map[string]map[string]*casbin.Enforcer),
 		ch: 					make(chan bool, 0),

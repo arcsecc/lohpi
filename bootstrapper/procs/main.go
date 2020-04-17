@@ -49,6 +49,7 @@ func main() {
 	arg.Parse(os.Args[1:])
 
 	if numNodes == 0 {
+		fmt.Printf("IS 0\n")
 		fmt.Fprintf(os.Stderr, "Requires -n <number of initial nodes>. Exiting\n")
 		os.Exit(2)
 	}
@@ -89,17 +90,12 @@ func main() {
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel
 
-	// Stop the entire system
+	// Stop the entire system bye bye thx
 	app.Stop()
 }
 
 func NewApplication(numNodes, numClients, portNum, httpPortNum int, execPath string) *Application {
-	m, err := mux.NewMux(portNum, httpPortNum, execPath)
-	if err != nil {
-		panic(err)
-	}
-
-	clients, err := AddNetworkClients(numClients)
+	m, err := mux.NewMux(portNum, httpPortNum)
 	if err != nil {
 		panic(err)
 	}
@@ -107,16 +103,41 @@ func NewApplication(numNodes, numClients, portNum, httpPortNum int, execPath str
 	// Call this to create a process tree from the node module. Add them to the
 	// collection of known nodes in the network. We are allowed to spawn and kill other nodes
 	// at later points in time
-	m.AddNetworkNodes(numNodes)
+	// TODO: Remove 'AddNetworkNodes' from mux module
+	//m.AddNetworkNodes(numNodes)
+	
+	// Wait for all nodes to become available. Notify 
+	// the mux's IP address to the rest of the network
+	// TODO: clean up in abstractions here! 
+//	m.AssignNodeIdentifiers(numNodes)
+	//m.BroadcastIP()
+
+	// Start the clients who will query Lohpi regularly
+	/*clients, err := addNetworkClients(numClients)
+	if err != nil {
+		panic(err)
+	}*/
 
 	return &Application{
 		mux:     m,
-		clients: clients,
+		numNodes: numNodes,
+		execPath: execPath,
+		//clients: clients,
 	}
 }
 
 func (app *Application) Start() {
+	// Always start the mux first
 	app.mux.Start()
+
+	// Add a initial set of working Lohpi nodes
+	addNetworkNodes(app.numNodes, app.execPath)
+
+	// Since we assume a static membership for now, we need to wait for all nodes to 
+	// be available.
+	app.mux.AssignNodeIdentifiers(app.numNodes)
+
+	// TODO: Add feature for dynamic membership later
 }
 
 func (app *Application) Stop() {
@@ -129,9 +150,9 @@ func (app *Application) Run() {
 	app.mux.RunServers()
 	
 	// Start the clients so that they can interact with Lohpi
-	for _, c := range app.clients {
+	/*for _, c := range app.clients {
 		go c.Run()
-	}
+	}*/
 }
 
 func fileExists(path string) bool {
@@ -142,7 +163,35 @@ func fileExists(path string) bool {
 	return !info.IsDir()
 }
 
-func AddNetworkClients(numClients int) (map[string]*client.Client, error) {
+func addNetworkNodes(numNodes int, execPath string) {
+	nodeProcs := make(map[string]*exec.Cmd)
+
+	fmt.Printf("numNodes: %d\n", numNodes)
+
+	// Start the child processes aka. the internal Fireflies nodes
+	for i := 0; i < numNodes; i++ {
+		nodeName := fmt.Sprintf("node_%d", i)
+		fmt.Printf("Adding %s\n", nodeName)
+		logfileName := fmt.Sprintf("%s_logfile", nodeName)
+		nodeProc := exec.Command(execPath, "-name", nodeName, "-logfile", logfileName)
+		
+		// Process tree map
+		nodeProcs[nodeName] = nodeProc
+		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		/*
+		go func() {
+			if err := nodeProc.Start(); err != nil {
+				panic(err)
+			}
+
+			if err := nodeProc.Wait(); err != nil {
+				panic(err)
+			}
+		}()*/
+	}
+}
+
+func addNetworkClients(numClients int) (map[string]*client.Client, error) {
 	clients := make(map[string]*client.Client)
 
 	for i := 0; i < numClients; i++ {

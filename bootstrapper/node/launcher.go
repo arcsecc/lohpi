@@ -53,6 +53,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	
 	node.StartIfritClient()
 	if err := node.MountFuse(); err != nil {
 		panic(err)
