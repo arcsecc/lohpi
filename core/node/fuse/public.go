@@ -11,6 +11,8 @@ import (
 	"firestore/core/message"
 )
 func (self *Ptfs) FeedBulkData(msg *message.NodeMessage) error {
+	fmt.Printf("In FeedBulkData we got %s\n", msg.Populator.MetaData.Meta_data_info.DataFields[0].FilePattern.Directory)
+	/*
 	// Check if subject's data is already stored by FUSE
 	if self.subjectExists(msg.Subject) {
 		fmt.Printf("Subject exists. Continuing...\n")
@@ -55,7 +57,7 @@ func (self *Ptfs) FeedBulkData(msg *message.NodeMessage) error {
 	// The policies are assigned to "this subject" participating in "this study"
 	if err := self.SetSubjectPolicy(msg.Subject, msg.Study, msg.Attributes); err != nil {
 		return err
-	}
+	}*/
 	return nil
 }
 

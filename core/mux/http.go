@@ -20,7 +20,7 @@ func (m *Mux) HttpHandler() error {
 
 	// Public methods exposed to data users (usually through cURL)
 	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/make_bulk_data", m.CreateBulkData)
+	mux.HandleFunc("/load_node", m.CreateBulkData)
 	mux.HandleFunc("/node_info", m.NodeInfo)
 
 	// TMP function: used to trigger different functionalities in Lohpi
@@ -88,82 +88,25 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 	var msg message.NodeMessage 
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
-	var v interface{}
+	//var v interface{}
 
 	// Unmarshal the request body from the client
-	err := json.Unmarshal(body.Bytes(), &v)
+	/*err := json.Unmarshal(body.Bytes(), &v)
+	if err != nil {
+		panic(err)
+	}*/
+
+	// Client data is stored by 'data'. We need to use interface{} because we don't know 
+	// the format of the data
+	//data := v.(map[string]interface{})
+	data := body.Bytes()
+
+	nodePopulator, err := message.NewNodePopulator(data)
 	if err != nil {
 		panic(err)
 	}
 
-	// Client data is stored by 'data'. We need to use interface{} because we don't know 
-	// the format of the data
-	data := v.(map[string]interface{})
-
-	// Iterate the collection of key-value pairs comming from the client.
-	// As of now, we require a pre-defined format of the bulk data generator parameters.
-	// This may be subject to change in the future.
-	for key, value := range data {
-
-		// The key needs to be spelled correctly. Use type assertion as well
-		// to ensure correctness
-		switch key {
-			case message.Node:
-				msg.Node = value.(string)
-			case message.Subject:
-				msg.Subject = value.(string)
-			case message.Study:
-				msg.Study = value.(string)
-
-			// 'required_attributes' is a map[string]string type.
-			case message.Required_attributes:
-
-				// Check if the incoming collection of attributes is invalid. If they are,
-				// return an error message to the client
-				attrMap, ok := value.(map[string]interface{})
-				if !ok {
-					errMsg := fmt.Sprintf("Error: unknown attribute collection: %s", attrMap)
-					http.Error(w, errMsg, http.StatusUnprocessableEntity)
-					return
-				}
-
-				// Create the attributes collection to be used internally
-				msg.Attributes = make(map[string]string)
-
-				// Iterate the collection coming from the client.
-				// Make sure that the type and the string value of the key are valid
-				// Return error to the client if something fails
-				for attrKey, attr := range attrMap {
-					switch attrKey {
-					
-					// We might adjust the agility of the program here...
-					case message.Country, message.Research_network, message.Purpose:
-						attrValue, ok := attr.(string)
-						if ok {
-							msg.Attributes[attrKey] = attrValue
-							continue
-						}
-					default:
-						errMsg := fmt.Sprintf("Error: invalid attribute pair: %v\t%v", attrKey, attr)
-						http.Error(w, errMsg, http.StatusUnprocessableEntity)
-						return
-					}
-				}
-			case message.Num_files:
-				msg.NumFiles = value.(float64)
-			case message.File_size:
-				msg.FileSize = value.(float64)
-			default:
-				errMsg := fmt.Sprintf("Error: unknown key: %s", key)
-				http.Error(w, errMsg, http.StatusUnprocessableEntity)
-				return
-		}
-	}
-
-	// Set the proper message type
-	msg.MessageType = message.MSG_TYPE_LOAD_NODE
-
-	if err := m.StoreNodeData(msg); err != nil {
+	if err := m.StoreNodeData(nodePopulator); err != nil {
 		errMsg := fmt.Sprintf("Error: %s", err)
 		http.Error(w, errMsg, http.StatusUnprocessableEntity)
 		return

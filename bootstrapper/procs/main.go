@@ -179,6 +179,7 @@ func addNetworkNodes(numNodes int, execPath string) {
 		nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		
+		/*
 		go func() {
 			if err := nodeProc.Start(); err != nil {
 				panic(err)
@@ -187,8 +188,9 @@ func addNetworkNodes(numNodes int, execPath string) {
 			if err := nodeProc.Wait(); err != nil {
 				panic(err)
 			}
-		}()
+		}()*/
 	}
+	
 }
 
 func addNetworkClients(numClients int) (map[string]*client.Client, error) {

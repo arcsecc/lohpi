@@ -39,20 +39,28 @@ func (m *Mux) GetNodeInfo(node string) (string, error) {
 }
 
 // Orders a node to create test data for it to store dummy data and assoicated data policies
-func (m *Mux) StoreNodeData(msg message.NodeMessage) error {
+func (m *Mux) StoreNodeData(np *message.NodePopulator) error {
+	node := np.Node
+
 	// Ensure that the node is known to the mux
-	if !m.nodeExists(msg.Node) {
-		errMsg := fmt.Sprintf("Unknown node: %s", msg.Node)
+	if !m.nodeExists(node) {
+		errMsg := fmt.Sprintf("Unknown node: %s", node)
 		return errors.New(errMsg)
 	}
 
-	// Set the proper message type and marshall it to JSON format
-	serialized, err := json.Marshal(msg)
+	msg := &message.NodeMessage{
+		MessageType: 	message.MSG_TYPE_LOAD_NODE,
+		Populator: 		np,
+	}
+
+	fmt.Printf("to send: %s\n", np)
+
+	serializedMsg, err := msg.Encode()
 	if err != nil {
 		return err
 	}
 
-	ch := m.ifritClient.SendTo(m.nodes[msg.Node], serialized)
+	ch := m.ifritClient.SendTo(m.nodes[node], serializedMsg)
 	studies := make([]string, 0)
 	select {
 		case response := <- ch: 
