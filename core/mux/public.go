@@ -53,8 +53,6 @@ func (m *Mux) StoreNodeData(np *message.NodePopulator) error {
 		Populator: 		np,
 	}
 
-	fmt.Printf("to send: %s\n", np)
-
 	serializedMsg, err := msg.Encode()
 	if err != nil {
 		return err

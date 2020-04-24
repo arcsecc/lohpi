@@ -11,11 +11,12 @@ import (
 	"math/rand"
 	"io/ioutil"
 	"path"
+	"time"
 
 	"firestore/core/message"
 
-	"github.com/casbin/casbin"
-	"github.com/casbin/casbin/model"
+_	"github.com/casbin/casbin"
+_	"github.com/casbin/casbin/model"
 )
 
 var errSubjectExists = errors.New("Subject already exists")
@@ -52,6 +53,7 @@ func deleteDirectoryTree(dirPath string) error {
 	return nil
 }
 
+// Returns true if 'path' exists, returns false otherwise
 func fileExists(path string) (bool, error) {
     _, err := os.Stat(path)
     if err == nil { 
@@ -84,6 +86,8 @@ func (self *Ptfs) studyExists(study string) bool {
 	return false
 }
 
+// Adds 'study' to the set of known studies for this node. It also creatres the directories
+// needed to store this study.
 func (self *Ptfs) createStudy(study string) error {
 	// Add the study string to the map of known studies
 	self.studies[study] = ""
@@ -153,13 +157,13 @@ func (self *Ptfs) createSubjectStudyFiles(subject, study string, numFiles, fileS
 		studyFile, err := os.Create(filePath)
 
 		if err != nil {
-			panic(err)
+			return err
 		}
 	
 		fileContents := make([]byte, fileSize)
 		_, err = rand.Read(fileContents)
 		if err != nil { 
-			panic(err)
+			return err
 		}
 			
 		// BUG: file won't write
@@ -169,7 +173,7 @@ func (self *Ptfs) createSubjectStudyFiles(subject, study string, numFiles, fileS
 		}
 		err = studyFile.Close()
 		if err != nil {
-			panic(err)
+			return err
 		}
 	}
 	return nil
@@ -197,7 +201,6 @@ func (self *Ptfs) addSubjectStudyFilesToStudy(subject, study string, numFiles in
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -216,9 +219,9 @@ func (self *Ptfs) addSubjectStudyFilesToStudy(subject, study string, numFiles in
 	Each model describes the relation between the study and the subject's policy
 	enforced by the node.
 */
-func (self *Ptfs) SetSubjectPolicy(subject, study string, attrMap map[string]string) error {
+func (self *Ptfs) SetSubjectPolicy(subject, study string, policy_attributes map[string][]string) error {
 	fmt.Println("Setting new subject-study policy...")
-	fmt.Printf("Attributes map: %v\n", attrMap)
+	fmt.Printf("Attributes map: %v\n", policy_attributes)
 	
 	// Constants required by Casbin library
 	/*const REQUEST_DEFINITION := "[request_definition]"
@@ -231,7 +234,7 @@ func (self *Ptfs) SetSubjectPolicy(subject, study string, attrMap map[string]str
 								%sp = sub, obj, act\\
 */
 
-	modelText := self.createPolicyModelString(attrMap)
+	/*modelText := self.createPolicyModelString(attrMap)
 	m := model.Model{}
 	m.LoadModelFromText(modelText)
 	e, err := casbin.NewEnforcer(m)
@@ -244,12 +247,14 @@ func (self *Ptfs) SetSubjectPolicy(subject, study string, attrMap map[string]str
 	// Create the map containing the policy enforcement. // Safely overwrite
 	// any previous map entries (and underlying maps)
 	self.policies[study] = make(map[string]*casbin.Enforcer)
-	self.policies[study][subject] = e
+	self.policies[study][subject] = e*/
 
 	// Create a file in the protocol directory which contains all the policies 
 	// for the data in this study
 	// TODO store model text here!
 	// self.StoreModelText(modelText, args...)
+
+
 
 	return nil
 }
@@ -270,4 +275,10 @@ func (self *Ptfs) createPolicyModelString(attrMap map[string]string) string {
 		attrMap[message.Purpose], attrMap[message.Purpose])
 
 	return modelText
+}
+
+// Return a number in the range [a, b]
+func getRandomInt(a, b int) int {
+	rand.Seed(time.Now().UnixNano())
+	return a + rand.Intn(b - a + 1)
 }

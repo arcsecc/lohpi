@@ -159,6 +159,7 @@ func (n *Node) Shutdown() {
 }
 
 // Main entry point for handling Ifrit direct messaging
+// TODO: Use go-routines to avoid clients waiting for replies
 func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	var msg message.NodeMessage
 	err := json.Unmarshal(data, &msg)
@@ -174,7 +175,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// If the study exists, we still add the subject's at the node and link to them using
 		// 'ln -s'. The operations performed by this call sets the finite state of the 
 		// study. This means that any already existing files are deleted.
-		if err := n.fs.FeedBulkData(&msg); err != nil {
+		if err := n.fs.FeedBulkData(msg.Populator); err != nil {
 			return nil, err
 		}
 
@@ -199,6 +200,10 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 
 	case message.MSG_TYPE_MONITORING_NODE:
 		fmt.Println("TODO: implement access monitoring")
+
+	case message.MSG_TYPE_CHANGE_SUBJECT_POLICY:
+		fmt.Println("TODO: implement ChangeSubjectPolicy")
+		//return n.ChangeSubjectPolicy(msg)
 
 	default:
 		fmt.Printf("Unknown message type: %s\n", msg.MessageType)

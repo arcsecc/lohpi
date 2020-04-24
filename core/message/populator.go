@@ -15,26 +15,27 @@ import (
 //
 // Please refer to the lohpi/resources/metadata/studies/*.json files.
 type NodePopulator struct {
-	Node 				string		
-	Subjects 			[]string 
-	MinFiles, MaxFiles 	int
-	MetaData			*MetaData	
+	Node 				string		// mandatory	
+	Subjects 			[]string 	// mandatory
+	MinFiles, MaxFiles 	int			// mandatory
+	MetaData			*MetaData	// mandatory
 }
 
 // This type describes the meta-data assoicated with each study. Note that type MetaData is a subset of
 // the type 'NodePopulator'. When we assign metadata to a study, we simply extract the variable of this type
 // from a NodePopulator. 
 type MetaData struct {
-	Extras 					map[string][]byte
-	Rec_attr				map[string][]byte
-	Data_protection_attr 	map[string][]byte
-	Meta_data_info			*MetaDataInfo
+	Meta_data_info			*MetaDataInfo		// mandatory
+	Rec_attr				map[string][]byte	// mandatory
+	Data_protection_attr 	map[string][]byte	// mandatory
+	Extras 					map[string][]byte	// optional fields
 }
 
 type MetaDataInfo struct {
-	Policies 		map[string][]byte
-	Extras 			map[string][]byte
-	DataFields 		[]*DataField
+	StudyName 		string 					// mandatory
+	DataFields 		[]*DataField			// mandatory
+	Policies 		map[string][]byte		// mandatory
+	Extras 			map[string][]byte		// optional fields
 }
 
 type DataField struct {
@@ -44,9 +45,9 @@ type DataField struct {
 }
 
 type FilePattern struct {
-	Directory 		string
-	MultipleFiles 	string
-	Extras 			map[string][]byte
+	Directory 		string					// mandatory
+	MultipleFiles 	string					// mandatory
+	Extras 			map[string][]byte		// optional fields
 }
 
 func NewNodePopulator(input []byte) (*NodePopulator, error) {
@@ -89,6 +90,7 @@ func NewNodePopulator(input []byte) (*NodePopulator, error) {
 	}, nil
 }
 
+// Returns this object encoded
 func (np *NodePopulator) Encode() ([]byte, error) {
 	return json.Marshal(np)
 }
@@ -115,35 +117,58 @@ func NewMetaData(jsonFile []byte) (*MetaData, error) {
 	}
 
 	return &MetaData{
-		Extras: 					arbitraryMetaDataObjects,
+		Extras: 				arbitraryMetaDataObjects,
 		Rec_attr:				rec_attr,
 		Data_protection_attr: 	dataProtectionAttr,
 		Meta_data_info:			metaDataInfo,
 	}, nil
 }
 
+// Returns a new MetaDataInfo
 func NewMetaDataInfo(jsonFile []byte) (*MetaDataInfo, error) {
 	// Get mandatory fields (not 'policy-attributes' and 'data-field')
 	var err error
+
+	// Get all extra objects in 'meta-data-info"
 	arbitraryMetaDataInfoObjects, err := getObjectsAndRemoveIgnoredObjects(jsonFile, []string{"policy-attributes", "data-fields"}, "meta-data", "meta-data-info")
 	if err != nil {
 		return nil, err
 	}
+
+	// Get all extra objects in 'policy-attributes'
 	policies, err := getObjectsAndRemoveIgnoredObjects(jsonFile, []string{}, "meta-data", "meta-data-info", "policy-attributes")
 	if err != nil {
 		return nil, err
 	}
 
+	// Get the 'data-fields' array
 	dataFields, err := getDataFields(jsonFile)
 	if err != nil {
 		return nil, err
 	}
 
+	// Get the study name
+	studyName, err := jsonparser.GetString(jsonFile, "meta-data", "meta-data-info", "study-name")
+	if err != nil {
+		return nil, err
+	}
+
 	return &MetaDataInfo{
+		StudyName:	studyName,
 		Policies: 	policies,
 		Extras:		arbitraryMetaDataInfoObjects,
 		DataFields: dataFields,
 	}, nil
+}
+
+// Returns the policy attributes for a particular study
+func (mdf *MetaDataInfo) PolicyAttriuteStrings() map[string][]string {
+	policies := make(map[string][]string)
+	for attr, values := range mdf.Policies {
+		policies[attr] = make([]string, 0)
+		policies[attr] = append(policies[attr], string(values))
+	}
+	return policies
 }
 
 // Returns a new 'data-field' element in the 'data-fields' array
@@ -151,29 +176,35 @@ func NewDataFieldElement(jsonFile []byte, index string, fp *FilePattern) (*DataF
 	other := make(map[string][]byte)
 	var name string 
 
-	_ = jsonparser.ObjectEach(jsonFile, func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
+	// Fetch all objects in a 'data-fields' array entry
+	err := jsonparser.ObjectEach(jsonFile, func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
 		switch string(key) {
 		case "file-pattern":
+			// Nothing to do with 'file-pattern"
 		case "name":
 			if dataType == jsonparser.String {
 				name = string(value)
 			} else {
-				fmt.Println("error")
+				return errors.New("Key 'name' needs to be a string")
 			}
 
 		default:
 			mapKey := string(key)
 			other[mapKey] = value
 		}
-		// TODO name as well
 		return nil
 	}, "meta-data", "meta-data-info", "data-fields", index)
+
+	// 'name' needs to exist
+	if name == "" {
+		return nil, errors.New("Key 'name' is not set")
+	}
 
 	return &DataField {
 		Name:			name,
 		FilePattern: 	*fp,
-		Extras: 			other,
-	}, nil 
+		Extras: 		other,
+	}, err 
 }
 
 // Returns a new 'file-pattern' object
@@ -183,19 +214,18 @@ func NewFilePattern(ss []byte) (*FilePattern, error) {
 	var multipleFiles string
 
 	err := jsonparser.ObjectEach(ss, func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
-		//fmt.Printf("Innter key: '%s'\n Inner Value: '%s'\n Type: %s\n", string(key), string(value), dataType)
 		switch string(key) {
 		case "directory":
 			if dataType == jsonparser.String {
 				directory = string(value)
 			} else {
-				fmt.Println("error")
+				return errors.New("Key 'directory' must be a string type")
 			}
 		case "multiple-files":
 			if dataType == jsonparser.String {
 				multipleFiles = string(value)
 			} else {
-				fmt.Println("error")
+				return errors.New("Key 'multiple-files' must be a string type")
 			}
 		default:
 			mapKey := string(key)
@@ -204,11 +234,16 @@ func NewFilePattern(ss []byte) (*FilePattern, error) {
 		return nil
 	}, "file-pattern")
 	
-	// Check things here!
-	if directory == "" || multipleFiles == "" {
-		return nil, errors.New("Error parsing 'file-pattern' object")
+	// 'directory' needs to exist
+	if directory == "" {
+		return nil, errors.New("Key 'directory' needs to be set")
 	}
-
+	
+	// 'multiple-files' needs to exist
+	if multipleFiles == "" {
+		return nil, errors.New("Key 'multiple-files' needs to be set")
+	}
+	
 	return &FilePattern{
 		Directory: 		directory,
 		MultipleFiles: 	multipleFiles,
@@ -244,12 +279,8 @@ func getDataFields(jsonFile []byte) ([]*DataField, error) {
 		// Append the data-field object to the list
 		dataFields = append(dataFields, df)
 	}, paths...)
-	if err != nil {
-		return nil, err
-	}
 
-	// TODO get errors from inside callback
-	return dataFields, nil
+	return dataFields, err
 }
 
 // Returns a string array with the values in the path being strings
@@ -258,7 +289,6 @@ func getAllStringsInArray(input []byte, path string) ([]string, error) {
 	_, err := jsonparser.ArrayEach(input, func(key []byte, dataType jsonparser.ValueType, offset int, err error) {
 		if dataType != jsonparser.String {
 			err = errors.New("Value is not string")
-			return
 		}
 		result = append(result, string(key))
 	}, path)

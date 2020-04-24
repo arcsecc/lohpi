@@ -10,15 +10,37 @@ import (
 
 	"firestore/core/message"
 )
-func (self *Ptfs) FeedBulkData(msg *message.NodeMessage) error {
-	fmt.Printf("In FeedBulkData we got %s\n", msg.Populator.MetaData.Meta_data_info.DataFields[0].FilePattern.Directory)
-	/*
+func (self *Ptfs) FeedBulkData(msg *message.NodePopulator) error {
+	fmt.Printf("In FeedBulkData we got %s\n", msg.MetaData.Meta_data_info.DataFields[0].FilePattern.Directory)	
+	study := msg.MetaData.Meta_data_info.StudyName
+	minFiles := msg.MinFiles
+	maxFiles := msg.MaxFiles
+	policy_attributes := msg.MetaData.Meta_data_info.PolicyAttriuteStrings()
+
+	// There can be multiple subjects per NodePopulator
+	// TODO: split this up into more functions.
+	// TODO: use several go-routines here as well to make it go a little faster!
+	for _, subject := range msg.Subjects {
+		if err := self.BulkDataRunner(subject, study, minFiles, maxFiles, policy_attributes); err != nil {
+			return err
+		}
+
+		// Store all nescessary meta-data (included the policies assoicated with the study and enrolled subjects)
+		if err := self.StoreMetaData(*msg.MetaData); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Creates files, policies and meta-data from the incoming NodePopulator
+func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles int, policy_attributes map[string][]string) error {
 	// Check if subject's data is already stored by FUSE
-	if self.subjectExists(msg.Subject) {
+	if self.subjectExists(subject) {
 		fmt.Printf("Subject exists. Continuing...\n")
 	} else {
 		fmt.Printf("Subject does not exist. Adding a completely new set of node data\n")
-		if err := self.createSubject(msg.Subject); err != nil {
+		if err := self.createSubject(subject); err != nil {
 			return err
 		}
 	}
@@ -26,8 +48,10 @@ func (self *Ptfs) FeedBulkData(msg *message.NodeMessage) error {
 	// We need to check if the study exists. If it does not exist, create the
 	// msg.Study directory and its default sub-directories. The default directories
 	// are not populated with the subject's files. 
-	if !self.studyExists(msg.Study) {
-		self.createStudy(msg.Study)
+	if !self.studyExists(study) {
+		if err := self.createStudy(study); err != nil {
+			return err
+		}
 	}
 
 	// To begin with, we take care of the "subjects" part of the FUSE file tree.
@@ -35,32 +59,45 @@ func (self *Ptfs) FeedBulkData(msg *message.NodeMessage) error {
 	// If the given msg's study does not exist, create it and populate the "msg.Study"
 	// directory. What "enrollSubjectIntoStudy" is simply add msg.Study into the msg.Subject map
 	// Later, we realize those changes on disk -- these are just in-memory states.
-	if !self.subjectIsEnrolledInStudy(msg.Subject, msg.Study) {
-		fmt.Printf("Enrolling %s in study %s\n", msg.Subject, msg.Study)
-		self.enrollSubjectIntoStudy(msg.Subject, msg.Study)
+	if !self.subjectIsEnrolledInStudy(subject, study) {
+		fmt.Printf("Enrolling %s in study %s\n", subject, study)
+		self.enrollSubjectIntoStudy(subject, study)
 	} else {
-		fmt.Printf("Subject %s is already enrolled in study %s\n", msg.Subject, msg.Study)
+		fmt.Printf("Subject %s is already enrolled in study %s\n", subject, study)
 	}
+
+	// Used to generate a random number of files, each of which contain arbitrary data
+	numFiles := getRandomInt(minFiles, maxFiles)
+	fileSize := getRandomInt(100, 1000)
 
 	// Create the files in the "subjects" part of the FUSE file tree. Any existing files are deleted and replaced by
 	// the files given by the msg parameters, 
-	if err := self.createSubjectStudyFiles(msg.Subject, msg.Study, int(msg.NumFiles), int(msg.FileSize)); err != nil {
+	if err := self.createSubjectStudyFiles(subject, study, numFiles, fileSize); err != nil {
 		return err
 	}
 
 	// Create the directories in the "studies" part of the file tree
-	if err := self.addSubjectStudyFilesToStudy(msg.Subject, msg.Study, int(msg.NumFiles)); err != nil {
+	if err := self.addSubjectStudyFilesToStudy(subject, study, numFiles); err != nil {
 		return err
 	}
 
 	// Create the policies that formalize the access control list parameters enforced by the FUSE.
 	// The policies are assigned to "this subject" participating in "this study"
-	if err := self.SetSubjectPolicy(msg.Subject, msg.Study, msg.Attributes); err != nil {
+	if err := self.SetSubjectPolicy(subject, study, policy_attributes); err != nil {
 		return err
-	}*/
+	}
 	return nil
 }
 
+// Stores the meta-data in a .json file 
+func (self *Ptfs) StoreMetaData(metaData message.MetaData) error {
+	// There exists exactly one JSON file for each study
+	// Path where we store the JSON file for a particular study
+	//jsonPath := fmt.Sprintf()
+	return nil
+}
+
+// TODO: send a reference to self.studies instead?
 func (self *Ptfs) Studies() []string {
 	studies := make([]string, 0)
 	for study := range self.studies {
