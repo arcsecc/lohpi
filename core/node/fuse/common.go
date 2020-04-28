@@ -169,10 +169,11 @@ func (self *Ptfs) createSubjectStudyFiles(subject, study string, numFiles, fileS
 		// BUG: file won't write
 		n, err := studyFile.Write(fileContents)
 		if err != nil {
-			fmt.Errorf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
+			fmt.Printf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
 		}
 		err = studyFile.Close()
 		if err != nil {
+			fmt.Printf("Closing file... %s\n", err)
 			return err
 		}
 	}

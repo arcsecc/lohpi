@@ -70,8 +70,8 @@ func (m *Mux) StoreNodeData(np *message.NodePopulator) error {
 	}
 
 	// Add the node to the list of studies the node stores 
-	m.addNodeToListOfStudies(msg.Node, studies)
-	fmt.Printf("Added shit to node %s. Map: %s\n", msg.Node, m.studyToNode)
+	m.addNodeToListOfStudies(np.Node, studies)
+	fmt.Printf("Node '%s' now stores study '%s'\n", np.Node, np.MetaData.Meta_data_info.StudyName)
 	return nil
 }
 

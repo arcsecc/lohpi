@@ -7,6 +7,9 @@ package fuse
 
 import (
 	"fmt"
+	"encoding/json"
+	"os"
+	"bufio"
 
 	"firestore/core/message"
 )
@@ -24,11 +27,11 @@ func (self *Ptfs) FeedBulkData(msg *message.NodePopulator) error {
 		if err := self.BulkDataRunner(subject, study, minFiles, maxFiles, policy_attributes); err != nil {
 			return err
 		}
+	}
 
-		// Store all nescessary meta-data (included the policies assoicated with the study and enrolled subjects)
-		if err := self.StoreMetaData(*msg.MetaData); err != nil {
-			return err
-		}
+	// Store all nescessary meta-data (included the policies assoicated with the study and enrolled subjects)
+	if err := self.StoreMetaData(*msg.MetaData); err != nil {
+		return err
 	}
 	return nil
 }
@@ -91,9 +94,37 @@ func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles int, 
 
 // Stores the meta-data in a .json file 
 func (self *Ptfs) StoreMetaData(metaData message.MetaData) error {
+	study := metaData.Meta_data_info.StudyName
+
 	// There exists exactly one JSON file for each study
 	// Path where we store the JSON file for a particular study
-	//jsonPath := fmt.Sprintf()
+	jsonPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.mountDir, STUDIES_DIR, study, METADATA_DIR, METADATA_FILE)
+
+	// Pretify the meta-data struct into JSON 
+	output, err := json.MarshalIndent(metaData, "", "\t")
+	if err != nil {
+		return err
+	}
+
+	// Overwrite file if it exists
+	file, err := os.OpenFile(jsonPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)  
+	if err != nil {
+		return err
+	}
+	
+	defer file.Close()
+	
+	// File writer
+	w := bufio.NewWriter(file)
+	_, err = w.WriteString(string(output))
+	if err != nil {
+		return err
+	}
+
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	
 	return nil
 }
 

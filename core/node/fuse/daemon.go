@@ -24,7 +24,7 @@ _	"time"
 	"log"
 	"sync"
 	"math/rand"
-	"strings"
+//	"strings"
 //	"io/ioutil"
 
 //	"firestore/core/policy"
@@ -33,7 +33,7 @@ _	"time"
 	"github.com/billziss-gh/cgofuse/fuse"
 	"github.com/pkg/xattr"
 	"github.com/spf13/viper"
-	"golang.org/x/sys/unix"
+//	"golang.org/x/sys/unix"
 	"github.com/casbin/casbin"
 )
 
@@ -44,6 +44,7 @@ const METADATA_DIR = "metadata"
 const PROTOCOL_DIR = "protcol"
 const SUBJECTS_DIR = "subjects"
 const STUDIES_DIR = "studies"
+const METADATA_FILE = "metadata.json"
 
 // Used by the policy manager to set the action requested
 const ACCESS = "read"
@@ -123,14 +124,15 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 	}
 
 	// Customized parameters. Need to purify them as well. Magic...
-	opts := []string{"", "-o", "nonempty", startDir, mountDir}
+	//opts := []string{"", "-o", "nonempty", "allow_other", startDir, mountDir}
+	opts := []string{"", "-o", "default_permissions", "allow_other", startDir, mountDir}
 	ptfs.root, _ = filepath.Abs(opts[len(opts) - 2])
 	opts = append(opts[:len(opts) - 2], opts[len(opts) - 1])
 	_host = fuse.NewFileSystemHost(&ptfs)
 
 	go func() {
 		log.Printf("Mounting dir on %s\n", mountDir)
-		ok := _host.Mount("", opts[1:])
+		ok := _host.Mount("", opts[4:])
 		if ok != true {
 			log.Fatal(errors.New("Could not mount Fuse system"))
 		}
@@ -172,12 +174,6 @@ func (self *Ptfs) initiate_daemon() {
 	fmt.Printf("P: %s\n", self.mountDir + "/" + STUDIES_DIR)
 	CreateDirectory(self.mountDir + "/" + STUDIES_DIR)
 	CreateDirectory(self.mountDir + "/" + SUBJECTS_DIR)
-		
-	/*if viper.GetBool("set_files") {
-		fmt.Printf("Creating tree...\n")
-		self.createStudyDirectoryTree()
-		self.createSubjectDirectoryTree()
-	}*/
 }
 
 // Returns the path for the local entry point for the FUSE file system
@@ -207,15 +203,6 @@ func (self *Ptfs) SetNodePermission(permission string) error {
 	return nil
 }
 
-func (self *Ptfs) SetSubjectPermission(subject, permission string) error {	
-/*	if self.SubjectExists(subject) {
-		self.subjectPermissions[subject] = permission
-		return nil
-	}
-	return errSetSubjectPermission*/
-	return nil
-}
-
 func (self *Ptfs) setXattrFlag(path, permission string) error {
 	// might use lock here...
 	/*self.xattrMux.Lock()
@@ -234,6 +221,7 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 	path = filepath.Join(self.root, path)
 	//fmt.Printf("Path to inspect: %s\n", path)
 
+	/*
 	// Node-centric access
 	if self.nodePermission == "disallow" {
 		return false
@@ -246,7 +234,7 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 		if ok && perm == "disallow" {
 			return false
 		}
-	}
+	}*/
 	return true
 }
 
@@ -380,21 +368,22 @@ func (self *Ptfs) Getxattr(path string, attr string) (errc int, res []byte) {
 	fmt.Printf("Getxattr() -> path: %v\nattr: %v\nres: %s\nerrc: %v\n", path, attr, res, errc)
 
 	// return errc!!!
-	return 0, res
+	return errc, res
 }
 
+/*
 func (self *Ptfs) Setxattr(path string, attr string, data []byte, flags int) (errc int) {
 	/*if !self.canSetXattr() {
 		fmt.Printf("Setxattr\n")
 		return int(unix.EPERM)
-	}*/
+	}*
 
 	defer trace(path, attr, data, flags)(&errc)
 	path = filepath.Join(self.root, path)
 	errc = errno(syscall.Setxattr(path, attr, data, flags))
 	return
-}
-
+}*/
+/*
 func (self *Ptfs) Removexattr(path string, attr string) (errc int) {
 	if !self.canSetXattr() {
 		fmt.Printf("Removexattr = %d\n", int(unix.EPERM))
@@ -405,7 +394,7 @@ func (self *Ptfs) Removexattr(path string, attr string) (errc int) {
 	path = filepath.Join(self.root, path)
 	errc = errno(syscall.Removexattr(path, attr))
 	return errc
-}
+}*/
 
 func (self *Ptfs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
 	defer trace(path)(&errc, stat)
@@ -418,83 +407,48 @@ func (self *Ptfs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
 
 func (self *Ptfs) Mknod(path string, mode uint32, dev uint64) (errc int) {
 	defer trace(path, mode, dev)(&errc)
-	fmt.Printf("Mknod()...\n")
 	defer setuidgid()()
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Mknod = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}	
 	return errno(syscall.Mknod(path, mode, int(dev)))
 }
 
 func (self *Ptfs) Mkdir(path string, mode uint32) (errc int) {
 	defer trace(path, mode)(&errc)
-	fmt.Printf("Mkdir()...\n")
 	defer setuidgid()()
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Mkdir = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Mkdir(path, mode))
 }
 
 func (self *Ptfs) Unlink(path string) (errc int) {
 	defer trace(path)(&errc)
-	fmt.Println("Unlink")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Unlink = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Unlink(path))
 }
 
 func (self *Ptfs) Rmdir(path string) (errc int) {
 	defer trace(path)(&errc)
-	fmt.Println("Rmdir")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("rmdir = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Rmdir(path))
 }
 
 func (self *Ptfs) Link(oldpath string, newpath string) (errc int) {
 	defer trace(oldpath, newpath)(&errc)
-	fmt.Println("Link")
 	defer setuidgid()()
 	oldpath = filepath.Join(self.root, oldpath)
 	newpath = filepath.Join(self.root, newpath)
-	if !self.isAllowedAccess(newpath) {
-		fmt.Printf("Link = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Link(oldpath, newpath))
 }
 
 func (self *Ptfs) Symlink(target string, newpath string) (errc int) {
 	defer trace(target, newpath)(&errc)
-	fmt.Println("Symlink")
 	defer setuidgid()()
 	newpath = filepath.Join(self.root, newpath)
-	if !self.isAllowedAccess(newpath) {
-		fmt.Printf("Link = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Symlink(target, newpath))
 }
 
 func (self *Ptfs) Readlink(path string) (errc int, target string) {
 	defer trace(path)(&errc, &target)
-	fmt.Println("Readlink")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Readlink = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES), ""
-	}
 	buff := [1024]byte{}
 	n, e := syscall.Readlink(path, buff[:])
 	if nil != e {
@@ -505,47 +459,27 @@ func (self *Ptfs) Readlink(path string) (errc int, target string) {
 
 func (self *Ptfs) Rename(oldpath string, newpath string) (errc int) {
 	defer trace(oldpath, newpath)(&errc)
-	fmt.Println("Rename")
 	defer setuidgid()()
 	oldpath = filepath.Join(self.root, oldpath)
 	newpath = filepath.Join(self.root, newpath)
-	if !self.isAllowedAccess(oldpath) {
-		fmt.Printf("Readlink = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Rename(oldpath, newpath))
 }
 
 func (self *Ptfs) Chmod(path string, mode uint32) (errc int) {
 	defer trace(path, mode)(&errc)
-	fmt.Println("Chmod")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Chmod = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Chmod(path, mode))
 }
 
 func (self *Ptfs) Chown(path string, uid uint32, gid uint32) (errc int) {
 	defer trace(path, uid, gid)(&errc)
-	fmt.Println("Chown")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Chown = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Lchown(path, int(uid), int(gid)))
 }
 
 func (self *Ptfs) Utimens(path string, tmsp1 []fuse.Timespec) (errc int) {
 	defer trace(path, tmsp1)(&errc)
-	fmt.Println("Utimens")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Utimens = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	tmsp := [2]syscall.Timespec{}
 	tmsp[0].Sec, tmsp[0].Nsec = tmsp1[0].Sec, tmsp1[0].Nsec
 	tmsp[1].Sec, tmsp[1].Nsec = tmsp1[1].Sec, tmsp1[1].Nsec
@@ -555,31 +489,16 @@ func (self *Ptfs) Utimens(path string, tmsp1 []fuse.Timespec) (errc int) {
 func (self *Ptfs) Create(path string, flags int, mode uint32) (errc int, fh uint64) {
 	defer trace(path, flags, mode)(&errc, &fh)
 	defer setuidgid()()
-	fmt.Println("Create")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Create = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES), 0
-	}
 	return self.open(path, flags, mode)
 }
 
 func (self *Ptfs) Open(path string, flags int) (errc int, fh uint64) {
 	defer trace(path, flags)(&errc, &fh)
-	fmt.Println("Open")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Open = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES), 0
-	}
 	return self.open(path, flags, 0)
 }
 
 func (self *Ptfs) open(path string, flags int, mode uint32) (errc int, fh uint64) {
-	fmt.Println("open")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("open = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES), 0
-	}
 	f, e := syscall.Open(path, flags, mode)
 	if nil != e {
 		return errno(e), ^uint64(0)
@@ -589,11 +508,6 @@ func (self *Ptfs) open(path string, flags int, mode uint32) (errc int, fh uint64
 
 func (self *Ptfs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	defer trace(path, fh)(&errc, stat)
-	fmt.Println("Getattr")
-	/*if !self.isAllowedAccess(path) {
-		fmt.Printf("Getattr = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}*/
 	stgo := syscall.Stat_t{}
 	if ^uint64(0) == fh {
 		path = filepath.Join(self.root, path)
@@ -607,11 +521,6 @@ func (self *Ptfs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) 
 
 func (self *Ptfs) Truncate(path string, size int64, fh uint64) (errc int) {
 	defer trace(path, size, fh)(&errc)
-	fmt.Println("Truncate")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Truncate = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	if ^uint64(0) == fh {
 		path = filepath.Join(self.root, path)
 		errc = errno(syscall.Truncate(path, size))
@@ -623,11 +532,6 @@ func (self *Ptfs) Truncate(path string, size int64, fh uint64) (errc int) {
 
 func (self *Ptfs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
 	defer trace(path, buff, ofst, fh)(&n)
-	fmt.Printf("Read\n")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Read = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	n, e := syscall.Pread(int(fh), buff, ofst)
 	if nil != e {
 		return errno(e)
@@ -637,11 +541,6 @@ func (self *Ptfs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) 
 
 func (self *Ptfs) Write(path string, buff []byte, ofst int64, fh uint64) (n int) {
 	defer trace(path, buff, ofst, fh)(&n)
-	fmt.Println("Write")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Write = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	n, e := syscall.Pwrite(int(fh), buff, ofst)
 	if nil != e {
 		return errno(e)
@@ -650,29 +549,18 @@ func (self *Ptfs) Write(path string, buff []byte, ofst int64, fh uint64) (n int)
 }
 
 func (self *Ptfs) Release(path string, fh uint64) (errc int) {
-	fmt.Println("Release")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Release = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	defer trace(path, fh)(&errc)
 	return errno(syscall.Close(int(fh)))
 }
 
 func (self *Ptfs) Fsync(path string, datasync bool, fh uint64) (errc int) {
 	defer trace(path, datasync, fh)(&errc)
-	fmt.Println("Fsync")
 	return errno(syscall.Fsync(int(fh)))
 }
 
 func (self *Ptfs) Opendir(path string) (errc int, fh uint64) {
 	defer trace(path)(&errc, &fh)
-	fmt.Println("Opendir")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Opendir = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES), 0
-	}
 	f, e := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
 	if nil != e {
 		return errno(e), ^uint64(0)
@@ -682,12 +570,7 @@ func (self *Ptfs) Opendir(path string) (errc int, fh uint64) {
 
 func (self *Ptfs) Readdir(path string, fill func(name string, stat *fuse.Stat_t, ofst int64) bool, ofst int64,	fh uint64) (errc int) {
 	defer trace(path, fill, ofst, fh)(&errc)
-	fmt.Println("Readdir")
 	path = filepath.Join(self.root, path)
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Readdir = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	file, e := os.Open(path)
 	if nil != e {
 		return errno(e)
@@ -708,11 +591,6 @@ func (self *Ptfs) Readdir(path string, fill func(name string, stat *fuse.Stat_t,
 
 func (self *Ptfs) Releasedir(path string, fh uint64) (errc int) {
 	defer trace(path, fh)(&errc)
-	fmt.Println("Releasedir")
-	if !self.isAllowedAccess(path) {
-		fmt.Printf("Releasedir = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
 	return errno(syscall.Close(int(fh)))
 }
 

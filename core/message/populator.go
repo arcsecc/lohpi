@@ -26,28 +26,28 @@ type NodePopulator struct {
 // from a NodePopulator. 
 type MetaData struct {
 	Meta_data_info			*MetaDataInfo		// mandatory
-	Rec_attr				map[string][]byte	// mandatory
-	Data_protection_attr 	map[string][]byte	// mandatory
-	Extras 					map[string][]byte	// optional fields
+	Rec_attr				map[string][]string	// mandatory
+	Data_protection_attr 	map[string][]string	// mandatory
+	Extras 					map[string][]string	// optional fields
 }
 
 type MetaDataInfo struct {
 	StudyName 		string 					// mandatory
 	DataFields 		[]*DataField			// mandatory
-	Policies 		map[string][]byte		// mandatory
-	Extras 			map[string][]byte		// optional fields
+	Policies 		map[string][]string		// mandatory
+	Extras 			map[string][]string		// optional fields
 }
 
 type DataField struct {
 	Name 			string					// mandatory
 	FilePattern 	FilePattern				// mandatory
-	Extras			map[string][]byte		// optional fields
+	Extras			map[string][]string		// optional fields
 }
 
 type FilePattern struct {
 	Directory 		string					// mandatory
 	MultipleFiles 	string					// mandatory
-	Extras 			map[string][]byte		// optional fields
+	Extras 			map[string][]string		// optional fields
 }
 
 func NewNodePopulator(input []byte) (*NodePopulator, error) {
@@ -166,14 +166,14 @@ func (mdf *MetaDataInfo) PolicyAttriuteStrings() map[string][]string {
 	policies := make(map[string][]string)
 	for attr, values := range mdf.Policies {
 		policies[attr] = make([]string, 0)
-		policies[attr] = append(policies[attr], string(values))
+		policies[attr] = append(policies[attr], values...)
 	}
 	return policies
 }
 
 // Returns a new 'data-field' element in the 'data-fields' array
 func NewDataFieldElement(jsonFile []byte, index string, fp *FilePattern) (*DataField, error) {
-	other := make(map[string][]byte)
+	other := make(map[string][]string)
 	var name string 
 
 	// Fetch all objects in a 'data-fields' array entry
@@ -190,7 +190,7 @@ func NewDataFieldElement(jsonFile []byte, index string, fp *FilePattern) (*DataF
 
 		default:
 			mapKey := string(key)
-			other[mapKey] = value
+			other[mapKey] = append(other[mapKey], string(value))
 		}
 		return nil
 	}, "meta-data", "meta-data-info", "data-fields", index)
@@ -209,7 +209,7 @@ func NewDataFieldElement(jsonFile []byte, index string, fp *FilePattern) (*DataF
 
 // Returns a new 'file-pattern' object
 func NewFilePattern(ss []byte) (*FilePattern, error) {
-	other := make(map[string][]byte)
+	other := make(map[string][]string)
 	var directory string
 	var multipleFiles string
 
@@ -229,7 +229,7 @@ func NewFilePattern(ss []byte) (*FilePattern, error) {
 			}
 		default:
 			mapKey := string(key)
-			other[mapKey] = value
+			other[mapKey] = append(other[mapKey], string(value))
 		}
 		return nil
 	}, "file-pattern")
@@ -273,6 +273,8 @@ func getDataFields(jsonFile []byte) ([]*DataField, error) {
 			panic(err)
 		}
 
+		// Advance the array indexing in the JSON array following the index notation
+		// Here, "[n]" is the n-th index in the array
 		count++
 		idx = fmt.Sprintf("[%d]", count)
 		
@@ -301,11 +303,11 @@ func getAllStringsInArray(input []byte, path string) ([]string, error) {
 
 // Returns a map with arbitrary objects in the path. Ie. the returned map contains objects that are not mandatory 
 // to the parsing procedures. The function filters keys in 'paths' which means that deeper complex objects are put in the map.
-func getObjectsAndRemoveIgnoredObjects(input []byte, ignoredPaths []string, paths ...string) (map[string][]byte, error) {
-	result := make(map[string][]byte)
+func getObjectsAndRemoveIgnoredObjects(input []byte, ignoredPaths []string, paths ...string) (map[string][]string, error) {
+	result := make(map[string][]string)
 	err := jsonparser.ObjectEach(input, func(key []byte, value []byte, dataType jsonparser.ValueType, offset int) error {
 		k := string(key)
-		result[k] = value
+		result[k] = append(result[k], string(value))
 		return nil
 	}, 	paths...)
 	if err != nil {

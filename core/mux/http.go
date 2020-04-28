@@ -85,20 +85,8 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Used to prepare data packets to be sent to the node
-	var msg message.NodeMessage 
 	var body bytes.Buffer
 	io.Copy(&body, r.Body)
-	//var v interface{}
-
-	// Unmarshal the request body from the client
-	/*err := json.Unmarshal(body.Bytes(), &v)
-	if err != nil {
-		panic(err)
-	}*/
-
-	// Client data is stored by 'data'. We need to use interface{} because we don't know 
-	// the format of the data
-	//data := v.(map[string]interface{})
 	data := body.Bytes()
 
 	nodePopulator, err := message.NewNodePopulator(data)
@@ -112,7 +100,7 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Created bulk data at node '%s'\n", msg.Node)
+	fmt.Fprintf(w, "Created bulk data at node '%s'\n", nodePopulator.Node)
 }
 
 // Returns human-readable information about a particular node
