@@ -12,11 +12,12 @@ import (
 	"io/ioutil"
 	"path"
 	"time"
+	"strings"
 
-	"firestore/core/message"
+_	"firestore/core/message"
 
-_	"github.com/casbin/casbin"
-_	"github.com/casbin/casbin/model"
+	"github.com/casbin/casbin"
+	"github.com/casbin/casbin/model"
 )
 
 var errSubjectExists = errors.New("Subject already exists")
@@ -235,7 +236,7 @@ func (self *Ptfs) SetSubjectPolicy(subject, study string, policy_attributes map[
 								%sp = sub, obj, act\\
 */
 
-	/*modelText := self.createPolicyModelString(attrMap)
+	modelText := self.createPolicyModelString(policy_attributes)
 	m := model.Model{}
 	m.LoadModelFromText(modelText)
 	e, err := casbin.NewEnforcer(m)
@@ -248,20 +249,12 @@ func (self *Ptfs) SetSubjectPolicy(subject, study string, policy_attributes map[
 	// Create the map containing the policy enforcement. // Safely overwrite
 	// any previous map entries (and underlying maps)
 	self.policies[study] = make(map[string]*casbin.Enforcer)
-	self.policies[study][subject] = e*/
-
-	// Create a file in the protocol directory which contains all the policies 
-	// for the data in this study
-	// TODO store model text here!
-	// self.StoreModelText(modelText, args...)
-
-
-
+	self.policies[study][subject] = e
 	return nil
 }
 
 // Returns the policy against which requests will be matched 
-func (self *Ptfs) createPolicyModelString(attrMap map[string]string) string {
+func (self *Ptfs) createPolicyModelString(attrMap map[string][]string) string {
 	modelText := fmt.Sprintf(`
 		[request_definition]
 		r = sub, obj, act
@@ -270,11 +263,18 @@ func (self *Ptfs) createPolicyModelString(attrMap map[string]string) string {
 		[policy_effect]
 		e = some(where (p.eft == allow))
 		[matchers]
-		m = r.sub.%s == r.obj.%s && r.sub.%s == r.obj.%s && r.sub.%s == r.obj.%s
-		`, attrMap[message.Country], attrMap[message.Country], 
-		attrMap[message.Research_network], attrMap[message.Research_network], 
-		attrMap[message.Purpose], attrMap[message.Purpose])
+		m = `)
 
+	// Generate the model text
+	for _, attrArrayCollection := range attrMap {
+		for _, attrArray := range attrArrayCollection {
+			s := fmt.Sprintf("r.sub.%s == r.obj.%s && ", attrArray, attrArray)
+			modelText += s
+		}
+	}
+
+	// Remove last 'AND' operand 
+	modelText = strings.TrimSuffix(modelText, " && ")
 	return modelText
 }
 

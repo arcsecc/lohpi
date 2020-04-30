@@ -195,6 +195,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_NODE_INFO:
 		return n.NodeInfo()
 	
+	case message.MSG_TYPE_GET_META_DATA:
+		return n.StudyMetaData(msg)
+
 	case message.MSG_TYPE_GET_DATA:
 		return n.StudyData(msg)
 
@@ -241,10 +244,17 @@ func (n *Node) StudyList() ([]byte, error) {
 	return bytesMsg, nil
 }
 
+func (n *Node) StudyMetaData(msg message.NodeMessage) ([]byte, error) {
+	return n.fs.StudyMetaData(msg)
+}
+
 func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
-	fmt.Printf("MSG: %s\n", msg)
+//	requestPolicy := msg.Populator.MetaData.Meta_data_info.PolicyAttriuteStrings()
+	fmt.Printf("TODO: Implement StudyData()\n")
 	return []byte(""), nil
 }
+
+
 
 func (n *Node) SendPortNumber(nodeName, addr string, muxPort uint) error {
 	URL := "https://127.0.1.1:" + strconv.Itoa(int(muxPort)) + "/set_port"

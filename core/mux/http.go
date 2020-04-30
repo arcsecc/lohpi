@@ -22,10 +22,8 @@ func (m *Mux) HttpHandler() error {
 	mux.HandleFunc("/network", m.Network)
 	mux.HandleFunc("/load_node", m.CreateBulkData)
 	mux.HandleFunc("/node_info", m.NodeInfo)
-
-	// TMP function: used to trigger different functionalities in Lohpi
-	mux.HandleFunc("/node_run", m.NodeRun)
-
+	mux.HandleFunc("/get_meta_data", m.GetMetaData)
+	//mux.HandleFunc("/get_data", m.NodeRun)
 
 	// Subject-related getters and setters
 	//mux.HandleFunc("/delete_subject", )
@@ -136,94 +134,28 @@ func (m *Mux) NodeInfo(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, nodeInfo)
 }
 
-// DUMMY TEMP FUNC used to test different functionalities. only used in development
-func (m *Mux) NodeRun(w http.ResponseWriter, r *http.Request) {
+// Returns the meta-data about a particular study
+func (m *Mux) GetMetaData(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
-		return
+
+	countries := []string{`["Norway"`, `"kake country]"`}
+	network := []string{`["network1"`, `"network2]"`}
+	purpose := []string{`["non-commercial"]`}
+
+	msg := &message.NodeMessage{
+		MessageType: 	message.MSG_TYPE_GET_META_DATA,
+		Study: "Sleeping and Diet patterns in Northern Norway",
+		Attributes: map[string][]string{"country": 			countries, 
+										"research_network": network, 
+										"purpose": 			purpose},
 	}
 
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
-		return
-	}
-
-	// Used to prepare data packets to be sent to the node
-	var msg message.NodeMessage 
-	var body bytes.Buffer
-	io.Copy(&body, r.Body)
-	var v interface{}
-
-	// Unmarshal the request body from the client
-	err := json.Unmarshal(body.Bytes(), &v)
-	if err != nil {
-		panic(err)
-	}
-
-	// Client data is stored by 'data'. We need to use interface{} because we don't know 
-	// the format of the data
-	data := v.(map[string]interface{})
-
-	// Iterate the collection of key-value pairs comming from the client.
-	// As of now, we require a pre-defined format of the bulk data generator parameters.
-	// This may be subject to change in the future.
-	for key, value := range data {
-
-		// The key needs to be spelled correctly. Use type assertion as well
-		// to ensure correctness
-		switch key {
-			case message.Node:
-				msg.Node = value.(string)
-			case message.Study:
-				msg.Study = value.(string)
-			// 'required_attributes' is a map[string]string type.
-			case message.Required_attributes:
-
-				// Check if the incoming collection of attributes is invalid. If they are,
-				// return an error message to the client
-				attrMap, ok := value.(map[string]interface{})
-				if !ok {
-					errMsg := fmt.Sprintf("Error: unknown attribute collection: %s", attrMap)
-					http.Error(w, errMsg, http.StatusUnprocessableEntity)
-					return
-				}
-
-				// Create the attributes collection to be used internally
-				msg.Attributes = make(map[string]string)
-
-				// Iterate the collection coming from the client.
-				// Make sure that the type and the string value of the key are valid
-				// Return error to the client if something fails
-				for attrKey, attr := range attrMap {
-					switch attrKey {
-					
-					// We might adjust the agility of the program here...
-					case message.Country, message.Research_network, message.Purpose:
-						attrValue, ok := attr.(string)
-						if ok {
-							msg.Attributes[attrKey] = attrValue
-							continue
-						}
-					default:
-						errMsg := fmt.Sprintf("Error: invalid attribute pair: %v\t%v", attrKey, attr)
-						http.Error(w, errMsg, http.StatusUnprocessableEntity)
-						return
-					}
-				}
-			default:
-				errMsg := fmt.Sprintf("Error: unknown key: %s", key)
-				http.Error(w, errMsg, http.StatusUnprocessableEntity)
-				return
-		}
-	}
-
-	statusCode, result, err := m.GetStudyDataFromNode(msg)
+	statusCode, result, err := m._getMetaData(*msg)
 	if err != nil {
 		http.Error(w, err.Error(), statusCode)
 		return
 	}
 
 	w.WriteHeader(statusCode)
-	fmt.Fprintf(w, "%s\n", result)
+	fmt.Fprintf(w, "Status code: %d\tresult: %s\n", statusCode, result)
 }

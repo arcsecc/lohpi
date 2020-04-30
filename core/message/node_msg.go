@@ -17,6 +17,7 @@ const (
 	MSG_TYPE_MUX_HANDSHAKE 		= "MSG_TYPE_MUX_HANDSHAKE"
 	MSG_TYPE_GET_STUDY_LIST 	= "MSG_TYPE_GET_STUDY_MAP"
 	MSG_TYPE_GET_DATA 			= "MSG_TYPE_GET_DATA"
+	MSG_TYPE_GET_META_DATA 		= "MSG_TYPE_GET_META_DATA"
 	MSG_TYPE_SET_MUX_IP 		= "MSG_TYPE_SET_MUX_IP"
 	MSG_TYPE_OK 				= "MSG_TYPE_OK"
 	MSG_TYPE_MONITORING_NODE	= "MSG_TYPE_MONITORING_NODE" 
@@ -45,7 +46,7 @@ type NodeMessage struct {
 	Node				string 		
 	Subject				string 		
 	Study				string 		
-	Attributes			map[string]string
+	Attributes			map[string][]string
 	NumFiles			float64 	
 	FileSize			float64 	
 	MuxIP				string

@@ -10,9 +10,15 @@ import (
 	"encoding/json"
 	"os"
 	"bufio"
+	"errors"
+	"io/ioutil"
 
 	"firestore/core/message"
 )
+
+// Based on the contents in 'msg', tell the FUSE daemon to create dummy files and assoicated
+// meta-data. The operation is ddempotent; the file that is effected is deleted and rewritten over again
+// per each invocation.
 func (self *Ptfs) FeedBulkData(msg *message.NodePopulator) error {
 	fmt.Printf("In FeedBulkData we got %s\n", msg.MetaData.Meta_data_info.DataFields[0].FilePattern.Directory)	
 	study := msg.MetaData.Meta_data_info.StudyName
@@ -135,4 +141,20 @@ func (self *Ptfs) Studies() []string {
 		studies = append(studies, study)
 	}
 	return studies
+}
+
+// Returns the file meta-data assoicated with the study
+func (self *Ptfs) StudyMetaData(msg message.NodeMessage) ([]byte, error) {
+	// Check if the study is known to the FUSE daemon
+	if !self.studyExists(msg.Study) {
+		return nil, errors.New("Study does not exist")
+	} else {
+		fmt.Printf("Study %s exists\n", msg.Study)
+	}
+
+	// TODO: file can be too large, so we need an interface for streaming!
+	
+	// TODO: do not return the subject permissions -- filter them away!
+	jsonPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.mountDir, STUDIES_DIR, msg.Study, METADATA_DIR, METADATA_FILE)
+	return ioutil.ReadFile(jsonPath)
 }
