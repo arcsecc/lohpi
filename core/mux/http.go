@@ -20,8 +20,8 @@ func (m *Mux) HttpHandler() error {
 
 	// Public methods exposed to data users (usually through cURL)
 	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/load_node", m.CreateBulkData)
-	mux.HandleFunc("/node_info", m.NodeInfo)
+	mux.HandleFunc("/load_node", m.StoreNodeData)
+	mux.HandleFunc("/node_info", m.GetNodeInfo)
 	mux.HandleFunc("/get_meta_data", m.GetMetaData)
 	//mux.HandleFunc("/get_data", m.NodeRun)
 
@@ -70,7 +70,7 @@ func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
 // An end-point used to tell a node to generate data and associated policies that
 // originate from a subject. The format of the JSON struct is pre-defined and may be subject to change in 
 // the future.
-func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
+func (m *Mux) StoreNodeData(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
@@ -92,7 +92,7 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	if err := m.StoreNodeData(nodePopulator); err != nil {
+	if err := m._storeNodeData(nodePopulator); err != nil {
 		errMsg := fmt.Sprintf("Error: %s", err)
 		http.Error(w, errMsg, http.StatusUnprocessableEntity)
 		return
@@ -102,7 +102,7 @@ func (m *Mux) CreateBulkData(w http.ResponseWriter, r *http.Request) {
 }
 
 // Returns human-readable information about a particular node
-func (m *Mux) NodeInfo(w http.ResponseWriter, r *http.Request) {
+func (m *Mux) GetNodeInfo(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodGet {
 		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
@@ -124,7 +124,7 @@ func (m *Mux) NodeInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodeInfo, err := m.GetNodeInfo(msg.Node)
+	nodeInfo, err := m._getNodeInfo(msg.Node)
 	if err != nil {
 		errMsg := fmt.Sprintf("Error: %s\n", err)
 		log.Printf("%s", errMsg)
@@ -134,7 +134,8 @@ func (m *Mux) NodeInfo(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, nodeInfo)
 }
 
-// Returns the meta-data about a particular study
+// Given a node identifier and a study name, return the meta-data about a particular study at that node.
+// DUMMY IMPLEMENTATION
 func (m *Mux) GetMetaData(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -145,12 +146,41 @@ func (m *Mux) GetMetaData(w http.ResponseWriter, r *http.Request) {
 	msg := &message.NodeMessage{
 		MessageType: 	message.MSG_TYPE_GET_META_DATA,
 		Study: "Sleeping and Diet patterns in Northern Norway",
+		Node: "node_0",
 		Attributes: map[string][]string{"country": 			countries, 
 										"research_network": network, 
 										"purpose": 			purpose},
 	}
 
 	statusCode, result, err := m._getMetaData(*msg)
+	if err != nil {
+		http.Error(w, err.Error(), statusCode)
+		return
+	}
+
+	w.WriteHeader(statusCode)
+	fmt.Fprintf(w, "Status code: %d\tresult: %s\n", statusCode, result)
+}
+
+// Given a node identifier and a study name, return the data at that node
+// DUMMY IMPLEMENTATION
+func (m *Mux) GetStudyData(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	countries := []string{`["Norway"`, `"kake country]"`}
+	network := []string{`["network1"`, `"network2]"`}
+	purpose := []string{`["non-commercial"]`}
+
+	msg := &message.NodeMessage{
+		MessageType: 	message.MSG_TYPE_GET_META_DATA,
+		Study: "Sleeping and Diet patterns in Northern Norway",
+		Node: "node_0",
+		Attributes: map[string][]string{"country": 			countries, 
+										"research_network": network, 
+										"purpose": 			purpose},
+	}
+
+	statusCode, result, err := m._getStudyData(*msg)
 	if err != nil {
 		http.Error(w, err.Error(), statusCode)
 		return

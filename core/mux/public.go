@@ -9,13 +9,12 @@ import (
 	"errors"
 	"bytes"
 	"net/http"
-	"math/rand"
 
 	"firestore/core/message"
 )
 
 // Returns human-readable info about 'node'
-func (m *Mux) GetNodeInfo(node string) (string, error) {
+func (m *Mux) _getNodeInfo(node string) (string, error) {
 	msg := message.NodeMessage{
 		MessageType: message.MSG_TYPE_GET_NODE_INFO,
 	}
@@ -40,7 +39,7 @@ func (m *Mux) GetNodeInfo(node string) (string, error) {
 }
 
 // Orders a node to create test data for it to store dummy data and assoicated data policies
-func (m *Mux) StoreNodeData(np *message.NodePopulator) error {
+func (m *Mux) _storeNodeData(np *message.NodePopulator) error {
 	node := np.Node
 
 	// Ensure that the node is known to the mux
@@ -70,23 +69,23 @@ func (m *Mux) StoreNodeData(np *message.NodePopulator) error {
 			}
 	}
 
-	// Add the node to the list of studies the node stores 
+	// Add the node to the list of studies the node stores
 	m.addNodeToListOfStudies(np.Node, studies)
 	fmt.Printf("Node '%s' now stores study '%s'\n", np.Node, np.MetaData.Meta_data_info.StudyName)
 	return nil
 }
 
-// Returns a string of study files held by one specific node
-func (m *Mux) GetStudyData(msg message.NodeMessage) (int, string, error) {
+// Given a node identifier and a study name, return the data at that node
+func (m *Mux) _getStudyData(msg message.NodeMessage) (int, string, error) {
 	// Ensure that the node is known to the mux
 	if !m.nodeExists(msg.Node) {
 		errMsg := fmt.Sprintf("Unknown node: %s", msg.Node)
 		return http.StatusNotFound, "", errors.New(errMsg)
 	}
 
-	// Ensure that the study is known to the mux
-	if !m.studyExists(msg.Study) {
-		errMsg := fmt.Sprintf("Unknown study: %s", msg.Study)
+	// Ensure that the node stores the study
+	if !m.nodeStoresStudy(msg.Node, msg.Study) {
+		errMsg := fmt.Sprintf("Study %s is not stored in %s", msg.Study, msg.Node)
 		return http.StatusNotFound, "", errors.New(errMsg)
 	}
 
@@ -107,20 +106,19 @@ func (m *Mux) GetStudyData(msg message.NodeMessage) (int, string, error) {
 	return http.StatusOK, result, nil
 }
 
-// Returns the meta-data assoicated with a particular study. Remember that each study
-// with the same name can store the same study data. This assumtion can be changed later such that there
-// is a one-to-one relationship between a study and its storage node.
+// Given a node identifier and a study name, return the meta-data about a particular study at that node.
 func (m *Mux) _getMetaData(msg message.NodeMessage) (int, string, error) {
-	// Ensure that the study is known to the mux
-	if !m.studyExists(msg.Study) {
-		errMsg := fmt.Sprintf("Unknown study: %s", msg.Study)
+	// Ensure that the node is known to the mux
+	if !m.nodeExists(msg.Node) {
+		errMsg := fmt.Sprintf("Unknown node: %s", msg.Node)
 		return http.StatusNotFound, "", errors.New(errMsg)
 	}
 
-	// TODO: choose LRU instead? We might not use a list; only one node stores a
-	// particular study
-	storageNodes := m.getStudyNodes(msg.Study)
-	msg.Node = storageNodes[rand.Int() % len(storageNodes)]
+	// Ensure that the node stores the study
+	if !m.nodeStoresStudy(msg.Node, msg.Study) {
+		errMsg := fmt.Sprintf("Study %s is not stored in %s", msg.Study, msg.Node)
+		return http.StatusNotFound, "", errors.New(errMsg)
+	}
 
 	// Serialize the message and wait for a reply
 	serializedMsg, err := msg.Encode()
@@ -135,6 +133,5 @@ func (m *Mux) _getMetaData(msg message.NodeMessage) (int, string, error) {
 			result = string(response)
 	}
 
-	fmt.Printf("Node to query: %s\n", msg.Node)
 	return http.StatusOK, result, nil
 }
