@@ -12,12 +12,13 @@ import (
 	"io/ioutil"
 	"path"
 	"time"
-	"strings"
+	_"strings"
 
 _	"firestore/core/message"
 
 	"github.com/casbin/casbin"
 	"github.com/casbin/casbin/model"
+_	"github.com/casbin/casbin/persist/file-adapter"
 )
 
 var errSubjectExists = errors.New("Subject already exists")
@@ -68,14 +69,14 @@ func fileExists(path string) (bool, error) {
 
 // Returns true if the subject is known to the filesystem, returns false otherwise
 func (self *Ptfs) subjectExists(subject string) bool {
-	if _, ok := self.subjects[subject]; ok {
+	if _, ok := self.subjectStudies[subject]; ok {
 		return true
 	}
 	return false
 }
 
 func (self *Ptfs) createSubject(subjectID string) error {
-	self.subjects[subjectID] = make([]string, 0)
+	self.subjectStudies[subjectID] = make([]string, 0)
 	dirPath := fmt.Sprintf("%s/%s/%s/%s", self.mountDir, SUBJECTS_DIR, subjectID, STUDIES_DIR)
 	return CreateDirectory(dirPath)
 }
@@ -122,7 +123,7 @@ func (self *Ptfs) createStudy(study string) error {
 
 // Returns true if the subject is enrolled in the study, returns false otherwise
 func (self *Ptfs) subjectIsEnrolledInStudy(subject, study string) bool {
-	for _, s := range self.subjects[subject] {
+	for _, s := range self.subjectStudies[subject] {
 		if study == s {
 			return true
 		}
@@ -132,7 +133,8 @@ func (self *Ptfs) subjectIsEnrolledInStudy(subject, study string) bool {
 
 func (self *Ptfs) enrollSubjectIntoStudy(subject, study string) {
 	// Assign the study to the set of studies the given subject is enrolled in
-	self.subjects[subject] = append(self.subjects[subject], study)
+	self.subjectStudies[subject] = append(self.subjectStudies[subject], study)
+	self.studySubjects[study] = append(self.studySubjects[study], subject)
 
 	// Create the directories in the "subjects" side of the tree
 	dirPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.mountDir, SUBJECTS_DIR, subject, STUDIES_DIR, study)
@@ -221,61 +223,42 @@ func (self *Ptfs) addSubjectStudyFilesToStudy(subject, study string, numFiles in
 	Each model describes the relation between the study and the subject's policy
 	enforced by the node.
 */
-func (self *Ptfs) SetSubjectPolicy(subject, study string, policy_attributes map[string][]string) error {
+func (self *Ptfs) SetSubjectPolicy(subject, study, filename, modelText string) error {
 	fmt.Println("Setting new subject-study policy...")
-	fmt.Printf("Attributes map: %v\n", policy_attributes)
-	
-	// Constants required by Casbin library
-	/*const REQUEST_DEFINITION := "[request_definition]"
-	const POLICY_DEFINITION := "[policy_definition]"
-	const POLICY_EFFECT := "[policy_effect]"
-*/
-	// This is the model describing the relation between the subject's policy and 
-	// the request from any data user who wants to see study data
-	/*policyModel := fmt.Sprintf("%sr = sub, obj, act\\
-								%sp = sub, obj, act\\
-*/
 
-	modelText := self.createPolicyModelString(policy_attributes)
+	if !self.subjectIsEnrolledInStudy(subject, study) {
+		errMsg := fmt.Sprintf("Subject '%s' does not exist in study '%s'", subject, study)
+		return errors.New(errMsg)
+	}
+
 	m := model.Model{}
 	m.LoadModelFromText(modelText)
+
+	// Write model text to disk and use the adapter
+	modelFilePath := fmt.Sprintf("%s/%s/%s/%s/%s/%s", self.mountDir, STUDIES_DIR, study, SUBJECTS_DIR, subject, filename)
+ 	file, err := os.OpenFile(modelFilePath, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0666)
+    if err != nil {
+        panic(err)
+	}
+	
+    defer file.Close()
+
+    _, err = file.Write([]byte(modelText))
+    if err != nil {
+        panic(err)
+	}
+
+	//a := fileadapter.NewAdapter(modelFilePath)
 	e, err := casbin.NewEnforcer(m)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("ModelText: %s\n", modelText)
-
-	// Create the map containing the policy enforcement. // Safely overwrite
-	// any previous map entries (and underlying maps)
-	self.policies[study] = make(map[string]*casbin.Enforcer)
-	self.policies[study][subject] = e
+	// Create the map containing the policy enforcement. 
+	// Safely overwrite any previous map entries (and underlying maps)
+	self.subjectPolicies[subject] = make(map[string]*casbin.Enforcer)
+	self.subjectPolicies[subject][study] = e
 	return nil
-}
-
-// Returns the policy against which requests will be matched 
-func (self *Ptfs) createPolicyModelString(attrMap map[string][]string) string {
-	modelText := fmt.Sprintf(`
-		[request_definition]
-		r = sub, obj, act
-		[policy_definition]
-		p = sub, obj, act
-		[policy_effect]
-		e = some(where (p.eft == allow))
-		[matchers]
-		m = `)
-
-	// Generate the model text
-	for _, attrArrayCollection := range attrMap {
-		for _, attrArray := range attrArrayCollection {
-			s := fmt.Sprintf("r.sub.%s == r.obj.%s && ", attrArray, attrArray)
-			modelText += s
-		}
-	}
-
-	// Remove last 'AND' operand 
-	modelText = strings.TrimSuffix(modelText, " && ")
-	return modelText
 }
 
 // Return a number in the range [a, b]

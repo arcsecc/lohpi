@@ -5,32 +5,45 @@ import (
 	"fmt"
 	"io"
 	"bytes"
+	_"strings"
 	"encoding/json"
 	_"encoding/gob"
 	"log"
 
 	"firestore/core/message"
 
+	"github.com/gorilla/mux"
 	logging "github.com/inconshreveable/log15"
 )
 
 func (m *Mux) HttpHandler() error {
 	log.Printf("MUX: Started HTTP server on port %d\n", m._httpPortNum)
-	mux := http.NewServeMux()
+	r := mux.NewRouter()
 
 	// Public methods exposed to data users (usually through cURL)
-	mux.HandleFunc("/network", m.Network)
-	mux.HandleFunc("/load_node", m.StoreNodeData)
-	mux.HandleFunc("/node_info", m.GetNodeInfo)
-	mux.HandleFunc("/get_meta_data", m.GetMetaData)
-	//mux.HandleFunc("/get_data", m.NodeRun)
+	r.HandleFunc("/network", m.Network)
 
-	// Subject-related getters and setters
-	//mux.HandleFunc("/delete_subject", )
-	//mux.HandleFunc("/move_subject", )
+	// Node API
+	r.HandleFunc("/node/info", m.GetNodeInfo).Methods("GET")
+	r.HandleFunc("/node/load", m.LoadNode).Methods("POST")
+	
+	// Study API
+	r.HandleFunc("/study/meta_data", m.GetMetaData).Methods("GET")		// MORE TODO
+	r.HandleFunc("/study/data", m.GetData).Methods("POST")				// MORE TODO
+	
+	// REC API
+	r.HandleFunc("/rec/set_policy", m.SetRECStudyPolicy).Methods("POST") // MORE TODO
+
+	// Subject API
+	r.HandleFunc("/subject/set_policy", m.SetSubjectStudyPolicy).Methods("POST") // MORE TODO
+
+	// WHAAT?
+	http.Handle("/", r)
 	
 	m._httpServer = &http.Server{
-		Handler: mux,
+		Handler: r,
+		//WriteTimeout: 15 * time.Second,
+        //ReadTimeout:  15 * time.Second,
 	}
 
 	err := m._httpServer.Serve(m._httpListener)
@@ -58,19 +71,15 @@ func (m *Mux) Network(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Fprintf(w, "Studies stored in the network:\n")
-	for study, nodes := range m.studyToNode {
-		fmt.Fprintf(w, "Study identifier: '%s'\tstorage node: ", study)
-		for _, node := range nodes {
-			fmt.Fprintf(w, "'%s' ", node)
-		}
-		fmt.Fprintf(w, "\n")
+	for study, node := range m.studyNode {
+		fmt.Fprintf(w, "Study identifier: '%s'\tstorage node: '%s'\n", study, node)
 	}
 }
 
 // An end-point used to tell a node to generate data and associated policies that
 // originate from a subject. The format of the JSON struct is pre-defined and may be subject to change in 
 // the future.
-func (m *Mux) StoreNodeData(w http.ResponseWriter, r *http.Request) {
+func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
@@ -92,14 +101,73 @@ func (m *Mux) StoreNodeData(w http.ResponseWriter, r *http.Request) {
 		panic(err)
 	}
 
-	if err := m._storeNodeData(nodePopulator); err != nil {
+	if err := m._loadNode(nodePopulator); err != nil {
 		errMsg := fmt.Sprintf("Error: %s", err)
 		http.Error(w, errMsg, http.StatusUnprocessableEntity)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Created bulk data at node '%s'\n", nodePopulator.Node)
+	fmt.Fprintf(w, "Created bulk data at node '%s'. Study name: '%s'\n", nodePopulator.Node, nodePopulator.MetaData.Meta_data_info.StudyName)
 }
+
+// Sets a study's policy. The policy originates from REC and it is applied to all participants in the study
+func (m *Mux) SetRECStudyPolicy(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if r.MultipartForm == nil || r.MultipartForm.File == nil {
+		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
+		return
+	}
+
+	modelFile, fileHeader, err := r.FormFile("model")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	study := r.PostFormValue("study")
+	if err := m._setRECPolicy(modelFile, fileHeader, study); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Fprintf(w, "REC sets new access policy for study '%s'\n", r.PostFormValue("study"))
+}
+
+// Sets a study's policy. The policy originates from a subject
+func (m *Mux) SetSubjectStudyPolicy(w http.ResponseWriter, r *http.Request)  {
+	defer r.Body.Close()
+
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if r.MultipartForm == nil || r.MultipartForm.File == nil {
+		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
+		return
+	}
+
+	modelFile, fileHeader, err := r.FormFile("model")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	study := r.PostFormValue("study")
+	if err := m._setSubjectStudyPolicy(modelFile, fileHeader, study); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Fprintf(w, "REC sets new access policy for study '%s'\n", r.PostFormValue("study"))
+}
+
 
 // Returns human-readable information about a particular node
 func (m *Mux) GetNodeInfo(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +207,7 @@ func (m *Mux) GetNodeInfo(w http.ResponseWriter, r *http.Request) {
 func (m *Mux) GetMetaData(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
+	/*
 	countries := []string{`["Norway"`, `"kake country]"`}
 	network := []string{`["network1"`, `"network2]"`}
 	purpose := []string{`["non-commercial"]`}
@@ -147,9 +216,6 @@ func (m *Mux) GetMetaData(w http.ResponseWriter, r *http.Request) {
 		MessageType: 	message.MSG_TYPE_GET_META_DATA,
 		Study: "Sleeping and Diet patterns in Northern Norway",
 		Node: "node_0",
-		Attributes: map[string][]string{"country": 			countries, 
-										"research_network": network, 
-										"purpose": 			purpose},
 	}
 
 	statusCode, result, err := m._getMetaData(*msg)
@@ -159,12 +225,12 @@ func (m *Mux) GetMetaData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(statusCode)
-	fmt.Fprintf(w, "Status code: %d\tresult: %s\n", statusCode, result)
+	fmt.Fprintf(w, "Status code: %d\tresult: %s\n", statusCode, result)*/
 }
 
 // Given a node identifier and a study name, return the data at that node
 // DUMMY IMPLEMENTATION
-func (m *Mux) GetStudyData(w http.ResponseWriter, r *http.Request) {
+func (m *Mux) GetData(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	countries := []string{`["Norway"`, `"kake country]"`}

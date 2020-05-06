@@ -204,21 +204,22 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_MONITORING_NODE:
 		fmt.Println("TODO: implement access monitoring")
 
-	case message.MSG_TYPE_CHANGE_SUBJECT_POLICY:
-		fmt.Println("TODO: implement ChangeSubjectPolicy")
-		//return n.ChangeSubjectPolicy(msg)
-
+	case message.MSG_TYPE_SET_STUDY_POLICY:
+		return n.SetStudyPolicy(msg)
+	case message.MSG_TYPE_SET_REC_POLICY:
+		return n.SetRECPolicy(msg)
+	
 	default:
 		fmt.Printf("Unknown message type: %s\n", msg.MessageType)
 		return []byte("ERROR"), nil
 	}
-
 	return []byte(message.MSG_TYPE_OK), nil
 }
 
 func (n *Node) NodeInfo() ([]byte, error) {
 	str := fmt.Sprintf("Info about node '%s':\n->Ifrit IP: %s\n->Stored studies: %s\n",
 	n.nodeName, n.Addr(), n.fs.Studies())
+
 	return []byte(str), nil
 }
 
@@ -248,13 +249,40 @@ func (n *Node) StudyMetaData(msg message.NodeMessage) ([]byte, error) {
 	return n.fs.StudyMetaData(msg)
 }
 
+func (n *Node) SetStudyPolicy(msg message.NodeMessage) ([]byte, error) {
+	fileName := msg.Filename
+	fileName = msg.Study + "_model.conf"
+	modelText := string(msg.Extras)
+
+	if err := n.fs.SetStudyPolicy(msg.Study, fileName, modelText); err != nil {
+		return []byte(message.MSG_TYPE_ERROR), err
+	}
+
+	return []byte(message.MSG_TYPE_OK), nil
+}
+
+func (n *Node) SetSubjectPolicy(msg message.NodeMessage) ([]byte, error) {
+	modelText := string(msg.Extras)
+	if err := n.fs.SetSubjectPolicy(msg.Subject, msg.Study, msg.Filename, modelText); err != nil {
+		return []byte(message.MSG_TYPE_ERROR), err
+	}
+
+	return []byte(message.MSG_TYPE_OK), nil
+}
+
+func (n *Node) SetRECPolicy(msg message.NodeMessage) ([]byte, error) {
+	modelText := string(msg.Extras)
+	if err := n.fs.SetStudyPolicy(msg.Study, msg.Filename, modelText); err != nil {
+		return []byte(message.MSG_TYPE_ERROR), err
+	}
+	return []byte(message.MSG_TYPE_OK), nil
+}
+
 func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
 //	requestPolicy := msg.Populator.MetaData.Meta_data_info.PolicyAttriuteStrings()
 	fmt.Printf("TODO: Implement StudyData()\n")
 	return []byte(""), nil
 }
-
-
 
 func (n *Node) SendPortNumber(nodeName, addr string, muxPort uint) error {
 	URL := "https://127.0.1.1:" + strconv.Itoa(int(muxPort)) + "/set_port"

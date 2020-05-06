@@ -47,7 +47,7 @@ type Mux struct {
 
 	nodeListLock 	sync.RWMutex
 	nodes			map[string]string			// nodeName -> IP address
-	studyToNode 		map[string][]string 	//study_1 -> {node_1, node_2, ...}
+	studyNode 	  	map[string]string 			//study_i -> {node_i}
 
 	// HTTPS-related
 	portNum 	int
@@ -105,7 +105,7 @@ func NewMux(portNum, _portNum int) (*Mux, error) {
 	return &Mux{
 		ifritClient: 	ifritClient,
 		nodes:			make(map[string]string),
-		studyToNode: 	make(map[string][]string),
+		studyNode: 		make(map[string]string),
 
 		// HTTPS
 		portNum: 		portNum,
@@ -128,7 +128,7 @@ func (m *Mux) Start() {
 	// by broadcasting a message telling each network members to return a map of 
 	// study -> subject. Apart from calling UpdateStudyCache() now, call it somewhere
 	// else in regular time intervals
-	//m.FullUpdateCache()
+	//m.fullCacheUpdate()
 }
 
 func (m *Mux) RunServers() {
@@ -215,7 +215,7 @@ func (m *Mux) AssignNodeIdentifiers(numNodes int) {
 // Ask the network for a global view of the sets of studies 
 // all nodes have. Should be called as early as possible to update its view
 // as it is used to handle client requests
-func (m *Mux) FullUpdateCache() {
+func (m *Mux) fullCacheUpdate() {
 	for nodeID, dest := range m.nodes {
 		studies := make([]string, 0)
 		msg := message.NodeMessage{
@@ -239,11 +239,8 @@ func (m *Mux) FullUpdateCache() {
 				panic(err)
 			}
 		}
-
-		// TODO: do not create new string array for each invocation;
-		// instead check if the study exists. If so, append the node to the
-		// list if it does not exist in the map entry's string array
-		m.addNodeToListOfStudies(nodeID, studies)
+		
+		m.updateStudyCache(nodeID, studies)
 	}
 }
 

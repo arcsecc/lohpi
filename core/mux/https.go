@@ -111,7 +111,7 @@ func (m *Mux) GetStudies(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Studies known to the network\n--> ")
-	for study := range m.studyToNode {
+	for study := range m.studyNode {
 		fmt.Fprintf(w, "%s ", study)
 	}
 }

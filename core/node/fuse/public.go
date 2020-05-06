@@ -89,12 +89,7 @@ func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles int, 
 	if err := self.addSubjectStudyFilesToStudy(subject, study, numFiles); err != nil {
 		return err
 	}
-
-	// Create the policies that formalize the access control list parameters enforced by the FUSE.
-	// The policies are assigned to "this subject" participating in "this study"
-	if err := self.SetSubjectPolicy(subject, study, policy_attributes); err != nil {
-		return err
-	}
+	
 	return nil
 }
 
@@ -134,7 +129,6 @@ func (self *Ptfs) StoreMetaData(metaData message.MetaData) error {
 	return nil
 }
 
-// TODO: send a reference to self.studies instead?
 func (self *Ptfs) Studies() []string {
 	studies := make([]string, 0)
 	for study := range self.studies {
@@ -157,4 +151,23 @@ func (self *Ptfs) StudyMetaData(msg message.NodeMessage) ([]byte, error) {
 	// TODO: do not return the subject permissions -- filter them away!
 	jsonPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.mountDir, STUDIES_DIR, msg.Study, METADATA_DIR, METADATA_FILE)
 	return ioutil.ReadFile(jsonPath)
+}
+
+// Set the policy for all subjects enrolled in the study using the given model
+func (self *Ptfs) SetStudyPolicy(study, fileName, model string) error {
+	subjects, ok := self.studySubjects[study]; 
+	if !ok {
+		return errors.New("Study does not exist")
+	}
+
+	for _, s := range subjects {
+		if err := self.SetSubjectPolicy(s, study, fileName, model); err != nil {
+			panic(err)
+		}
+	}
+	
+	fmt.Printf("studySubjects: %s\n", self.studySubjects)
+	fmt.Printf("subjectStudies: %s\n", self.subjectStudies)
+
+	return nil
 }

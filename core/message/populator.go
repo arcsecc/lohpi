@@ -136,10 +136,10 @@ func NewMetaDataInfo(jsonFile []byte) (*MetaDataInfo, error) {
 	}
 
 	// Get all extra objects in 'policy-attributes'
-	policies, err := getObjectsAndRemoveIgnoredObjects(jsonFile, []string{}, "meta-data", "meta-data-info", "policy-attributes")
+	/*policies, err := getObjectsAndRemoveIgnoredObjects(jsonFile, []string{}, "meta-data", "meta-data-info", "policy-attributes")
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	// Get the 'data-fields' array
 	dataFields, err := getDataFields(jsonFile)
@@ -155,7 +155,7 @@ func NewMetaDataInfo(jsonFile []byte) (*MetaDataInfo, error) {
 
 	return &MetaDataInfo{
 		StudyName:	studyName,
-		Policies: 	policies,
+		//Policies: 	policies,
 		Extras:		arbitraryMetaDataInfoObjects,
 		DataFields: dataFields,
 	}, nil

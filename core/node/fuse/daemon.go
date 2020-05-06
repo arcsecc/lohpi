@@ -23,7 +23,6 @@ _	"time"
 	"syscall"
 	"log"
 	"sync"
-	"math/rand"
 //	"strings"
 //	"io/ioutil"
 
@@ -31,7 +30,7 @@ _	"time"
 
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
-	"github.com/pkg/xattr"
+	//"github.com/pkg/xattr"
 	"github.com/spf13/viper"
 //	"golang.org/x/sys/unix"
 	"github.com/casbin/casbin"
@@ -89,11 +88,12 @@ type Ptfs struct {
 
 	// Collection of subject-centric data structures
 	// TODO: more bullet-proof identification of subjects..?
-	subjects map[string][]string			// subectID -> studies they participate in
+	subjectStudies map[string][]string			// subectID -> studies they participate in
+	studySubjects map[string][]string			// studyID -> participants in a study
 	studies map[string]interface{}			// studyID -> "". Used only for O(1) indexing
-	policies map[string]map[string]*casbin.Enforcer					// studyID -> policy.SubjectPolicy
+	subjectPolicies map[string]map[string]*casbin.Enforcer					// studyID -> policy.SubjectPolicy
 
-	// WAT??
+	// WAT?? TO BE REMOVED
 	subjectPermissions map[string]string // subjectID -> permission
 
 	// Used to wait until FUSE in mounted
@@ -116,10 +116,11 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 		mountDir: 				mountDir,
 		nodeID: 				nodeID,	
 		xattrFlag: 				false, // can we set xattr?
-		subjects: 				make(map[string][]string, 0),		
+		subjectStudies: 		make(map[string][]string, 0),		
+		studySubjects: 			make(map[string][]string, 0),
 		studies: 				make(map[string]interface{}, 0),	
 		subjectPermissions: 	make(map[string]string, 0),
-		policies:   			make(map[string]map[string]*casbin.Enforcer),
+		subjectPolicies:   		make(map[string]map[string]*casbin.Enforcer),
 		ch: 					make(chan bool, 0),
 	}
 
@@ -146,7 +147,7 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 	}
 
 	ptfs.initiate_daemon()
-	fmt.Printf("Subjects: %v\n", ptfs.subjects)
+	fmt.Printf("Subjects: %v\n", ptfs.subjectStudies)
 	fmt.Printf("Subject permissions: %v\n", ptfs.subjectPermissions)
 	return &ptfs, nil
 }
@@ -244,101 +245,6 @@ func (self *Ptfs) canSetXattr() bool {
 
 func (self *Ptfs) GetLocalMountPoint() string {
 	return self.startDir
-}
-
-func (self *Ptfs) createStudyDirectoryTree() {
-	for i := 1; i <= viper.GetInt("num_studies"); i++ {
-		dirPath := fmt.Sprintf("%s/%s/study_%d", self.mountDir, STUDIES_DIR, i)
-		fmt.Printf("DIRPATH: %s\n", dirPath)
-		CreateDirectory(dirPath + "/" + DATA_USER_DIR)
-		CreateDirectory(dirPath + "/" + METADATA_DIR)
-		CreateDirectory(dirPath + "/" + PROTOCOL_DIR)
-		CreateDirectory(dirPath + "/" + SUBJECTS_DIR)
-		
-		for j := 1; j <= viper.GetInt("num_subjects"); j++ {
-			subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", dirPath, SUBJECTS_DIR, j)
-			CreateDirectory(subjectDirPath)
-			
-			// Set default file permission on study directory
-			if err := xattr.Set(subjectDirPath, XATTR_PREFIX + "PERMISSION", []byte("allow")); err != nil {
-				log.Fatal(err)
-			}
-		}
-	}
-}
-
-// Move to another file!
-func (self *Ptfs) createSubjectDirectoryTree() {
-	/**
-	for i := 1; i <= viper.GetInt("num_subjects"); i++ {
-		subjectDirPath := fmt.Sprintf("%s/%s/subject_%d", self.mountDir, SUBJECTS_DIR, i)
-		subjectID := fmt.Sprintf("subject_%d", i)
-		CreateDirectory(subjectDirPath)
-
-		if err := self.addSubject(subjectID); err != nil {
-			panic(err)
-		}
-		
-		if err := self.SetSubjectPermission(subjectID, "allow"); err != nil {
-			panic(err)
-		}
-
-		for j := 1; j <= viper.GetInt("num_studies"); j++ {
-			studyDirPath := fmt.Sprintf("%s/%s/study_%d", subjectDirPath, STUDIES_DIR, j)
-			studyID := fmt.Sprintf("study_%d", j)
-			CreateDirectory(studyDirPath)
-
-			// Create the files assoicated with a subject and a study with random noise
-			self.createStudyFiles(self.mountDir, subjectID, studyID)
-			self.linkStudyFiles(self.mountDir, subjectID, studyID)
-		}
-	}*/
-}
-
-// Link files from 'subjects' directory to 'studies' directory
-func (self *Ptfs) linkStudyFiles(parentDir, subject, study string) {
-	filePathDir := fmt.Sprintf("%s/%s/%s/%s/%s", parentDir, SUBJECTS_DIR, subject, STUDIES_DIR, study)
-	targetPathDir := fmt.Sprintf("%s/%s/%s/%s/%s", parentDir, STUDIES_DIR, study, SUBJECTS_DIR, subject)
-
-	fmt.Printf("target path: %s\n", targetPathDir)
-
-	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
-		filePath := fmt.Sprintf("%s/file_%d", filePathDir, i)
-		targetPath := fmt.Sprintf("%s/file_%d", targetPathDir, i)
-		if err := os.Symlink(filePath, targetPath); err != nil {
-			panic(err)
-		}
-	}
-}
-
-// Insert files into 'subjects' directory. FIX ME
-func (self *Ptfs) createStudyFiles(parentTree, subject, study string) {
-	dirPath := fmt.Sprintf("%s/%s/%s/%s/%s", parentTree, SUBJECTS_DIR, subject, STUDIES_DIR, study)
-	for i := 1; i <= viper.GetInt("files_per_study"); i++ {
-		filePath := fmt.Sprintf("%s/file_%d", dirPath, i)
-		studyFile, err := os.Create(filePath)
-
-		if err != nil {
-			panic(err)
-		}
-	
-		fileSize := viper.GetInt("file_size")
-		fileContents := make([]byte, fileSize)
-		_, err = rand.Read(fileContents)
-		if err != nil { 
-			panic(err)
-		}
-			
-		n, err := studyFile.Write(fileContents)
-		if err != nil {
-			fmt.Errorf("Should write %d bytes -- wrote %d instead\n", fileSize, n)
-			_  = err
-		}
-		err = studyFile.Close()
-		if err != nil {
-			panic(err)
-		}
-	}
 }
 
 func (self *Ptfs) RemoveSubject(subjectID string) error {
