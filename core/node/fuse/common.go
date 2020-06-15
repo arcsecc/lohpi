@@ -256,6 +256,7 @@ func (self *Ptfs) SetSubjectPolicy(subject, study, filename, modelText string) e
 
 	// Create the map containing the policy enforcement. 
 	// Safely overwrite any previous map entries (and underlying maps)
+	// TODO: avoid overwriting?
 	self.subjectPolicies[subject] = make(map[string]*casbin.Enforcer)
 	self.subjectPolicies[subject][study] = e
 	return nil

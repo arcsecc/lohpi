@@ -13,6 +13,7 @@ import (
 	"firestore/core/node"
 
 	logger "github.com/inconshreveable/log15"
+	"github.com/spf13/viper"
 )
 
 func main() {
@@ -20,14 +21,20 @@ func main() {
 	var nodeName string
 	var h logger.Handler
 	//var muxPort uint
+	//var policyStorePort uint
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
+
+	if err := readConfig(); err != nil {
+		panic(err)
+	}
 
 	// Logfile and name flags
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.StringVar(&logfile, "logfile", "", "Absolute or relative path to log file.")
 	arg.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	//arg.UintVar(&muxPort, "mp", 8080, "Port at which the mux runs.")
+	//arg.UintVar(&muxPort, "mp", 8080, "HTTPS port at which the mux runs.")
+	//arg.UintVar(&muxPort, "psp", 8082, "HTTPS port at which the policy store runs.")
 
 	arg.Parse(os.Args[1:])
 
@@ -59,10 +66,14 @@ func main() {
 		panic(err)
 	}
 	
-	// POST the port number to the mux
-	/*if err := node.SendPortNumber(node.NodeName(), node.Addr(), muxPort); err != nil {
+	// Connect to the mux and policy store
+	if err := node.MuxHandshake(); err != nil {
 		panic(err)
-	}*/
+	}
+
+	if err := node.PolicyStoreHandshake(); err != nil {
+		panic(err)
+	}
 
 	// Wait for SIGTERM signal from the environment
 	channel := make(chan os.Signal, 2)
@@ -80,4 +91,24 @@ func Exists(name string) bool {
         }
     }
     return true
+}
+
+func readConfig() error {
+	viper.SetConfigName("lohpi_config")
+	viper.AddConfigPath("/var/tmp")
+	viper.AddConfigPath(".")
+	viper.SetConfigType("yaml")
+
+	err := viper.ReadInConfig()
+	if err != nil {
+		return err
+	}
+
+	// Behavior variables
+	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
+	viper.SetDefault("lohpi_mux_addr", "127.0.1.1:8080")
+	viper.SetDefault("policy_store_addr", "127.0.1.1:8082")
+	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
+	viper.SafeWriteConfig()
+	return nil
 }

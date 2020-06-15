@@ -101,30 +101,6 @@ func GetListener() (net.Listener, error) {
 	return l, errFoundNoPort
 }
 
-//Hacky AF
-func GetLocalIP() string {
-	/*
-			conn, err := net.Dial("udp", "8.8.8.8:80")
-			if err != nil {
-				log.Error(err.Error())
-			}
-			defer conn.Close()
-
-			localAddr := conn.LocalAddr().(*net.UDPAddr)
-
-			return localAddr.IP.String()
-		return h
-	*/
-
-	h, _ := os.Hostname()
-	addr, err := net.LookupHost(h)
-	if err != nil || len(addr) < 1 {
-		return ""
-	}
-
-	return addr[0]
-}
-
 func LocalIP() (string, error) {
 	host, _ := os.Hostname()
 
@@ -140,26 +116,20 @@ func LocalIP() (string, error) {
 	return addrs[0].String(), nil
 }
 
-func ListenUdp() (*net.UDPConn, string, error) {
-	h, _ := os.Hostname()
-
-	addr, err := net.LookupHost(h)
-	if err != nil {
-		return nil, "", err
+func ValidatePortNumber(portNum *int) {
+	if *portNum == -1 {
+		*portNum = GetOpenPort()
+		log.Info("Port number not set. Picking %d as port num...\n", *portNum)
+	} else {
+		host := ":0" + strconv.Itoa(*portNum)
+		l, err := net.Listen("tcp4", host)
+		if err != nil {
+			*portNum = GetOpenPort()
+			return
+		}
+		if err := l.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Can't close connection on port %d: %s", *portNum, err)
+			panic(err)
+		}
 	}
-
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:0", addr[0]))
-	if err != nil {
-		return nil, "", err
-	}
-
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return nil, "", err
-	}
-
-	port := strings.Split(conn.LocalAddr().String(), ":")[1]
-	fullAddr := fmt.Sprintf("%s:%s", addr[0], port)
-
-	return conn, fullAddr, nil
 }

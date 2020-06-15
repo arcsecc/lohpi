@@ -155,7 +155,6 @@ func NewMetaDataInfo(jsonFile []byte) (*MetaDataInfo, error) {
 
 	return &MetaDataInfo{
 		StudyName:	studyName,
-		//Policies: 	policies,
 		Extras:		arbitraryMetaDataInfoObjects,
 		DataFields: dataFields,
 	}, nil

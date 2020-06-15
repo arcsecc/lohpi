@@ -25,7 +25,6 @@ import (
 )
 
 var	(
-	errNoAddr         = errors.New("No network address provided in cert request.")
 	errNoPort         = errors.New("No port number specified in config.")
 	errNoCertFilepath = errors.New("Tried to save public group certificates with no filepath set in config")
 	errNoKeyFilepath  = errors.New("Tried to save private key with no filepath set in config")

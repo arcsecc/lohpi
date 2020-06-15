@@ -21,7 +21,6 @@ func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Confi
 
 	conf := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
-		//InsecureSkipVerify: true,				// OOPS
 	}
 
 	if caCert == nil {

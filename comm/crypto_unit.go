@@ -8,9 +8,8 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
-	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
@@ -23,7 +22,6 @@ import (
 )
 
 var (
-	errNoRingNum = errors.New("No ringnumber present in received certificate")
 	errNoIp      = errors.New("No ip present in received identity")
 	errNoAddrs   = errors.New("Not enough addresses present in identity")
 	errNoCa 	 = errors.New("No Lohpi ca address supplied")
@@ -53,9 +51,7 @@ type certSet struct {
 
 func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	var certs *certSet
-	var extValue []byte
 
-	/*
 	serviceAddr := strings.Split(identity.Locality[0], ":")
 	if len(serviceAddr) <= 0 {
 		return nil, errNoIp
@@ -64,7 +60,7 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	ip := net.ParseIP(serviceAddr[0])
 	if ip == nil {
 		return nil, errNoIp
-	}*/
+	}
 
 	priv, err := genKeys()
 	if err != nil {
@@ -72,24 +68,14 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	}
 
 	if caAddr != "" {
+		fmt.Println("ca addr", caAddr)
 		addr := fmt.Sprintf("http://%s/certificateRequest", caAddr)
 		certs, err = sendCertRequest(priv, addr, identity)
 		if err != nil {
-			panic(err)
 			return nil, err
 		}
 	} else {
 		return nil, errNoCa
-	}
-
-	for _, e := range certs.ownCert.Extensions {
-		if e.Id.Equal(asn1.ObjectIdentifier{2, 5, 13, 37}) {
-			extValue = e.Value
-		}
-	}
-
-	if extValue == nil {
-		return nil, errNoRingNum
 	}
 
 	return &CryptoUnit{
@@ -98,7 +84,6 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 		caAddr:     caAddr,
 		pk:         identity,
 		priv:       priv,
-		trusted:    certs.trusted,
 	}, nil
 }
 
@@ -118,6 +103,41 @@ func (cu *CryptoUnit) Priv() *ecdsa.PrivateKey {
 	return cu.priv
 }
 
+func (cu *CryptoUnit) Pub() *ecdsa.PublicKey {
+	return &cu.priv.PublicKey
+}
+
+func (cu *CryptoUnit) EncodePublicKey() ([]byte, error) {
+	pubASN1, err := x509.MarshalPKIXPublicKey(&cu.priv.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return pem.EncodeToMemory(&pem.Block{
+	    Type:  "ECDSA PUBLIC KEY",
+	    Bytes: pubASN1,
+	}), nil	
+}
+
+func (cu *CryptoUnit) DecodePublicKey(key []byte) (*ecdsa.PublicKey, error) {
+	block, _ := pem.Decode(key)
+    if block == nil {
+        return nil, errors.New("failed to parse PEM block containing the key")
+    }
+
+    pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+    if err != nil {
+        return nil, err
+    }
+
+    switch pub := pub.(type) {
+    case *ecdsa.PublicKey:
+        return pub, nil
+	default:
+		break
+    }
+    return nil, errors.New("Key type is not valid")
+}
 
 func (cu *CryptoUnit) Verify(data, r, s []byte, pub *ecdsa.PublicKey) bool {
 	if pub == nil {
@@ -157,32 +177,27 @@ func sendCertRequest(privKey *ecdsa.PrivateKey, caAddr string, pk pkix.Name) (*c
 
 	certReqBytes, err := x509.CreateCertificateRequest(rand.Reader, &template, privKey)
 	if err != nil {
-		fmt.Printf("1\n")
 		return nil, err
 	}
 
 	resp, err := http.Post(caAddr, "text", bytes.NewBuffer(certReqBytes))
 	if err != nil {
-		fmt.Printf("2\n")
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	err = json.NewDecoder(resp.Body).Decode(&certs)
 	if err != nil {
-		fmt.Printf("3\n")
 		return nil, err
 	}
 
 	set.ownCert, err = x509.ParseCertificate(certs.OwnCert)
 	if err != nil {
-		fmt.Printf("4\n")
 		return nil, err
 	}
 
 	set.caCert, err = x509.ParseCertificate(certs.CaCert)
 	if err != nil {
-		fmt.Printf("5\n")
 		return nil, err
 	}
 
@@ -192,13 +207,9 @@ func sendCertRequest(privKey *ecdsa.PrivateKey, caAddr string, pk pkix.Name) (*c
 }
 
 func selfSignedCert(priv *ecdsa.PrivateKey, pk pkix.Name) (*certSet, error) {
-	ringBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(ringBytes[0:], uint32(32))
-
 	ext := pkix.Extension{
 		Id:       []int{2, 5, 13, 37},
 		Critical: false,
-		Value:    ringBytes,
 	}
 
 	serial, err := genSerialNumber()
@@ -266,7 +277,7 @@ func genSerialNumber() (*big.Int, error) {
 }
 
 func genKeys() (*ecdsa.PrivateKey, error) {
-	privKey, err := ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
+	privKey, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
