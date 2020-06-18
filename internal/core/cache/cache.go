@@ -96,7 +96,7 @@ func (c *Cache) StudyExists(study string) bool {
 	return false
 }
 
-// Returns the address of the node
+// Given the node identifier, return the address of the node, 
 func (c *Cache) NodeAddr(node string) string {
 	c.nodesMutex.RLock()
 	defer c.nodesMutex.RUnlock()

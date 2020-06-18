@@ -178,7 +178,7 @@ func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 	msg := message.NodeMessage{
 		MessageType: 	message.MSG_TYPE_GOSSIP_ACK,
 		Hash:			string(m.Hash),
-		NodeAddr:		n.ifritClient.Addr(),
+		Node:			n.nodeName,
 	}
 
 	b, _ := json.Marshal(msg)

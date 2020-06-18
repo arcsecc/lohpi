@@ -65,7 +65,6 @@ type NodeMessage struct {
 	R           []byte
 	S           []byte
 	Content 	[][]byte
-	NodeAddr 	string
 }
 
 // Message describing the policies

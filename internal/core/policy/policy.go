@@ -102,7 +102,7 @@ func NewPolicyStore() (*PolicyStore, error) {
 		return nil, err
 	}
 
-	gossipManager, err := gossipmanager.NewGossipManager(c, 10, time.Second * 60)
+	gossipManager, err := gossipmanager.NewGossipManager(c, 10, time.Second * 60, cache)
 	if err != nil {
 		return nil, err
 	}

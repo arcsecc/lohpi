@@ -1,7 +1,7 @@
 package gossipmanager
 
 import (
-	"fmt"
+_	"fmt"
 	"log"
 	"time"
 	"container/list"
@@ -9,15 +9,20 @@ import (
 	"encoding/json"
 
 	"github.com/tomcat-bit/lohpi/internal/core/message"
+	"github.com/tomcat-bit/lohpi/internal/core/cache"
+
 	"github.com/joonnna/ifrit"
 )
+
+
+// TODO: assure that the size does not exceed 4MB (refer to grpc library's constraints on message sizes)
 
 type GossipManager struct {
 	// Underlying Ifrit client
 	ifritClient *ifrit.Client
 
-	// List of batches to be gossiped to the network
-	list *list.List
+	// List of past batches to be gossiped to the network
+	pastBatchesList *list.List
 
 	// Self-adjusting interval between gossiping contents
 	gossipInterval time.Duration
@@ -31,21 +36,33 @@ type GossipManager struct {
 	// Current batch in flight
 	gossipMsg *message.NodeMessage
 
+	// Cache from policy store
+	cache *cache.Cache
+
 	// Recipients required to accept the current gossip
-	recipients map[string]string
+	remainingRecipients map[string]string
+	numRequiredRecipients int
+	// lock it too 
 }
 
-func NewGossipManager(ifritClient *ifrit.Client, batchSize int, probeInterval time.Duration) (*GossipManager, error) {
+type pastBatch struct {
+	recipients map[string]string
+	ackPercentage float32
+	//Contents as well?
+}
+
+func NewGossipManager(ifritClient *ifrit.Client, batchSize int, probeInterval time.Duration, cache *cache.Cache) (*GossipManager, error) {
 	return &GossipManager{
-		ifritClient: 	ifritClient,
-		list: 			list.New(),
-		gossipInterval:	10 * time.Second,		// Find a reasonable value 
-		probeInterval:	probeInterval,
-		messageQueue: 	make(chan []byte, batchSize),
-		recipients:		make(map[string]string),
-		gossipMsg:  	&message.NodeMessage{
-			MessageType:	message.MSG_TYPE_GOSSIP_MESSAGE,
-			Content: 		make([][]byte, 0),
+		ifritClient: 			ifritClient,
+		pastBatchesList: 		list.New(),
+		gossipInterval:			10 * time.Second,		// Find a reasonable value 
+		probeInterval:			probeInterval,
+		messageQueue: 			make(chan []byte, batchSize),
+		cache:					cache,
+		remainingRecipients:	make(map[string]string),
+		gossipMsg:  			&message.NodeMessage{
+			MessageType:			message.MSG_TYPE_GOSSIP_MESSAGE,
+			Content: 				make([][]byte, 0),
 		},
 	}, nil
 }
@@ -76,7 +93,22 @@ func (gm *GossipManager) Start() {
 }
 
 func (gm *GossipManager) AcknowledgeMessage(msg message.NodeMessage) {
-	log.Printf("GossipManager acking message with hash %s from %s\n", string(msg.Hash), msg.NodeAddr)
+	log.Printf("GossipManager acking message with hash %s from %s\n", string(msg.Hash), msg.Node)
+
+	if msg.Hash != gm.gossipMsg.Hash {
+		log.Println("Got an unknown hash")
+		return
+	}
+
+	//lock
+	delete(gm.remainingRecipients, msg.Node)
+	//unlock
+
+	if len(gm.remainingRecipients) < 1 {
+		log.Println("Got acks from all nodes")
+	} else {
+		log.Println("Missing acks from ", gm.remainingRecipients)
+	}
 }
 
 func (gm *GossipManager) probeNetwork() {
@@ -94,9 +126,13 @@ func (gm *GossipManager) gossipContent() {
 	log.Println("GOSSIP TIME!!!!")
 	// Lock before sending it. 
 
+	gm.verifyAcknowledgements()
+
 	// Compute the hash
 	h := sha256.New()
-    h.Write([]byte(fmt.Sprintf("%v", gm.gossipMsg)))
+	//h.Write([]byte(fmt.Sprintf("%v", gm.gossipMsg)))
+	t, _ := time.Now().MarshalJSON()
+	h.Write(t)
 	gm.gossipMsg.Hash = string(h.Sum(nil))
 
 	// Copy the marshalled object 
@@ -104,15 +140,17 @@ func (gm *GossipManager) gossipContent() {
 	c := make([]byte, len(b))
 	copy(c, b)
 
-	log.Printf("Gossip hash: %s\n", string(gm.gossipMsg.Hash))
-	for _, b := range gm.gossipMsg.Content {
-		fmt.Printf("Gossip content: %s\n", string(b))
-	}
-
 	gm.setRecipients()
 
+	log.Printf("Gossip hash: %s\n", string(gm.gossipMsg.Hash))
+	for _, b := range gm.gossipMsg.Content {
+		log.Printf("Gossip content: %s\n", string(b))
+	}
+
+	log.Println("Want acks from ", gm.remainingRecipients)
+
 	// Gossip it
-	//gm.ifritClient.SetGossipContent(c)
+	gm.ifritClient.SetGossipContent(c)
 
 	// Nil everything 
 	gm.gossipMsg = &message.NodeMessage{
@@ -124,6 +162,28 @@ func (gm *GossipManager) gossipContent() {
 
 func (gm *GossipManager) setRecipients() {
 	//lock
-	
+	gm.remainingRecipients = gm.cache.Nodes()
+	gm.numRequiredRecipients = len(gm.cache.Nodes())
 	//unlock
+}
+
+// Check if the in-fligh batch completed as it should. Adjusts the sleep intercal 
+func (gm *GossipManager) verifyAcknowledgements() {
+	// lock 
+	numMissing := len(gm.remainingRecipients)
+	if numMissing < 1 {
+		pb := &pastBatch{
+			recipients: gm.remainingRecipients,
+			ackPercentage: (float32(numMissing) * float32(gm.numRequiredRecipients)) * 100.0,
+		}
+
+		elem := &list.Element{
+			Value: pb,
+		}
+
+		gm.pastBatchesList.PushBack(elem)
+		gm.gossipInterval += 5 * time.Second
+		log.Printf("Missed %f elements in this gossip round", pb.ackPercentage)
+	}
+	// unlock
 }
