@@ -36,6 +36,13 @@ var (
 	logging   = logger.New("module", "node/main")
 )
 
+// TODO move me somewhere else. ref gossip.go
+type gossipMessage struct {
+	Content 	[][]byte
+	Hash 		[]byte
+	Addr	 	string
+}
+
 type Node struct {
 	// Fuse file system
 	fs *fuse.Ptfs
@@ -88,6 +95,7 @@ func NewNode(nodeName string) (*Node, error) {
 
 func (n *Node) StartIfritClient() {
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
+	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
 	go n.ifritClient.Start()
 }
 
@@ -112,6 +120,7 @@ func (n *Node) Shutdown() {
 
 // Main entry point for handling Ifrit direct messaging
 // TODO: Use go-routines to avoid clients waiting for replies
+// TODO: use protobuf
 func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	var msg message.NodeMessage
 	err := json.Unmarshal(data, &msg)
@@ -155,6 +164,28 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		fmt.Printf("Unknown message type: %s\n", msg.MessageType)
 	}
 	return []byte(message.MSG_TYPE_OK), nil
+}
+
+func (n *Node) gossipHandler(data []byte) ([]byte, error) {
+	// Verify the message using ECDSA
+
+	// Decode the message
+	var m gossipMessage
+	json.Unmarshal(data, &m) 
+    fmt.Printf("Gossip message from policy store. Hash: %v\n", m.Hash)
+
+	// Acknowledge the message
+	msg := message.NodeMessage{
+		MessageType: 	message.MSG_TYPE_GOSSIP_ACK,
+		Hash:			string(m.Hash),
+		NodeAddr:		n.ifritClient.Addr(),
+	}
+
+	b, _ := json.Marshal(msg)
+	ch:= <- n.ifritClient.SendTo(n.PolicyStoreIP, b)
+	_ = ch
+
+	return nil, nil
 }
 
 func (n *Node) nodeInfo() ([]byte, error) {
@@ -372,6 +403,7 @@ func (n *Node) verifyPolicyStoreMessage(msg *message.NodeMessage) error {
 	return nil
 }
 
+// Not pretty at all
 func decodePublicKey(data []byte) (*ecdsa.PublicKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {

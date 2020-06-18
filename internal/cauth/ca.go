@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"github.com/lohpi/netutil"
+	"github.com/tomcat-bit/lohpi/internal/netutil"
 	"github.com/spf13/viper"
 	"io"
 	"math/big"
@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"os"
 
 	log "github.com/inconshreveable/log15"
 )

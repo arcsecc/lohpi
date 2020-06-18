@@ -27,6 +27,8 @@ const (
 	MSG_TYPE_SET_SUBJECT_POLICY    = "MSG_TYPE_SET_SUBJECT_POLICY"
 	MSG_TYPE_SET_REC_POLICY        = "MSG_TYPE_SET_REC_POLICY"
 	MSG_TYPE_SET_POLICY            = "MSG_TYPE_SET_POLICY"
+	MSG_TYPE_GOSSIP_ACK			   = "MSG_TYPE_GOSSIP_ACK"
+	MSG_TYPE_GOSSIP_MESSAGE		   = "MSG_TYPE_GOSSIP_MESSAGE"
 )
 
 // Required format of the bulk data creator
@@ -58,10 +60,12 @@ type NodeMessage struct {
 	Populator   *NodePopulator
 	Filename    string
 	Extras      []byte
-	Hash        []byte
+	Hash        string
 	ModelText   string
 	R           []byte
 	S           []byte
+	Content 	[][]byte
+	NodeAddr 	string
 }
 
 // Message describing the policies

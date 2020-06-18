@@ -26,7 +26,8 @@ import (
 	"github.com/tomcat-bit/lohpi/internal/comm"
 	"github.com/tomcat-bit/lohpi/internal/core/cache"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
-	"github.com/tomcat-bit/lohpi/netutil"
+	"github.com/tomcat-bit/lohpi/internal/core/policy/gossipmanager"
+	"github.com/tomcat-bit/lohpi/internal/netutil"
 
 	"github.com/go-git/go-git"
 	"github.com/go-git/go-git/plumbing/object"
@@ -45,21 +46,32 @@ type PolicyStore struct {
 	// Go-git
 	repository *git.Repository
 
+	// HTTP
 	listener     net.Listener
 	httpServer   *http.Server
 	port         int
 	serverConfig *tls.Config
 
+	// Sync 
 	exitChan 	chan bool
 	wg       	*sync.WaitGroup
 
+	// Crypto
 	cu         *comm.CryptoUnit
 	publicKey  crypto.PublicKey
 	privateKey *rsa.PrivateKey
+
+	// Gossip manager
+	gm 		*gossipmanager.GossipManager
 }
 
 func NewPolicyStore() (*PolicyStore, error) {
 	c, err := ifrit.NewClient()
+	if err != nil {
+		return nil, err
+	}
+
+	repository, err := initializeGitRepository(viper.GetString("policy_store_repo"))
 	if err != nil {
 		return nil, err
 	}
@@ -69,14 +81,7 @@ func NewPolicyStore() (*PolicyStore, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	netutil.ValidatePortNumber(&port)
-
-	repository, err := initializeGitRepository(viper.GetString("policy_store_repo"))
-	if err != nil {
-		return nil, err
-	}
-
 	listener, err := netutil.ListenOnPort(port)
 	if err != nil {
 		return nil, err
@@ -97,6 +102,12 @@ func NewPolicyStore() (*PolicyStore, error) {
 		return nil, err
 	}
 
+	gossipManager, err := gossipmanager.NewGossipManager(c, 10, time.Second * 60)
+	if err != nil {
+		return nil, err
+	}
+	go gossipManager.Start()
+
 	return &PolicyStore{
 		ifritClient:  c,
 		repository:   repository,
@@ -107,6 +118,7 @@ func NewPolicyStore() (*PolicyStore, error) {
 		wg:           &sync.WaitGroup{},
 		cache:        cache,
 		cu:           cu,
+		gm:			  gossipManager,
 	}, nil
 }
 
@@ -126,10 +138,9 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	fmt.Println("Got ", msg.MessageType, "in PS")
-
 	switch msgType := msg.MessageType; msgType {
 	case message.MSG_TYPE_SET_STUDY_LIST:
+		// TODO: clean up
 		studies := make([]string, 0)
 		reader := bytes.NewReader(msg.Extras)
 		dec := gob.NewDecoder(reader)
@@ -137,7 +148,12 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 			return nil, err
 		}
 
+		// go here?
 		ps.cache.UpdateStudies(msg.Node, studies)
+
+	case message.MSG_TYPE_GOSSIP_ACK:
+		ps.gm.AcknowledgeMessage(msg)
+
 	default:
 		fmt.Printf("Unknown message: %s\n", msgType)
 	}
@@ -281,11 +297,15 @@ func (ps *PolicyStore) setRECPolicy(file multipart.File, fileHeader *multipart.F
 		return err
 	}
 
-	// send policy directoly to the node that stores the study
+	// Send policy directoly to the node that stores the study
 	node := ps.cache.Studies()[study]
 	if err := ps.sendStudyPolicy(node, fileContents); err != nil {
 		return err
 	}
+
+	// Gossip the policy to the network
+	ps.gm.Submit(fileContents)
+	ps.gm.Submit([]byte("pokpaosdkpoaskpokdpoaskpod"))
 
 	return nil
 }
@@ -375,6 +395,11 @@ func initializeGitRepository(path string) (*git.Repository, error) {
 	if !ok {
 		errMsg := fmt.Sprintf("Directory '%s' does not exist", path)
 		return nil, errors.New(errMsg)
+	}
+
+	policiesDir := viper.GetString("policy_store_repo") + "/" + "policies"
+	if err := os.MkdirAll(policiesDir, os.ModePerm); err != nil {
+		return nil, err
 	}
 
 	return git.PlainOpen(path)

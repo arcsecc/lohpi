@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tomcat-bit/lohpi/internal/comm"
 	"github.com/tomcat-bit/lohpi/internal/core/cache"
-	"github.com/tomcat-bit/lohpi/netutil"
+	"github.com/tomcat-bit/lohpi/internal/netutil"
 	"net"
 	"net/http"
 	"strconv"
@@ -66,7 +66,7 @@ func NewMux(httpPortNum int) (*Mux, error) {
 	netutil.ValidatePortNumber(&port)
 	listener, err := netutil.ListenOnPort(port)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	vlog.Debug("addrs", "rpc", listener.Addr().String(), "udp")

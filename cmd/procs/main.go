@@ -9,10 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	logger "github.com/inconshreveable/log15"
 	"github.com/tomcat-bit/lohpi/internal/core/client"
 	"github.com/tomcat-bit/lohpi/internal/core/mux"
 	"github.com/tomcat-bit/lohpi/internal/core/policy"
-	"github.com/tomcat-bit/lohpi/netutil"
+	"github.com/tomcat-bit/lohpi/internal/netutil"
 
 	"github.com/spf13/viper"
 )
@@ -42,12 +43,15 @@ func main() {
 	var httpPortNum int
 	var numClients int
 	var execPath string = ""
+	var logfile string
+	var h logger.Handler
 
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.IntVar(&numNodes, "n", 0, "Number of initial nodes in the network.")
 	arg.IntVar(&numClients, "c", 0, "Number of initial clients to interact with the network.")
 	arg.StringVar(&execPath, "e", "", "Lohpi node's executable path.")
 	arg.IntVar(&httpPortNum, "p", -1, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
+	arg.StringVar(&logfile, "logfile", "", "Absolute or relative path to log file.")
 	arg.Parse(os.Args[1:])
 
 	if numNodes == 0 {
@@ -75,6 +79,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Executable path '%s' is invalid. Exiting\n", execPath)
 		os.Exit(2)
 	}
+
+	r := logger.Root()
+	if logfile != "" {
+		h = logger.CallerFileHandler(logger.Must.FileHandler(logfile, logger.LogfmtFormat()))
+	} else {
+		h = logger.StreamHandler(os.Stdout, logger.LogfmtFormat())
+	}
+
+	r.SetHandler(h)
 
 	netutil.ValidatePortNumber(&httpPortNum)
 	app := NewApplication(numNodes, numClients, httpPortNum, execPath)
@@ -200,7 +213,7 @@ func readConfig() error {
 	}
 
 	// Behavior variables
-	viper.SetDefault("policy_store_repo", "/home/thomas/go/src/firestore/policy_store")
+	viper.SetDefault("policy_store_repo", "/home/thomas/go/src/github.com/tomcat-bit/lohpi/policy_store")
 	viper.SetDefault("lohpi_mux_addr", "127.0.1.1:8080")
 	viper.SetDefault("policy_store_addr", "127.0.1.1:8082")
 	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")

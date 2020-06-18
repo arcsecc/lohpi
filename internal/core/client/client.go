@@ -14,7 +14,7 @@ import (
 
 	"github.com/tomcat-bit/lohpi/internal/comm"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
-	"github.com/tomcat-bit/lohpi/netutil"
+	"github.com/tomcat-bit/lohpi/internal/netutil"
 
 	"github.com/spf13/viper"
 )
