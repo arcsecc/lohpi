@@ -102,7 +102,7 @@ func NewPolicyStore() (*PolicyStore, error) {
 		return nil, err
 	}
 
-	gossipManager, err := gossipmanager.NewGossipManager(c, 10, time.Second * 60, cache)
+	gossipManager, err := gossipmanager.NewGossipManager(c, 10, time.Second * 10, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 		// go here?
 		ps.cache.UpdateStudies(msg.Node, studies)
 
-	case message.MSG_TYPE_GOSSIP_ACK:
+	case message.MSG_TYPE_PROBE_ACK:
 		ps.gm.AcknowledgeMessage(msg)
 
 	default:

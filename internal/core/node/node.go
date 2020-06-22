@@ -172,18 +172,10 @@ func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 	// Decode the message
 	var m gossipMessage
 	json.Unmarshal(data, &m) 
-    fmt.Printf("Gossip message from policy store. Hash: %v\n", m.Hash)
-
-	// Acknowledge the message
-	msg := message.NodeMessage{
-		MessageType: 	message.MSG_TYPE_GOSSIP_ACK,
-		Hash:			string(m.Hash),
-		Node:			n.nodeName,
+	
+	for _, c := range m.Content {
+		fmt.Println("Gossip content: %s\n", string(c))
 	}
-
-	b, _ := json.Marshal(msg)
-	ch:= <- n.ifritClient.SendTo(n.PolicyStoreIP, b)
-	_ = ch
 
 	return nil, nil
 }
