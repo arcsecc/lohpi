@@ -1,0 +1,98 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+package proto;
+
+service Mux {
+    rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc StudyList (google.protobuf.Empty) returns (Studies) {}
+    rpc StudyMetadata (Study) returns (Metadata) {}
+}
+
+service Policystore {
+    rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc StudyList (google.protobuf.Empty) returns (Studies) {}
+    rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
+}
+
+service Rec {
+    rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc SetStudy (Study) returns (google.protobuf.Empty) {}
+}
+
+// Used in direct messaging
+message Message {
+    string Type = 1;
+    Load load = 2;
+    Node sender = 3;
+    Studies studies = 4;
+    Policy policy = 5;
+    Signature signature = 6;
+}
+
+// Message to load a node. Distributed to all entities that need it (hint hint REC)
+message Load {
+    Node node = 1;
+    string StudyName = 2;
+    uint32 Minfiles = 3;
+    uint32 Maxfiles = 4;
+    repeated string subjects = 5;
+    Metadata metadata = 6;
+}
+
+// Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
+message Node {
+    string name = 1;            // String identifier
+    string address = 2;         // IP address
+}
+
+message Study {
+    string name = 1;                // Name for this study
+    Node node = 2;                  // The node that stores this study
+    Metadata metadata = 4;          // Metadata!
+    Policy policy = 5;              // Policy in effect
+}
+
+message Studies {
+    repeated Study studies = 1;
+}
+
+message Subject {
+    string name = 1;
+}
+
+message Metadata {
+    bytes content = 1;     // File contents 
+    repeated string subjects = 2;  // Participating subjects
+}
+
+message Policy {
+    string issuer = 1;
+    string studyName = 2;
+    string filename = 3;
+    bytes content = 4; // Policy details. See Casbin policy 
+}
+
+message Signature {
+    bytes r = 1;
+    bytes s = 2;
+}
+
+message HandshakeResponse {
+    string ip = 1;      // IP of the key owner
+    bytes key = 2;      // public key
+}
+
+message GossipMessage {
+    string Sender = 1;              // Who sent it?
+    string MessageType = 2;         // Gossip or probing?
+    google.protobuf.Timestamp PolicyStoreTime = 3;      
+    Signature signature = 4;
+    repeated GossipMessageBody gossipMessageBody = 5;   
+}
+
+message GossipMessageBody {
+    string object = 1;          // subject or study. Appliy the policy to the object
+    uint64 version = 2;         // Version numbering 
+    Policy policy = 3;
+}
