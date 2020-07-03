@@ -7,9 +7,10 @@ service Mux {
     rpc Handshake (Node) returns (HandshakeResponse) {}
     rpc StudyList (google.protobuf.Empty) returns (Studies) {}
     rpc StudyMetadata (Study) returns (Metadata) {}
+    rpc IgnoreIP (Node) returns (Node) {}
 }
 
-service Policystore {
+service PolicyStore {
     rpc Handshake (Node) returns (HandshakeResponse) {}
     rpc StudyList (google.protobuf.Empty) returns (Studies) {}
     rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
@@ -22,33 +23,37 @@ service Rec {
 
 // Used in direct messaging
 message Message {
-    string Type = 1;
-    Load load = 2;
-    Node sender = 3;
-    Studies studies = 4;
-    Policy policy = 5;
-    Signature signature = 6;
+    string Type = 1;        // What kind of message is it?
+    Load load = 2;          // 
+    Node sender = 3;        //
+    Studies studies = 4;    //    
+    Policy policy = 5;      //
+    Signature signature = 6;// Integrity check based on ECDSA
+    GossipMessage gossipMessage = 7;
 }
 
 // Message to load a node. Distributed to all entities that need it (hint hint REC)
 message Load {
-    Node node = 1;
-    string StudyName = 2;
-    uint32 Minfiles = 3;
-    uint32 Maxfiles = 4;
-    repeated string subjects = 5;
-    Metadata metadata = 6;
+    Node node = 1;                  //
+    string StudyName = 2;           //
+    uint32 Minfiles = 3;            //
+    uint32 Maxfiles = 4;            //
+    repeated string subjects = 5;   //
+    Metadata metadata = 6;          //
 }
 
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
 message Node {
     string name = 1;            // String identifier
     string address = 2;         // IP address
+    string role = 3;            // What type of node is it? storage node, compliance engine etc
+    string contact_email = 4;   // Contact of person/entity responsible for the node, preferably an email alias, for non-compliance reports. 
 }
 
 message Study {
     string name = 1;                // Name for this study
     Node node = 2;                  // The node that stores this study
+    string rec_contact_email = 3;   // Contact email of REC person responsible, in case we want to send updates **future**
     Metadata metadata = 4;          // Metadata!
     Policy policy = 5;              // Policy in effect
 }
@@ -80,13 +85,13 @@ message Signature {
 
 message HandshakeResponse {
     string ip = 1;      // IP of the key owner
-    bytes key = 2;      // public key
+    bytes id = 2;
 }
 
 message GossipMessage {
     string Sender = 1;              // Who sent it?
     string MessageType = 2;         // Gossip or probing?
-    google.protobuf.Timestamp PolicyStoreTime = 3;      
+    google.protobuf.Timestamp timestamp = 3; // Time at policy store, to keep track of messages     
     Signature signature = 4;
     repeated GossipMessageBody gossipMessageBody = 5;   
 }
@@ -95,4 +100,5 @@ message GossipMessageBody {
     string object = 1;          // subject or study. Appliy the policy to the object
     uint64 version = 2;         // Version numbering 
     Policy policy = 3;
+    google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival
 }

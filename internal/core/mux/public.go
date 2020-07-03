@@ -3,14 +3,15 @@ package mux
 /* This file contains methods that use the Lohpi network for queries */
 
 import (
-	"bytes"
-	"encoding/gob"
+	"log"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
 
+	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
 )
 
@@ -40,44 +41,57 @@ func (m *Mux) getNodeInfo(node string) (string, error) {
 }
 
 // Orders a node to create test data for it to store dummy data and assoicated data policies
-func (m *Mux) loadNode(np *message.NodePopulator) error {
-	node := np.Node
-
+func (m *Mux) loadNode(studyName, node string, md []byte, subjects []string) error {
 	if !m.cache.NodeExists(node) {
 		errMsg := fmt.Sprintf("Unknown node: %s", node)
 		return errors.New(errMsg)
 	}
 
-	msg := &message.NodeMessage{
-		MessageType: message.MSG_TYPE_LOAD_NODE,
-		Populator:   np,
+	// Prepare the message
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_LOAD_NODE,
+		Load: &pb.Load{
+			Node: &pb.Node{
+				Name: node,
+				Address: "",
+			},
+			StudyName: studyName,
+			Minfiles: 2,
+			Maxfiles: 10,
+			Subjects: subjects,
+			Metadata: &pb.Metadata{
+				Content: md,
+				Subjects: subjects,
+			},
+		},
 	}
 
-	serializedMsg, err := msg.Encode()
+	data, err := proto.Marshal(msg)
 	if err != nil {
-		return err
+		panic(err)
 	}
 
 	m.cache.FetchRemoteStudyLists()
-	if m.cache.StudyInAnyNodeThan(node, np.MetaData.Meta_data_info.StudyName) {
-		errMsg := fmt.Sprintf("Study '%s' already exists in another node", np.MetaData.Meta_data_info.StudyName)
+	if m.cache.StudyInAnyNodeThan(node, studyName) {
+		errMsg := fmt.Sprintf("Study '%s' already exists in another node", studyName)
 		return errors.New(errMsg)
 	}
 
-	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node), serializedMsg)
-	studies := make([]string, 0)
+	// Load the node
+	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node), data)
+	msgResp := &pb.Studies{}
+
 	select {
+		// TODO: timeout handling
 	case response := <-ch:
-		reader := bytes.NewReader(response)
-		dec := gob.NewDecoder(reader)
-		if err := dec.Decode(&studies); err != nil {
-			return err
+		if err := proto.Unmarshal(response, msgResp); err != nil {
+			panic(err)
 		}
+		log.Println("Response", string(response))
 	}
 
-	// Add the node to the list of studies the node stores
-	m.cache.UpdateStudies(np.Node, studies)
-	fmt.Printf("Node '%s' now stores study '%s'\n", np.Node, np.MetaData.Meta_data_info.StudyName)
+	m.cache.UpdateStudies(node, msgResp.GetStudies())
+	fmt.Printf("Node '%s' now stores study '%s'\n", node, studyName)
 	return nil
 }
 

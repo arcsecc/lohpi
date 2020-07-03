@@ -1,5 +1,6 @@
 package client
 
+/*
 import (
 	"bytes"
 	"crypto/tls"
@@ -18,18 +19,18 @@ import (
 
 	"github.com/spf13/viper"
 )
-
+*/
 type Client struct {
 	// TLS configuration used when interacting with the MUX over HTTPS
-	clientConfig *tls.Config
+/*	clientConfig *tls.Config
 
 	// A unique identifier of the client
 	clientName string
 
 	// Attributes of the client
-	attrMap map[string]string
+	attrMap map[string]string*/
 }
-
+/*
 func NewClient(name string) (*Client, error) {
 	if err := readConfig(); err != nil {
 		panic(err)
@@ -200,3 +201,4 @@ func readConfig() error {
 	viper.SafeWriteConfig()
 	return nil
 }
+*/

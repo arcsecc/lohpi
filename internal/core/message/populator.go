@@ -34,7 +34,7 @@ type MetaData struct {
 
 type MetaDataInfo struct {
 	StudyName  string              // mandatory
-	DataFields []*DataField        // manwdatory
+	DataFields []*DataField        // mandatory
 	Policies   map[string][]string // mandatory
 	Extras     map[string][]string // optional fields
 }

@@ -7,8 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"context"
+	"time"
 
 	"github.com/tomcat-bit/lohpi/internal/core/message"
+	pb "github.com/tomcat-bit/lohpi/protobuf"
 
 	"github.com/gorilla/mux"
 	logging "github.com/inconshreveable/log15"
@@ -69,37 +72,88 @@ func (m *Mux) network(w http.ResponseWriter, r *http.Request) {
 // and generates random data from the POST payload
 func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if r.MultipartForm == nil || r.MultipartForm.File == nil {
+		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
 		return
 	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
-		return
-	}
-
-	// Used to prepare data packets to be sent to the node
-	var body bytes.Buffer
-	io.Copy(&body, r.Body)
-	data := body.Bytes()
-
-	nodePopulator, err := message.NewNodePopulator(data)
+	
+	mdFile, _, err := r.FormFile("metadata")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer mdFile.Close()
+	
+	// Read the multipart file from the client
+	buf := bytes.NewBuffer(nil)
+	if _, err := io.Copy(buf, mdFile); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+
+	studyName := r.PostFormValue("study")
+	subjects := r.MultipartForm.Value["subjects"]
+	node := r.PostFormValue("node")
+
+	if studyName == "" || subjects == nil || node == "" {
+		http.Error(w, "Missing fields when loading node.", http.StatusMethodNotAllowed)
 		return
 	}
 
-	if err := m.loadNode(nodePopulator); err != nil {
-		errMsg := fmt.Sprintf("Error: %s", err)
-		http.Error(w, errMsg, http.StatusUnprocessableEntity)
+	// Send metadata and loading information to the node. It might fail
+	// (node doesn't exist) 
+	if err := m.loadNode(studyName, node, buf.Bytes(), r.MultipartForm.Value["subjects"]); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Created bulk data at node '%s'. Study name: '%s'\n", nodePopulator.Node, nodePopulator.MetaData.Meta_data_info.StudyName)
+	
+	// Send metadata to rec
+	if err := m.sendRecMetadata(studyName, node, buf.Bytes(), r.MultipartForm.Value["subjects"]); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fmt.Fprintf(w, "Loaded node '%s' with study name '%s'\n", node, studyName)
+}
+
+func (m *Mux) sendRecMetadata(studyName, node string, md []byte, subjects []string) error {
+	conn, err := m.recClient.Dial(m.config.RecIP)
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	// Metadata to be sent to REC
+	_, err = conn.SetStudy(ctx, &pb.Study{
+		Name: studyName,
+		Node: &pb.Node{
+			Name: node,
+			Address: m.cache.Nodes()[node],
+		},
+		Metadata: &pb.Metadata{
+			Content: md,
+			Subjects: subjects,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil 
 }
 
 // Sets a study's policy. The policy originates from a subject
+// TODO move to policy store
 func (m *Mux) SetSubjectStudyPolicy(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -209,3 +263,72 @@ func (m *Mux) GetData(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(statusCode)
 	fmt.Fprintf(w, "Status code: %d\tresult: %s\n", statusCode, result)
 }
+
+
+
+/*
+// Sets a study's policy. The policy originates from REC and it is applied to
+// all subjects in the study
+func (ps *PolicyStore) SetRecPolicy(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if r.MultipartForm == nil || r.MultipartForm.File == nil {
+		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
+		return
+	}
+
+	modelFile, fileHeader, err := r.FormFile("model")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	study := r.PostFormValue("study")
+	if err := ps.setRECPolicy(modelFile, fileHeader, study); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	fmt.Fprintf(w, "REC sets new access policy for study '%s'\n", r.PostFormValue("study"))
+}
+
+func (ps *PolicyStore) setRECPolicy(file multipart.File, fileHeader *multipart.FileHeader, study string) error {
+	if !ps.cache.StudyExists(study) {
+		errMsg := fmt.Sprintf("Study '%s' does not exist in the network", study)
+		return errors.New(errMsg)
+	}
+
+	fileContents, err := ioutil.ReadAll(file)
+	if err != nil {
+		return err
+	}
+
+	// Store the file on disk
+	fullPath := filepath.Join(viper.GetString("policy_store_repo"), fileHeader.Filename)
+	if err := ioutil.WriteFile(fullPath, fileContents, 0644); err != nil {
+		return err
+	}
+
+	// Commit the file to the local Git log
+	if err := ps.commit(fileHeader.Filename); err != nil {
+		return err
+	}
+
+	// Send policy directoly to the node that stores the study
+	node := ps.cache.Studies()[study]
+	if err := ps.sendStudyPolicy(node, fileContents); err != nil {
+		return err
+	}
+
+	// Gossip the policy to the network
+	ps.gm.Submit(fileContents)
+	ps.gm.Submit([]byte("pokpaosdkpoaskpokdpoaskpod"))
+
+	return nil
+}
+*/

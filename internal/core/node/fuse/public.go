@@ -7,43 +7,43 @@ package fuse
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 
 	"github.com/tomcat-bit/lohpi/internal/core/message"
+	pb "github.com/tomcat-bit/lohpi/protobuf" 
 )
 
 // Based on the contents in 'msg', tell the FUSE daemon to create dummy files and assoicated
 // meta-data. The operation is ddempotent; the file that is effected is deleted and rewritten over again
 // per each invocation.
-func (self *Ptfs) FeedBulkData(msg *message.NodePopulator) error {
-	fmt.Printf("In FeedBulkData we got %s\n", msg.MetaData.Meta_data_info.DataFields[0].FilePattern.Directory)
-	study := msg.MetaData.Meta_data_info.StudyName
-	minFiles := msg.MinFiles
-	maxFiles := msg.MaxFiles
-	policy_attributes := msg.MetaData.Meta_data_info.PolicyAttriuteStrings()
+func (self *Ptfs) FeedBulkData(load *pb.Load) error {
+	study := load.GetStudyName()
+	minFiles := load.GetMinfiles()
+	maxFiles := load.GetMaxfiles()
+	//policy_attributes := msg.MetaData.Meta_data_info.PolicyAttriuteStrings()
 
 	// There can be multiple subjects per NodePopulator
 	// TODO: split this up into more functions.
 	// TODO: use several go-routines here as well to make it go a little faster!
-	for _, subject := range msg.Subjects {
-		if err := self.BulkDataRunner(subject, study, minFiles, maxFiles, policy_attributes); err != nil {
+	for _, subject := range load.GetSubjects() {
+		if err := self.BulkDataRunner(subject, study, minFiles, maxFiles); err != nil {
 			return err
 		}
 	}
 
 	// Store all nescessary meta-data (included the policies assoicated with the study and enrolled subjects)
-	if err := self.StoreMetaData(*msg.MetaData); err != nil {
+	if err := self.StoreMetaData(load.GetMetadata(), study); err != nil {
 		return err
 	}
 	return nil
 }
 
 // Creates files, policies and meta-data from the incoming NodePopulator
-func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles int, policy_attributes map[string][]string) error {
+//func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles uint32, policy_attributes map[string][]string) error {
+	func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles uint32) error {
 	// Check if subject's data is already stored by FUSE
 	if self.subjectExists(subject) {
 		fmt.Printf("Subject exists. Continuing...\n")
@@ -76,7 +76,7 @@ func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles int, 
 	}
 
 	// Used to generate a random number of files, each of which contain arbitrary data
-	numFiles := getRandomInt(minFiles, maxFiles)
+	numFiles := getRandomInt(int(minFiles), int(maxFiles))
 	fileSize := getRandomInt(100, 1000)
 
 	// Create the files in the "subjects" part of the FUSE file tree. Any existing files are deleted and replaced by
@@ -94,18 +94,10 @@ func (self *Ptfs) BulkDataRunner(subject, study string, minFiles, maxFiles int, 
 }
 
 // Stores the meta-data in a .json file
-func (self *Ptfs) StoreMetaData(metaData message.MetaData) error {
-	study := metaData.Meta_data_info.StudyName
-
+func (self *Ptfs) StoreMetaData(md *pb.Metadata, study string) error {
 	// There exists exactly one JSON file for each study
 	// Path where we store the JSON file for a particular study
 	jsonPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.mountDir, STUDIES_DIR, study, METADATA_DIR, METADATA_FILE)
-
-	// Pretify the meta-data struct into JSON
-	output, err := json.MarshalIndent(metaData, "", "\t")
-	if err != nil {
-		return err
-	}
 
 	// Overwrite file if it exists
 	file, err := os.OpenFile(jsonPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
@@ -117,7 +109,7 @@ func (self *Ptfs) StoreMetaData(metaData message.MetaData) error {
 
 	// File writer
 	w := bufio.NewWriter(file)
-	_, err = w.WriteString(string(output))
+	_, err = w.WriteString(string(md.GetContent()))
 	if err != nil {
 		return err
 	}

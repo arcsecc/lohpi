@@ -1,13 +1,16 @@
 package mux
-
+/*
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"errors"
 
 	"github.com/gorilla/mux"
 	logging "github.com/inconshreveable/log15"
+	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/golang/protobuf/ptypes/empty"
+	"golang.org/x/net/context"
 )
 
 func (m *Mux) HttpsHandler() error {
@@ -15,9 +18,7 @@ func (m *Mux) HttpsHandler() error {
 	r := mux.NewRouter()
 
 	// Utilities used in experiments
-	r.HandleFunc("/set_port", m.SetPortNumber)
 	r.HandleFunc("/network", m.network)
-	r.HandleFunc("/get_studies", m.GetStudies)
 	//mux.HandleFunc("/get_study_data", m.GetStudyData)
 
 	m.httpServer = &http.Server{
@@ -33,57 +34,39 @@ func (m *Mux) HttpsHandler() error {
 	return nil
 }
 
-// Handshake endpoint for nodes to join the network
-func (m *Mux) SetPortNumber(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
+func (m *Mux) StudyList(context.Context, *empty.Empty) (*pb.Studies, error) {
+	m.cache.FetchRemoteStudyLists()
+	studies := &pb.Studies{
+		Studies: make([]*pb.Study, 0),
 	}
 
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
+	for s := range m.cache.Studies() {
+		study := pb.Study{
+			Name: s,
+		}
+
+		studies.Studies = append(studies.Studies, &study)
 	}
 
-	var msg struct {
-		Node    string `json:"node"`
-		Address string `json:"address"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&msg)
-	if err != nil {
-		errMsg := fmt.Sprintf("Error: could not decode node handshake")
-		http.Error(w, errMsg, http.StatusBadRequest)
-		return
-	}
-
-	if !m.cache.NodeExists(msg.Node) {
-		m.cache.UpdateNodes(msg.Node, msg.Address)
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "%s", m.ifritClient.Addr())
-	} else {
-		errMsg := fmt.Sprintf("Node '%s' already exists in network\n", msg.Node)
-		http.Error(w, errMsg, http.StatusBadRequest)
-	}
-	log.Printf("Added %s to map with IP %s\n", msg.Node, msg.Address)
+	//studies.Studies = append(studies.Studies, &pb.Study{Name: "kake",})
+	return studies, nil
 }
 
-// Streams the newest list of studies available to the network
-func (m *Mux) GetStudies(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodGet {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
-		return
+func (m *Mux) Handshake(ctx context.Context, node *pb.Node) (*pb.IP, error) {
+	if !m.cache.NodeExists(node.GetName()) {
+		m.cache.UpdateNodes(node.GetName(), node.GetAddress())
+	} else {
+		errMsg := fmt.Sprintf("Node '%s' already exists in network\n", node.GetName())
+		return nil, errors.New(errMsg)
 	}
+	log.Printf("Added %s to map with IP %s\n", node.GetName(), node.GetAddress())
+	return &pb.IP{
+		Ip: m.ifritClient.Addr(),
+	}, nil
+}
 
-	m.cache.FetchRemoteStudyLists()
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Studies known to the network\n--> ")
-	for study := range m.cache.Studies() {
-		fmt.Fprintf(w, "%s ", study)
-	}
+func (m Mux) StudyMetadata(context.Context, *pb.Study) (*pb.Metadata, error) {
+	return nil, nil 
 }
 
 // Given a study, GetStudyData returns a stream of files available to the

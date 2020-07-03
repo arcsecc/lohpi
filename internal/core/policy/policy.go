@@ -1,44 +1,65 @@
 package policy
 
 import (
-	"bytes"
-	"encoding/gob"
-	"encoding/json"
 	"errors"
+	"sort"
 	"fmt"
+	"math"
 	"io/ioutil"
 	"log"
-	"mime/multipart"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"context"
 
 	"crypto"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509/pkix"
 
 	"github.com/tomcat-bit/lohpi/internal/comm"
 	"github.com/tomcat-bit/lohpi/internal/core/cache"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
-	"github.com/tomcat-bit/lohpi/internal/core/policy/gossipmanager"
 	"github.com/tomcat-bit/lohpi/internal/netutil"
+	pb "github.com/tomcat-bit/lohpi/protobuf"
+_	"google.golang.org/grpc/peer"
 
+	"github.com/joonnna/workerpool"
+	"github.com/golang/protobuf/proto"
 	"github.com/go-git/go-git"
 	"github.com/go-git/go-git/plumbing/object"
-	"github.com/gorilla/mux"
 	"github.com/joonnna/ifrit"
 	"github.com/spf13/viper"
+	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/empty"
 )
 
+type Config struct {
+	MuxIP					string		`default:"127.0.1.1:8080"`
+	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
+	RecIP 					string 		`default:"127.0.1.1:8083"`
+	BatchSize 				int 		`default:10`
+	ProbeInterval			int32 		`default:10`
+	GossipInterval			int32 		`default:10`
+}
+
+type service interface {
+	Handshake(*pb.Node)
+	StudyList(*empty.Empty)
+	SetPolicy(*pb.Policy)
+}
+
 type PolicyStore struct {
+	// Policy store's configuration
+	config *Config
+
 	// The underlying Fireflies client
 	ifritClient *ifrit.Client
+
+	// MUX's Ifrit ip
+	muxIfritIP string
 
 	// Cache manager
 	cache *cache.Cache
@@ -46,26 +67,37 @@ type PolicyStore struct {
 	// Go-git
 	repository *git.Repository
 
-	// HTTP
-	listener     net.Listener
-	httpServer   *http.Server
-	port         int
-	serverConfig *tls.Config
-
 	// Sync 
 	exitChan 	chan bool
 	wg       	*sync.WaitGroup
+	networkLock	sync.Mutex
 
 	// Crypto
 	cu         *comm.CryptoUnit
 	publicKey  crypto.PublicKey
 	privateKey *rsa.PrivateKey
 
-	// Gossip manager
-	gm 		*gossipmanager.GossipManager
+	// Workpool
+	dispatcher *workerpool.Dispatcher
+	 
+	// gRPC service
+	grpcs *gRPCServer
+	s service
+
+	// gRPC client towards the Mux
+	muxClient *comm.MuxGRPCClient
+
+	// Policy distribution
+	policyQueue chan pb.Policy
+	commitQueue chan pb.Policy
+
+	// Multicast stuff
+	ignoredIPAddresses map[string]string
+	lruNodes map[string]int					// ifrit address -> number of invocations
+	recipientPercentage float64
 }
 
-func NewPolicyStore() (*PolicyStore, error) {
+func NewPolicyStore(config *Config) (*PolicyStore, error) {
 	c, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -95,64 +127,122 @@ func NewPolicyStore() (*PolicyStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	serverConfig := comm.ServerConfig(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+
+	s, err := newPolicyStoreGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.Priv(), listener)
+	if err != nil {
+		return nil, err
+	}
+
+	muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	if err != nil {
+		return nil, err
+	}
 
 	cache, err := cache.NewCache(c)
 	if err != nil {
 		return nil, err
 	}
 
-	gossipManager, err := gossipmanager.NewGossipManager(c, 10, time.Second * 10, cache)
-	if err != nil {
-		return nil, err
+	ps := &PolicyStore{
+		ifritClient:  	c,
+		repository:   	repository,
+		exitChan:     	make(chan bool, 1),
+		wg:           	&sync.WaitGroup{},
+		cache:        	cache,
+		cu:           	cu,
+		grpcs:		  	s,
+		dispatcher: 	workerpool.NewDispatcher(3),
+		muxClient:		muxClient,
+		config: 		config,
+		policyQueue:	make(chan pb.Policy, config.BatchSize),
+		commitQueue: 	make(chan pb.Policy, config.BatchSize),
+		lruNodes: 		make(map[string]int),		// node identifier -> number of times it has been receiving messages
+		ignoredIPAddresses: make(map[string]string),
+		recipientPercentage: 10.0,			// find a proper value for this one
 	}
-	go gossipManager.Start()
 
-	return &PolicyStore{
-		ifritClient:  c,
-		repository:   repository,
-		listener:     listener,
-		serverConfig: serverConfig,
-		port:         port,
-		exitChan:     make(chan bool, 1),
-		wg:           &sync.WaitGroup{},
-		cache:        cache,
-		cu:           cu,
-		gm:			  gossipManager,
-	}, nil
+	ps.grpcs.Register(ps)
+
+	return ps, nil
 }
 
 func (ps *PolicyStore) Start() {
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
+	go ps.grpcs.Start()
 	go ps.ifritClient.Start()
-	go ps.HttpHandler()
+	ps.dispatcher.Start()
+	log.Println("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
+
+	// TODO: fix time configs
+	//probeTimer := time.Tick(time.Duration(ps.config.ProbeInterval) * time.Second)
+	probeTimer := time.Tick(10 * time.Second)
+	gossipTimer := time.Tick(5 * time.Second)
+	//gossipTimer := time.Tick(time.Duration(ps.config.GossipInterval) * time.Second)
+
+	ps.initializeLruMap()
+
+	for {
+		select {
+		case p := <-ps.policyQueue:
+			if err := ps.storePolicy(&p); err != nil {
+				log.Fatalf(err.Error())
+			}
+
+			if err := ps.commitPolicy(&p); err != nil {
+				log.Fatalf(err.Error())
+			}
+		case <-gossipTimer:
+			if err := ps.sendBatch(); err != nil {
+				log.Fatalf(err.Error())
+			}
+		case <-probeTimer:
+			ps.probeNetwork()
+		}
+	}
 }
 
 func (ps *PolicyStore) Stop() {
 }
 
-func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
-	var msg message.NodeMessage
-	err := json.Unmarshal(data, &msg)
+// Contacts the given HTTP address and ignore its Ifrit address
+func (ps *PolicyStore) ignoreIfritIPAddress(remoteAddr, localName, localAddr string) (string, string, error) {
+	log.Println("Remote addr:", remoteAddr)
+	conn, err := ps.muxClient.Dial(remoteAddr)
 	if err != nil {
+		return "", "", err
+	}
+	defer conn.CloseConn()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 10)
+	defer cancel()
+
+	r, err := conn.IgnoreIP(ctx, &pb.Node{
+		Name: "Policy store",
+		Address: ps.ifritClient.Addr(),
+	})
+
+	if err != nil {
+		log.Fatal(err)
+		return "", "", err
+	}
+
+	defer conn.CloseConn()
+
+	return r.GetAddress(), r.GetName(), nil
+}
+
+func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
+	msg := &pb.Message{}
+	if err := proto.Unmarshal(data, msg); err != nil {
 		panic(err)
 	}
 
-	switch msgType := msg.MessageType; msgType {
+	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_SET_STUDY_LIST:
-		// TODO: clean up
-		studies := make([]string, 0)
-		reader := bytes.NewReader(msg.Extras)
-		dec := gob.NewDecoder(reader)
-		if err := dec.Decode(&studies); err != nil {
-			return nil, err
-		}
-
-		// go here?
-		ps.cache.UpdateStudies(msg.Node, studies)
+		ps.cache.UpdateStudies(msg.GetSender().GetName(), msg.GetStudies().GetStudies())
 
 	case message.MSG_TYPE_PROBE_ACK:
-		ps.gm.AcknowledgeMessage(msg)
+		//ps.ps.AcknowledgeMessage(msg)
 
 	default:
 		fmt.Printf("Unknown message: %s\n", msgType)
@@ -161,206 +251,100 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 	return []byte(message.MSG_TYPE_OK), nil
 }
 
-func (ps *PolicyStore) HttpHandler() error {
-	r := mux.NewRouter()
-
-	//r := .NewRouter()
-	log.Printf("Policy store: Started HTTP server on port %d\n", ps.port)
-	r.HandleFunc("/set_port", ps.NodeHandshake)
-	r.HandleFunc("/rec/set_policy", ps.SetRecPolicy)
-
-	ps.httpServer = &http.Server{
-		Handler:   r,
-		TLSConfig: ps.serverConfig,
-	}
-
-	//err := ps.httpServer.ServeTLS(ps.listener, "", "")
-	err := ps.httpServer.Serve(ps.listener)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-	return nil
-}
-
 // Handshake endpoint for nodes to join the network
-// TODO: move handshakes to a better location (mux has the exact same function)
-func (ps *PolicyStore) NodeHandshake(w http.ResponseWriter, r *http.Request) {
-	log.Println("New node joining policy store")
-	defer r.Body.Close()
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if r.Header.Get("Content-type") != "application/json" {
-		http.Error(w, "Require header to be application/json", http.StatusUnprocessableEntity)
-	}
-
-	// Incoming message from node
-	var msg struct {
-		Node    string `json:"node"`
-		Address string `json:"address"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&msg)
-	if err != nil {
-		errMsg := fmt.Sprintf("Error: could not decode node handshake")
-		log.Printf("Error: %s\n", errMsg)
-		http.Error(w, errMsg, http.StatusBadRequest)
-		return
-	}
-
-	var resp struct {
-		PolicyStoreIP string
-		PublicKey     []byte
-	}
-
-	// Insert node if it doesn't exist. Respond to node with IP address and public key
-	if !ps.cache.NodeExists(msg.Node) {
-		ps.cache.UpdateNodes(msg.Node, msg.Address)
-
-		pubKey, err := ps.cu.EncodePublicKey()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest) // use internal error
-			return
-		}
-
-		resp.PolicyStoreIP = ps.ifritClient.Addr()
-		resp.PublicKey = pubKey
-
-		var buf bytes.Buffer
-		enc := gob.NewEncoder(&buf)
-		if err := enc.Encode(&resp); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		w.Write(buf.Bytes())
-		fmt.Printf("Added %s to map with IP %s\n", msg.Node, msg.Address)
+func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
+	hr := &pb.HandshakeResponse{}
+	if !ps.cache.NodeExists(node.GetName()) {
+		ps.cache.UpdateNodes(node.GetName(), node.GetAddress())
+		hr.Ip = ps.ifritClient.Addr()
+		hr.Id = []byte(ps.ifritClient.Id())
+		//fmt.Printf("Policy store added %s to map with IP %s\n", node.GetName(), node.GetAddress())
 	} else {
-		errMsg := fmt.Sprintf("Node '%s' already exists in network\n", msg.Node)
-		http.Error(w, errMsg, http.StatusBadRequest)
+		errMsg := fmt.Sprintf("Node '%s' already exists in network\n", node.GetName())
+		return nil, errors.New(errMsg)
 	}
+	return hr, nil
 }
 
-// Sets a study's policy. The policy originates from REC and it is applied to
-// all subjects in the study
-func (ps *PolicyStore) SetRecPolicy(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-
-	err := r.ParseMultipartForm(32 << 20)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+func (ps *PolicyStore) StudyList(context.Context, *empty.Empty) (*pb.Studies, error) {
+	ps.cache.FetchRemoteStudyLists()
+	studies := &pb.Studies{
+		Studies: make([]*pb.Study, 0),
 	}
 
-	if r.MultipartForm == nil || r.MultipartForm.File == nil {
-		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
-		return
-	}
+	for s := range ps.cache.Studies() {
+		study := pb.Study{
+			Name: s,
+		}
 
-	modelFile, fileHeader, err := r.FormFile("model")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		studies.Studies = append(studies.Studies, &study)
 	}
-
-	study := r.PostFormValue("study")
-	if err := ps.setRECPolicy(modelFile, fileHeader, study); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	fmt.Fprintf(w, "REC sets new access policy for study '%s'\n", r.PostFormValue("study"))
+	return studies, nil
 }
 
-func (ps *PolicyStore) setRECPolicy(file multipart.File, fileHeader *multipart.FileHeader, study string) error {
-	if !ps.cache.StudyExists(study) {
-		errMsg := fmt.Sprintf("Study '%s' does not exist in the network", study)
-		return errors.New(errMsg)
-	}
+// Main entry point for setting the policies 
+func (ps *PolicyStore) SetPolicy(ctx context.Context, p *pb.Policy) (*empty.Empty, error) {
+	// TODO: only REC can set study-centric policies
 
-	fileContents, err := ioutil.ReadAll(file)
-	if err != nil {
-		return err
-	}
+	ps.dispatcher.Submit(func() {
+		_, ok := ps.cache.Studies()[p.GetStudyName()]
+		if !ok {
+			log.Println("No such study", p.GetStudyName(), "is known to policy store")
+			return
+		}
 
-	// Store the file on disk
-	fullPath := filepath.Join(viper.GetString("policy_store_repo"), fileHeader.Filename)
-	if err := ioutil.WriteFile(fullPath, fileContents, 0644); err != nil {
-		return err
-	}
+		// Submit policy to be commited and gossiped
+		ps.policyQueue <- *p
+	})
 
-	// Commit the file to the local Git log
-	if err := ps.commit(fileHeader.Filename); err != nil {
-		return err
-	}
-
-	// Send policy directoly to the node that stores the study
-	node := ps.cache.Studies()[study]
-	if err := ps.sendStudyPolicy(node, fileContents); err != nil {
-		return err
-	}
-
-	// Gossip the policy to the network
-	ps.gm.Submit(fileContents)
-	ps.gm.Submit([]byte("pokpaosdkpoaskpokdpoaskpod"))
-
-	return nil
+	// Gossip the policy update to the network
+	return &empty.Empty{}, nil
 }
 
-// Send the policy update to the correct node
-func (ps *PolicyStore) sendStudyPolicy(node string, fileContents []byte) error {
-	// Sign the new policy using ECDSA
-	r, s, err := ps.cu.Sign(fileContents)
-	if err != nil {
-		return err
-	}
-
-	msg := &message.NodeMessage{
-		MessageType: message.MSG_TYPE_SET_POLICY,
-		R:           r,
-		S:           s,
-		ModelText:   string(fileContents),
-	}
-
-	serializedMsg, err := msg.Encode()
-	if err != nil {
-		return err
-	}
-
-	// TODO: What should we do if the node does not respond?
-	ch := ps.ifritClient.SendTo(ps.cache.NodeAddr(node), serializedMsg)
-	select {
-	case response := <-ch:
-		fmt.Println("Resp in PS: ", response)
-	}
-	return nil
+// Stores the given policy on disk
+func (ps *PolicyStore) storePolicy(p *pb.Policy) error {
+	fullPath := filepath.Join(viper.GetString("policy_store_repo"), p.GetFilename())
+	return ioutil.WriteFile(fullPath, p.GetContent(), 0644)
 }
 
 // Commit the policy model to the Git repository
-func (ps *PolicyStore) commit(filePath string) error {
-	fmt.Println("Commiting file at path ", filePath)
-
+func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
+	log.Println("Committing...")
 	// Get the current worktree
-	wt, err := ps.repository.Worktree()
+	worktree, err := ps.repository.Worktree()
 	if err != nil {
 		panic(err)
 	}
 
 	// Add the file to the staging area
-	_, err = wt.Add(filePath)
+	_, err = worktree.Add(p.GetFilename())
 	if err != nil {
 		panic(err)
 	}
 
+	status, err := worktree.Status()
+	if err != nil {
+		panic(err)
+	}
+
+	// Check status and abort commit if staging changes don't differ from HEAD
+	if status.File(p.GetFilename()).Staging == git.Untracked {
+		if err := worktree.Checkout(&git.CheckoutOptions{}); err != nil {
+			panic(err)
+		} 
+	}
+
 	// Commit the file
 	// TODO: use RECs attributes when commiting the file
-	c, err := wt.Commit(filePath, &git.CommitOptions{
+	c, err := worktree.Commit(p.GetFilename(), &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "John Doe",
-			Email: "john@doe.org",
+			Name: p.GetIssuer(),
+			//Email: "john@doe.org",
+			When:  time.Now(),
+		},
+		Committer: &object.Signature{
+			Name: "Policy store",
+			//Email: "john@doe.org",
 			When:  time.Now(),
 		},
 	})
@@ -373,9 +357,203 @@ func (ps *PolicyStore) commit(filePath string) error {
 	if err != nil {
 		return err
 	}
+
 	//fmt.Println(obj)
 	_ = obj
 	return nil
+}
+
+// TODO finish me
+func (ps *PolicyStore) sendBatch() error {	
+	// Fetch all messages from the queue
+	gossipChunks := make([]*pb.GossipMessageBody, 0)
+	for p := range ps.policyQueue {
+		if len(ps.policyQueue) == 0 {
+			break
+		}	
+
+		gossipChunk := &pb.GossipMessageBody{
+			//string object = 1;          // subject or study. Appliy the policy to the object
+    		//uint64 version = 2;         // Version numbering 
+			Policy: &p,
+			//google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival
+		}
+
+		gossipChunks = append(gossipChunks, gossipChunk)
+	}
+
+	gmb := &pb.GossipMessage{
+		Sender: 				"Policy store",				// Do we really need it?
+		MessageType: 			message.GOSSIP_MSG_TYPE_POLICY,
+		Timestamp: 				ptypes.TimestampNow(),
+		GossipMessageBody:		gossipChunks,
+	}
+
+	data, err := proto.Marshal(gmb)
+	if err != nil {
+		return err
+	}
+
+	// Sign the chunks
+	r, s, err := ps.ifritClient.Sign(data)
+
+	// Prepare the message
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_POLICY_STORE_UPDATE,
+		Signature: &pb.Signature{
+			R: r,
+			S: s,
+		},
+		GossipMessage: gmb,
+	}
+
+	// Marshalled message to be multicasted
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		return nil
+	}
+
+	//Multicast the message to a random set of LRU nodes
+	members, err := ps.getLruMembers()
+	if err != nil {
+		return err
+	}
+
+	// Multicast messages in parrallel
+	ps.networkLock.Lock()
+	wg := sync.WaitGroup{}
+	for _, m := range members {
+		member := m
+		wg.Add(1)
+		go func() {
+			ps.ifritClient.SendTo(member, data)
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+	ps.networkLock.Unlock()
+	return nil 
+}
+
+
+func (ps *PolicyStore) initializeLruMap() error {
+	remoteIfritAddr, remoteName, err := ps.ignoreIfritIPAddress(ps.config.MuxIP, "Policy store", ps.ifritClient.Addr())
+	if err != nil {
+		return err
+	}
+
+	// Add ignored IP address 
+	ps.ignoredIPAddresses[remoteIfritAddr] = remoteName
+
+	// Initialize the list of LRU members
+	for _, c := range ps.ifritClient.Members() {
+		if !ps.ipIsIgnored(c) {
+			ps.lruNodes[remoteIfritAddr] = 0
+		}
+	}
+	return nil
+}
+
+// Update LRU members list by mirroring the underlying Ifrit network membership list
+func (ps *PolicyStore) updateLruMembers() {
+	tempMap := make(map[string]int)
+
+	// Copy the current map
+	for k, v := range ps.lruNodes {
+		tempMap[k] = v
+	}
+
+	// Hacky...
+	ps.lruNodes = make(map[string]int)
+
+	// Update the map according to the underlying Ifrit members list
+	for _, ifritMember := range ps.ifritClient.Members() {
+		if !ps.ipIsIgnored(ifritMember) {
+			if count, ok := tempMap[ifritMember]; !ok {
+				ps.lruNodes[ifritMember] = 0
+			} else {
+				ps.lruNodes[ifritMember] = count
+			}
+		}
+	}
+}
+
+// Returns the least recently used members of the group of avaiable recipients
+func (ps *PolicyStore) getLruMembers() ([]string, error) {
+	ps.updateLruMembers()
+
+	// Fetch some percentage of recipients
+	numRecipients := float64(len(ps.lruNodes)) / ps.recipientPercentage
+	recipients := make([]string, 0, int(numRecipients))
+
+	// Special case: too few network members
+	if numRecipients < 1.0 {
+		numRecipients = 1
+	}
+
+	if int(numRecipients) > len(ps.lruNodes) {
+		return nil, errors.New("numRecipients is greater than the number of possible recipients")
+	}
+
+	numRecipients = math.Round(float64(numRecipients))
+
+	// List of counts fetched from the LRU map. Sort it in ascending order so that
+	// the members that have sent the least number of times will be used as recipients
+	counts := make([]int, 0)
+	for  _, value := range ps.lruNodes {
+		counts = append(counts, value)
+	}
+
+	sort.Ints(counts)
+	lowest := counts[0]
+	iterations := 0
+
+	// Always keep the number of times a recipient has been contacted as low as possible
+	for k, v := range ps.lruNodes {
+		if v <= lowest {
+			lowest = v
+			
+			recipients = append(recipients, k)
+			iterations += 1
+			ps.lruNodes[k] += 1
+			if iterations >= int(numRecipients) {
+				break
+			}
+		}
+	}
+	return recipients, nil
+}
+
+// Returns true if the given ip address is ignored, returns false otherwise
+func (ps *PolicyStore) ipIsIgnored(ip string) bool {
+	_, ok := ps.ignoredIPAddresses[ip]
+	return ok
+}
+
+// Initializes a probing procedures that awaits for n acknowledgements 
+// using the current network settings
+func (ps *PolicyStore) probeNetwork() {
+	ps.networkLock.Lock()
+	defer ps.networkLock.Unlock()
+
+	// Table of recipients-to-ticker entries.
+	// Start the clock when we have sent the probe and stop it when the ack returns
+	ackTable := make(map[string]time.Time)
+
+	wg := sync.WaitGroup{}
+	for _, m := range ps.ifritClient.Members() {
+		member := m
+		wg.Add(1)
+		go func() {
+			ch := ps.ifritClient.SendTo(member, []byte(""))
+			select {
+			case response := <-ch:
+				
+			}
+			wg.Done()
+		}()
+	}
 }
 
 // Shut down all resources assoicated with the policy store
@@ -416,6 +594,7 @@ func exists(path string) (bool, error) {
 	}
 	return true, err
 }
+
 
 /*
 

@@ -1,14 +1,13 @@
 package cache
 
 import (
-	"bytes"
-	"encoding/gob"
-	"encoding/json"
-	"log"
 	"sync"
+	"log"
 
 	"github.com/joonnna/ifrit"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
+	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
 )
 
 // Cache is the internal overview of studies and nodes
@@ -22,6 +21,8 @@ type Cache struct {
 	studyMutex sync.RWMutex
 
 	ifritClient *ifrit.Client
+
+	ignoredIP []string
 }
 
 // Returns a new Cache
@@ -39,8 +40,13 @@ func (c *Cache) FetchRemoteStudyLists() {
 }
 
 // Updates the node's list of studies it stores
-func (c *Cache) UpdateStudies(node string, studies []string) {
+func (c *Cache) UpdateStudies(node string, studies []*pb.Study) {
 	c.updateStudies(node, studies)
+}
+
+// Sets the list of IP addresses the cache will ignore
+func (c *Cache) SetIgnoredIPs(ips []string) {
+	c.ignoredIP = ips
 }
 
 // Returns the map of node identifiers
@@ -76,15 +82,13 @@ func (c *Cache) NodeExists(node string) bool {
 
 // Returns true if the study exists in the cache, returns false otherwise
 func (c *Cache) StudyExists(study string) bool {
-	c.studyMutex.RLock()
 	defer c.studyMutex.RUnlock()
 
 	// Check local cache. If it fails, fetch the remote lists
+	c.studyMutex.RLock()
 	if _, ok := c.StudyMap[study]; ok {
 		return true
 	}
-
-	// Unlock before we yield control
 	c.studyMutex.RUnlock()
 	c.fetchStudyLists()
 	c.studyMutex.RLock()
@@ -119,37 +123,47 @@ func (c *Cache) StudyInAnyNodeThan(node, study string) bool {
 func (c *Cache) fetchStudyLists() {
 	// TODO: use goroutines in loop
 	for nodeName, dest := range c.NodeMap {
-		msg := message.NodeMessage{
-			MessageType: message.MSG_TYPE_GET_STUDY_LIST,
+		msg := &pb.Message{
+			Type: message.MSG_TYPE_GET_STUDY_LIST,
 		}
-
-		jsonStr, err := json.Marshal(msg)
+		
+		log.Println("Dest:", dest)
+		data, err := proto.Marshal(msg)
 		if err != nil {
-			log.Fatal(err)
+			panic(err)
 		}
 
-		ch := c.ifritClient.SendTo(dest, jsonStr)
-		studies := make([]string, 0)
+		ch := c.ifritClient.SendTo(dest, data)
+		msgResp := &pb.Studies{}
+
 		select {
 		case response := <-ch:
-			reader := bytes.NewReader(response)
-			dec := gob.NewDecoder(reader)
-			if err := dec.Decode(&studies); err != nil {
+			if err := proto.Unmarshal(response, msgResp); err != nil {
 				panic(err)
 			}
 		}
 
 		// add the node to the list of studies the node stores
-		c.updateStudies(nodeName, studies)
+		c.updateStudies(nodeName, msgResp.GetStudies())
 	}
 }
 
-func (c *Cache) updateStudies(node string, studies []string) {
+func (c *Cache) updateStudies(node string, studies []*pb.Study) {
 	c.studyMutex.Lock()
 	defer c.studyMutex.Unlock()
 	for _, study := range studies {
-		if _, ok := c.StudyMap[study]; !ok {
-			c.StudyMap[study] = node
+		if _, ok := c.StudyMap[study.GetName()]; !ok {
+			c.StudyMap[study.GetName()] = node
 		}
 	}
+}
+
+func (c *Cache) ipIsIgnored(ip string) bool {
+	for _, addr := range c.ignoredIP {
+		log.Println("Checking ignored ip", ip, "against", addr)
+		if addr == ip {
+			return true
+		}
+	}
+	return false
 }

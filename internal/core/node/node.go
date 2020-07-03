@@ -1,23 +1,23 @@
 package node
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/gob"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
+	"context"
+	"time"
 
 	"github.com/tomcat-bit/lohpi/internal/comm"
+//	"github.com/tomcat-bit/lohpi/internal/core/mux"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
 	"github.com/tomcat-bit/lohpi/internal/core/node/fuse"
+	"github.com/golang/protobuf/proto"
+	pb "github.com/tomcat-bit/lohpi/protobuf" 
 
 	"github.com/joonnna/ifrit"
 	"github.com/spf13/viper"
@@ -43,6 +43,13 @@ type gossipMessage struct {
 	Addr	 	string
 }
 
+type Config struct {
+	MuxIP					string		`default:"127.0.1.1:8080"`
+	PolicyStoreIP 			string		`default:"127.0.1.1:8082"`
+	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
+	RecIP 					string 		`default:"127.0.1.1:8083"`
+}
+
 type Node struct {
 	// Fuse file system
 	fs *fuse.Ptfs
@@ -65,9 +72,20 @@ type Node struct {
 
 	// Crypto unit
 	cu *comm.CryptoUnit
+
+	// Config
+	conf *Config
+
+	// gRPC client towards the Mux
+	muxClient *comm.MuxGRPCClient
+
+	// Policy store 
+	psClient *comm.PolicyStoreGRPCClient
+
+	policyStoreID []byte
 }
 
-func NewNode(nodeName string) (*Node, error) {
+func NewNode(nodeName string, config *Config) (*Node, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		panic(err)
@@ -84,12 +102,23 @@ func NewNode(nodeName string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	clientConfig := comm.ClientConfig(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+
+	muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	if err != nil {
+		return nil, err
+	}
+
+	psClient, err := comm.NewPolicyStoreClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	if err != nil {
+		return nil, err
+	}
 
 	return &Node{
-		nodeName:     nodeName,
-		ifritClient:  ifritClient,
-		clientConfig: clientConfig,
+		nodeName:     	nodeName,
+		ifritClient:  	ifritClient,
+		muxClient: 		muxClient, 
+		conf: 			config,
+		psClient: 		psClient,
 	}, nil
 }
 
@@ -122,21 +151,19 @@ func (n *Node) Shutdown() {
 // TODO: Use go-routines to avoid clients waiting for replies
 // TODO: use protobuf
 func (n *Node) messageHandler(data []byte) ([]byte, error) {
-	var msg message.NodeMessage
-	err := json.Unmarshal(data, &msg)
-	if err != nil {
+	msg := &pb.Message{}
+	if err := proto.Unmarshal(data, msg); err != nil {
 		panic(err)
 	}
+	log.Printf("Node '%s' got message %s\n", n.nodeName, msg.GetType())
 
-	log.Printf("Node '%s' got message %s\n", n.nodeName, msg.MessageType)
-
-	switch msgType := msg.MessageType; msgType {
+	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_LOAD_NODE:
 		// Create study files as well, regardless of wether or not the subject exists.
 		// If the study exists, we still add the subject's at the node and link to them using
 		// 'ln -s'. The operations performed by this call sets the finite state of the
 		// study. This means that any already existing files are deleted.
-		if err := n.fs.FeedBulkData(msg.Populator); err != nil {
+		if err := n.fs.FeedBulkData(msg.GetLoad()); err != nil {
 			return nil, err
 		}
 
@@ -146,6 +173,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		if err := n.sendStudyList(n.PolicyStoreIP); err != nil {
 			return nil, err
 		}
+
+		// Returns updates studies to the mux
 		return n.studyList()
 
 	case message.MSG_TYPE_GET_STUDY_LIST:
@@ -155,28 +184,40 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		return n.nodeInfo()
 
 	case message.MSG_TYPE_GET_META_DATA:
-		return n.studyMetaData(msg)
+		//return n.studyMetaData(msg)
 
-	case message.MSG_TYPE_SET_POLICY:
-		return n.setPolicy(&msg)
+	case message.MSG_TYPE_POLICY_STORE_UPDATE:
+		log.Println("Got new policy from policy store!")
+		n.setPolicy(msg)
 
 	default:
-		fmt.Printf("Unknown message type: %s\n", msg.MessageType)
+		fmt.Printf("Unknown message type: %s\n", msg.GetType())
 	}
-	return []byte(message.MSG_TYPE_OK), nil
+
+	resp, err := proto.Marshal(&pb.Message{Type: message.MSG_TYPE_OK})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (n *Node) gossipHandler(data []byte) ([]byte, error) {
-	// Verify the message using ECDSA
-
-	// Decode the message
-	var m gossipMessage
-	json.Unmarshal(data, &m) 
-	
-	for _, c := range m.Content {
-		fmt.Println("Gossip content: %s\n", string(c))
+	log.Println("Gossiper here")
+	msg := &pb.Message{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		panic(err)
 	}
 
+	if err := n.verifyPolicyStoreMessage(msg); err != nil {
+		log.Fatalf(err.Error())
+	}
+
+	/*
+	check recipients
+	check version number 
+	check object (subject or study). Apply the policy if needed
+	store the message on disk
+	*/
 	return nil, nil
 }
 
@@ -196,23 +237,34 @@ func (n *Node) NodeName() string {
 
 func (n *Node) studyList() ([]byte, error) {
 	// Studies known to this node
-	studies := n.fs.Studies()
-
-	// Prepare binary message and send it
-	buffer := &bytes.Buffer{}
-	encoder := gob.NewEncoder(buffer)
-	if err := encoder.Encode(studies); err != nil {
-		return nil, err
+	studies := &pb.Studies{
+		Studies: make([]*pb.Study, 0),
 	}
-	bytesMsg := buffer.Bytes()
-	return bytesMsg, nil
+
+	for _, s := range n.fs.Studies() {
+		study := pb.Study{
+			Name: s,
+		}
+		studies.Studies = append(studies.Studies, &study)
+	}	
+	return proto.Marshal(studies)
 }
 
 func (n *Node) studyMetaData(msg message.NodeMessage) ([]byte, error) {
 	return n.fs.StudyMetaData(msg)
 }
 
-func (n *Node) setPolicy(msg *message.NodeMessage) ([]byte, error) {
+func (n *Node) setPolicy(msg *pb.Message) {
+	if err := n.verifyPolicyStoreMessage(msg); err != nil {
+		log.Fatalf(err.Error())
+	}	
+
+	// Determine if the object is a subject or study
+	
+	// Store the file on disk
+	
+	// Apply the changes in fuse
+
 	/*fileName := msg.Filename
 	fileName = msg.Study + "_model.conf"
 	modelText := string(msg.Extras)
@@ -221,30 +273,15 @@ func (n *Node) setPolicy(msg *message.NodeMessage) ([]byte, error) {
 		return []byte(message.MSG_TYPE_ERROR), err
 	}*/
 
-	if err := n.verifyPolicyStoreMessage(msg); err != nil {
-		panic(err)
+	// Inspect the content of the 
+	
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		log.Fatalf(err.Error())
 	}
-
-	return []byte(message.MSG_TYPE_OK), nil
+	n.ifritClient.SetGossipContent(data)
 }
 
-/*
-func (n *Node) SetSubjectPolicy(msg message.NodeMessage) ([]byte, error) {
-	modelText := string(msg.Extras)
-	if err := n.fs.SetSubjectPolicy(msg.Subject, msg.Study, msg.Filename, modelText); err != nil {
-		return []byte(message.MSG_TYPE_ERROR), err
-	}
-	return []byte(message.MSG_TYPE_OK), nil
-}
-
-func (n *Node) SetRECPolicy(msg message.NodeMessage) ([]byte, error) {
-	modelText := string(msg.Extras)
-	if err := n.fs.SetStudyPolicy(msg.Study, msg.Filename, modelText); err != nil {
-		return []byte(message.MSG_TYPE_ERROR), err
-	}
-	return []byte(message.MSG_TYPE_OK), nil
-}
-*/
 func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
 	//	requestPolicy := msg.Populator.MetaData.Meta_data_info.PolicyAttriuteStrings()
 	fmt.Printf("TODO: Implement StudyData()\n")
@@ -252,145 +289,101 @@ func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
 }
 
 func (n *Node) sendStudyList(addr string) error {
-	studies, err := n.studyList()
-	if err != nil {
-		return err
+	studies := &pb.Studies{
+		Studies: make([]*pb.Study, 0),
 	}
 
-	msg := &message.NodeMessage{
-		MessageType: message.MSG_TYPE_SET_STUDY_LIST,
-		Node:        n.nodeName,
-		Extras:      studies,
-	}
+	for _, s := range n.fs.Studies() {
+		study := pb.Study{
+			Name: s,
+		}
 
-	serializedMsg, err := msg.Encode()
+		studies.Studies = append(studies.Studies, &study)
+	}	
+	
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_SET_STUDY_LIST,
+		Sender: &pb.Node{
+			Name: n.nodeName,
+		},
+		Studies: studies,
+	}
+	
+	data, err := proto.Marshal(msg)
 	if err != nil {
-		return err
+		panic(err) // return here
 	}
 
 	// TODO: return error from response instead?
-	ch := n.ifritClient.SendTo(addr, serializedMsg)
+	ch := n.ifritClient.SendTo(addr, data)
 	select {
 	case response := <-ch:
 		if string(response) != message.MSG_TYPE_OK {
 			return errors.New("Sending study list failed")
 		}
 	}
+	log.Println("Done sending study list")
 	return nil
 }
 
-// TODO: refine this and MuxHandshake to remove boilerplate code
 func (n *Node) PolicyStoreHandshake() error {
-	remoteAddr := viper.GetString("policy_store_addr")
-	//URL := "https://" + remoteAddr + "/set_port"
-	URL := "http://" + remoteAddr + "/set_port"
-	fmt.Printf("URL:> %s\n", URL)
-
-	var msg struct {
-		Node    string `json:"node"`
-		Address string `json:"address"`
-	}
-
-	var resp struct {
-		PolicyStoreIP string
-		PublicKey     []byte
-	}
-
-	msg.Node = n.nodeName
-	msg.Address = n.ifritClient.Addr()
-	jsonStr, err := json.Marshal(msg)
+	conn, err := n.psClient.Dial(viper.GetString("policy_store_addr"))
 	if err != nil {
 		return err
 	}
+	defer conn.CloseConn()
 
-	req, err := http.NewRequest("POST", URL, bytes.NewBuffer(jsonStr))
-	req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: n.clientConfig,
-		},
-	}
-	response, err := client.Do(req)
+	r, err := conn.Handshake(ctx, &pb.Node{
+		Name: n.nodeName, 
+		Address: n.ifritClient.Addr(),
+	})
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
-	defer response.Body.Close()
-	if response.StatusCode == int(http.StatusOK) {
-		bodyBytes, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			return err
-		}
+	defer conn.CloseConn()
 
-		buf := bytes.NewBuffer(bodyBytes)
-		dec := gob.NewDecoder(buf)
-
-		if err := dec.Decode(&resp); err != nil {
-			panic(err)
-		}
-
-		n.PolicyStoreIP = resp.PolicyStoreIP
-		fmt.Printf("resp.pubKey: %s\n", resp.PolicyStoreIP)
-		pubKey, err := n.cu.DecodePublicKey(resp.PublicKey)
-		if err != nil {
-			panic(err)
-		}
-		n.psPublicKey = *pubKey
-		fmt.Println("Pubkey at node:", pubKey)
-		return nil
-	}
-	return errors.New("Node could not perform handshake with 'Policy store'")
+	n.PolicyStoreIP = r.GetIp()
+	n.policyStoreID = r.GetId()
+	return nil 
 }
 
 func (n *Node) MuxHandshake() error {
-	remoteAddr := viper.GetString("lohpi_mux_addr")
-	URL := "https://" + remoteAddr + "/set_port"
-
-	var msg struct {
-		Node    string `json:"node"`
-		Address string `json:"address"`
-	}
-
-	msg.Node = n.nodeName
-	msg.Address = n.ifritClient.Addr()
-	jsonStr, err := json.Marshal(msg)
+	conn, err := n.muxClient.Dial(viper.GetString("lohpi_mux_addr"))
 	if err != nil {
 		return err
 	}
+	
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: n.clientConfig,
-		},
-	}
-
-	req, err := http.NewRequest("POST", URL, bytes.NewBuffer(jsonStr))
-	req.Header.Set("Content-Type", "application/json")
-	response, err := client.Do(req)
+	r, err := conn.Handshake(ctx, &pb.Node{
+		Name: n.nodeName, 
+		Address: n.ifritClient.Addr(),
+	})
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 
-	defer response.Body.Close()
-	if response.StatusCode == int(http.StatusOK) {
-		bodyBytes, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			return err
-		}
-
-		n.MuxIP = string(bodyBytes)
-		return nil
-	}
-	return errors.New("Node could not perform handshake with 'MUX'")
+	n.MuxIP = r.GetIp()
+	return nil 
 }
 
-// TODO: overhaul this
-func (n *Node) verifyPolicyStoreMessage(msg *message.NodeMessage) error {
-	if !n.cu.Verify([]byte(msg.ModelText), msg.R, msg.S, &n.psPublicKey) {
+func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	data, err := proto.Marshal(msg.GetGossipMessage())
+	if err != nil {
+		return err
+	}
+
+	if !n.ifritClient.VerifySignature(r, s, []byte(data), string(n.policyStoreID)) {
 		return errors.New("Could not securely verify the integrity of the new policy from policy store")
-	} else {
-		log.Println("Verified new signature from policy store")
 	}
 	return nil
 }

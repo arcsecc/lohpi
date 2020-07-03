@@ -12,11 +12,19 @@ import (
 	logger "github.com/inconshreveable/log15"
 	"github.com/tomcat-bit/lohpi/internal/core/client"
 	"github.com/tomcat-bit/lohpi/internal/core/mux"
+	"github.com/tomcat-bit/lohpi/internal/core/rec"
 	"github.com/tomcat-bit/lohpi/internal/core/policy"
 	"github.com/tomcat-bit/lohpi/internal/netutil"
-
+	"github.com/jinzhu/configor"
 	"github.com/spf13/viper"
 )
+
+// Global configuration for each system component. Read into the program from a .yml file
+var ApplicationConfig = struct {
+	MuxConfig mux.Config
+	RecConfig rec.Config
+	PolicyStoreConfig policy.Config
+}{}
 
 type Application struct {
 	// The front-end mux exposed to the data users
@@ -24,6 +32,9 @@ type Application struct {
 
 	// The policy store
 	ps *policy.PolicyStore
+
+	// REC
+	rec *rec.Rec
 
 	// The collection of child processes
 	nodeProcs map[string]*exec.Cmd
@@ -45,13 +56,15 @@ func main() {
 	var execPath string = ""
 	var logfile string
 	var h logger.Handler
+	var applicationConfigFile string
 
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
-	arg.IntVar(&numNodes, "n", 0, "Number of initial nodes in the network.")
-	arg.IntVar(&numClients, "c", 0, "Number of initial clients to interact with the network.")
-	arg.StringVar(&execPath, "e", "", "Lohpi node's executable path.")
-	arg.IntVar(&httpPortNum, "p", -1, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
+	arg.IntVar(&numNodes, "nodes", 0, "Number of initial nodes in the network.")
+	arg.IntVar(&numClients, "clients", 0, "Number of initial clients to interact with the network.")
+	arg.StringVar(&execPath, "exec", "", "Lohpi node's executable path.")
+	arg.IntVar(&httpPortNum, "port", -1, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
 	arg.StringVar(&logfile, "logfile", "", "Absolute or relative path to log file.")
+	arg.StringVar(&applicationConfigFile, "config", "", `Configuration file for the application. If not set, use default configuration values.`)
 	arg.Parse(os.Args[1:])
 
 	if numNodes == 0 {
@@ -80,6 +93,10 @@ func main() {
 		os.Exit(2)
 	}
 
+	if applicationConfigFile == "" {
+		log.Println("Using default application configuration")
+	}
+
 	r := logger.Root()
 	if logfile != "" {
 		h = logger.CallerFileHandler(logger.Must.FileHandler(logfile, logger.LogfmtFormat()))
@@ -90,6 +107,11 @@ func main() {
 	r.SetHandler(h)
 
 	netutil.ValidatePortNumber(&httpPortNum)
+
+	if err := setConfigurations(applicationConfigFile); err != nil {
+		panic(err)
+	}
+
 	app := NewApplication(numNodes, numClients, httpPortNum, execPath)
 	app.Start()
 
@@ -105,12 +127,18 @@ func NewApplication(numNodes, numClients, httpPortNum int, execPath string) *App
 		panic(err)
 	}
 
-	m, err := mux.NewMux(httpPortNum)
+	m, err := mux.NewMux(&ApplicationConfig.MuxConfig, httpPortNum)
 	if err != nil {
 		panic(err)
 	}
 
-	ps, err := policy.NewPolicyStore()
+	ps, err := policy.NewPolicyStore(&ApplicationConfig.PolicyStoreConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	//rec, err := rec.NewRec(&appConf.recconfig)
+	rec, err := rec.NewRec(&ApplicationConfig.RecConfig)
 	if err != nil {
 		panic(err)
 	}
@@ -119,18 +147,31 @@ func NewApplication(numNodes, numClients, httpPortNum int, execPath string) *App
 	nodes := startStorageNodes(numNodes, execPath)
 
 	return &Application{
-		mux:       m,
-		numNodes:  numNodes,
-		execPath:  execPath,
-		nodeProcs: nodes,
-		ps:        ps,
+		mux:       	m,
+		numNodes:  	numNodes,
+		execPath:  	execPath,
+		nodeProcs: 	nodes,
+		ps:        	ps,
+		rec:		rec,
 		//clients: clients,
 	}
 }
 
+func setConfigurations(configFile string) error {
+	conf := configor.New(&configor.Config{
+		ErrorOnUnmatchedKeys: true,
+		Verbose: true,
+		Debug: true,
+	})
+
+	return conf.Load(&ApplicationConfig, configFile)
+}
+
 func (app *Application) Start() {
-	app.mux.Start()
-	app.ps.Start()
+	// Assert the use of go routines here and inside the Start() methods
+	go app.mux.Start()
+	go app.ps.Start()
+	go app.rec.Start()
 
 	// Start the clients so that they can interact with Lohpi
 	/*for _, c := range app.clients {
@@ -186,6 +227,7 @@ func startStorageNodes(numNodes int, execPath string) map[string]*exec.Cmd {
 	return nodeProcs
 }
 
+/*
 func addNetworkClients(numClients int) (map[string]*client.Client, error) {
 	clients := make(map[string]*client.Client)
 
@@ -199,7 +241,7 @@ func addNetworkClients(numClients int) (map[string]*client.Client, error) {
 		clients[clientName] = c
 	}
 	return clients, nil
-}
+}*/
 
 func readConfig() error {
 	viper.SetConfigName("lohpi_config")
