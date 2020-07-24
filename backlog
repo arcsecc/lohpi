@@ -1,0 +1,29 @@
+Backlog:
+- When creating dummy data, use 0666 permission instead of 0777 beacuse it's too permissive.
+- Refine the storing procedures of the meta-data. Remember to check how the elements are stored instead
+the in-memory structs. Maybe we can send the raw bytes from the client instead of marshalling the data into the structs
+to maintain the default encoding.
+- When loading a node or setting a policy, remove the unnecessary function call to update the mux's cache.
+Instead, make it more seamless. 
+- Detach policy store from system and create its own executable 
+- Find a smoother way to bootstrap the policy store and the mux. They should be able to start independently of each other
+- Remove port flags and put them into config file
+- Use Ifrit signature instead of Lohpi-level keys
+- Use proper configuration tools (configor?) when bootstrapping the entire ssystem.
+- Disconnect the components into separate build targets?
+- Use protobuf instead of struct when passing messages over the Ifrit network
+- Client implementation needs to be at the requesting package and not at the host
+- Add signatures from the REC and Policy Store in all messages to verify the messages' integrity
+- Fix cache interface so that it doesn't send to dead members
+- Overhaul policy and gossip manager interactions with each other
+- Consider writing a library for each entity and use the library at a higher level
+- Use git submodule for each study
+- Sync the distributed entities with each other so that things behave correctly
+- MASSIVE TODO: move exposed entity API to a public directory and import internal stuff from there
+- Move message verification to message package
+- Fix membership overview in cache. What happens when a member dies? Use locks as well
+- Implement LRU in probing session
+- Redo policy and probing files in policy package
+- PS won't always verify the signatures in messages coming from nodes.
+- Network probing doesn't quite work. 
+- 
