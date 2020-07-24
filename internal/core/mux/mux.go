@@ -5,8 +5,6 @@ import (
 	"log"
 	"crypto/tls"
 	"errors"
-	vlog "github.com/inconshreveable/log15"
-	"github.com/spf13/viper"
 	"github.com/tomcat-bit/lohpi/internal/comm"
 	
 	"github.com/tomcat-bit/lohpi/internal/core/cache"
@@ -32,9 +30,10 @@ var (
 )
 
 type Config struct {
-	MuxIP					string		`default:"127.0.1.1:8080"`
+	MuxIP					string		`default:"127.0.1.1:8081"`
+	PolicyStoreIP			string 		`default:"127.0.1.1:8082"`
 	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
-	RecIP 					string 		`default:"127.0.1.1:8083"`
+	RecIP 					string 		`default:"127.0.1.1:8084"`
 }
 
 type service interface {
@@ -54,22 +53,18 @@ type Mux struct {
 	nodeListLock sync.RWMutex
 	cache        *cache.Cache
 
-	// HTTP
-	portNum      int
-	listener     net.Listener
-	httpServer   *http.Server
-	serverConfig *tls.Config
-
 	// HTTP-related stuff. Used by the demonstrator using cURL
 	httpPortNum   int
-	_httpListener net.Listener
-	_httpServer   *http.Server
+	httpListener net.Listener
+	httpServer   *http.Server
 
 	// Sync
 	wg       *sync.WaitGroup
 	exitChan chan bool
 
 	// gRPC service
+	listener     net.Listener
+	serverConfig *tls.Config
 	grpcs *gRPCServer
 	s service
 
@@ -80,6 +75,7 @@ type Mux struct {
 	ignoredIP map[string]string
 }
 
+// Returns a new mux using the given configuration and HTTP port number. Returns a non-nil error, if any
 func NewMux(config *Config, httpPortNum int) (*Mux, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
@@ -90,7 +86,7 @@ func NewMux(config *Config, httpPortNum int) (*Mux, error) {
 	//ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
-	portString := strings.Split(viper.GetString("lohpi_mux_addr"), ":")[1]
+	portString := strings.Split(config.MuxIP, ":")[1]
 	port, err := strconv.Atoi(portString)
 	if err != nil {
 		return nil, err
@@ -102,13 +98,11 @@ func NewMux(config *Config, httpPortNum int) (*Mux, error) {
 		return nil, err
 	}
 
-	vlog.Debug("addrs", "rpc", listener.Addr().String(), "udp")
-
 	pk := pkix.Name{
 		Locality: []string{listener.Addr().String()},
 	}
 
-	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
+	cu, err := comm.NewCu(pk, config.LohpiCaAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -124,15 +118,12 @@ func NewMux(config *Config, httpPortNum int) (*Mux, error) {
 	}
 
 	// Initiate HTTP connection without TLS. Used by demonstrator
-	_httpListener, err := netutil.ListenOnPort(httpPortNum)
-	if err != nil {
-		panic(err)
-	}
-
-	cache, err := cache.NewCache(ifritClient)
+	httpListener, err := netutil.ListenOnPort(httpPortNum)
 	if err != nil {
 		return nil, err
 	}
+
+	cache := cache.NewCache(ifritClient)
 
 	m := &Mux{
 		config: config, 
@@ -143,12 +134,9 @@ func NewMux(config *Config, httpPortNum int) (*Mux, error) {
 		// In-memory caches used to describe the network data
 		cache: cache,
 
-		// HTTPS
-		portNum:      port,
-
 		// HTTP
-		httpPortNum:   httpPortNum,
-		_httpListener: _httpListener,
+		httpPortNum: httpPortNum,
+		httpListener: httpListener,
 
 		// Sync
 		nodeListLock: sync.RWMutex{},
@@ -164,20 +152,27 @@ func NewMux(config *Config, httpPortNum int) (*Mux, error) {
 	}
 
 	m.grpcs.Register(m)
+
 	return m, nil
 }
 
 func (m *Mux) Start() {
 	go m.ifritClient.Start()
 	go m.HttpHandler()
-	//go m.HttpsHandler()
 	go m.grpcs.Start()
-	// sync here?
-
-	// Handshake with policy store
-	log.Println("Mux is ready")
+	
+	log.Println("Mux running gRPC server at", m.grpcs.Addr(), "and Ifrit client at", m.ifritClient.Addr())
 }
 
+func (m *Mux) Configuration() *Config {
+	return m.config
+}
+
+func (m *Mux) Stop() {
+	m.ifritClient.Stop()
+}
+
+// Returns a list of studies available to the network
 func (m *Mux) StudyList(ctx context.Context, e *empty.Empty) (*pb.Studies, error) {
 	m.cache.FetchRemoteStudyLists()
 	studies := &pb.Studies{
@@ -194,19 +189,28 @@ func (m *Mux) StudyList(ctx context.Context, e *empty.Empty) (*pb.Studies, error
 	return studies, nil
 }
 
+// Adds the given node to the network and returns the Mux's IP address
 func (m *Mux) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if !m.cache.NodeExists(node.GetName()) {
-		m.cache.UpdateNodes(node.GetName(), node.GetAddress())
+		m.cache.InsertNodes(node.GetName(), &pb.Node{
+			Name: 			node.GetName(),
+			Address: 		node.GetAddress(),
+			Role: 			node.GetRole(),
+			ContactEmail: 	node.GetContactEmail(),
+			Id: 			node.GetId(),
+		})
+		log.Printf("Mux added %s to map with IP %s\n", node.GetName(), node.GetAddress())
 	} else {
 		errMsg := fmt.Sprintf("Mux: node '%s' already exists in network\n", node.GetName())
 		return nil, errors.New(errMsg)
 	}
-	log.Printf("Mux: added %s to map with IP %s\n", node.GetName(), node.GetAddress())
 	return &pb.HandshakeResponse{
 		Ip: m.ifritClient.Addr(),
+		Id: []byte(m.ifritClient.Id()),
 	}, nil
 }
 
+// Adds the given node to the list of ignored IP addresses and returns the Mux's IP address 
 func (m *Mux) IgnoreIP(ctx context.Context, node *pb.Node) (*pb.Node, error) {
 	m.ignoredIP[node.GetName()] = node.GetAddress()
 	return &pb.Node{
@@ -218,8 +222,3 @@ func (m *Mux) IgnoreIP(ctx context.Context, node *pb.Node) (*pb.Node, error) {
 func (m *Mux) StudyMetadata(context.Context, *pb.Study) (*pb.Metadata, error) {
 	return nil, nil 
 }
-
-func (m *Mux) Stop() {
-	m.ifritClient.Stop()
-}
-

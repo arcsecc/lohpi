@@ -3,9 +3,7 @@ package node
 import (
 	"crypto/ecdsa"
 	"crypto/tls"
-	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
@@ -20,7 +18,6 @@ import (
 	pb "github.com/tomcat-bit/lohpi/protobuf" 
 
 	"github.com/joonnna/ifrit"
-	"github.com/spf13/viper"
 
 	logger "github.com/inconshreveable/log15"
 )
@@ -44,10 +41,13 @@ type gossipMessage struct {
 }
 
 type Config struct {
-	MuxIP					string		`default:"127.0.1.1:8080"`
+	MuxIP					string		`default:"127.0.1.1:8081"`
 	PolicyStoreIP 			string		`default:"127.0.1.1:8082"`
 	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
-	RecIP 					string 		`default:"127.0.1.1:8083"`
+	RecIP 					string 		`default:"127.0.1.1:8084"`
+
+	// Fuse configuration
+	FuseConfig fuse.Config
 }
 
 type Node struct {
@@ -74,7 +74,7 @@ type Node struct {
 	cu *comm.CryptoUnit
 
 	// Config
-	conf *Config
+	config *Config
 
 	// gRPC client towards the Mux
 	muxClient *comm.MuxGRPCClient
@@ -82,6 +82,8 @@ type Node struct {
 	// Policy store 
 	psClient *comm.PolicyStoreGRPCClient
 
+	// Used for identifying data coming from policy store
+	MuxID []byte
 	policyStoreID []byte
 }
 
@@ -98,7 +100,7 @@ func NewNode(nodeName string, config *Config) (*Node, error) {
 		Locality: []string{ifritClient.Addr()},
 	}
 
-	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
+	cu, err := comm.NewCu(pk, config.LohpiCaAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +119,7 @@ func NewNode(nodeName string, config *Config) (*Node, error) {
 		nodeName:     	nodeName,
 		ifritClient:  	ifritClient,
 		muxClient: 		muxClient, 
-		conf: 			config,
+		config: 			config,
 		psClient: 		psClient,
 	}, nil
 }
@@ -129,7 +131,7 @@ func (n *Node) StartIfritClient() {
 }
 
 func (n *Node) MountFuse() error {
-	fs, err := fuse.NewFuseFS(n.nodeName)
+	fs, err := fuse.NewFuseFS(n.nodeName, &n.config.FuseConfig)
 	if err != nil {
 		return err
 	}
@@ -155,6 +157,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	if err := proto.Unmarshal(data, msg); err != nil {
 		panic(err)
 	}
+
 	log.Printf("Node '%s' got message %s\n", n.nodeName, msg.GetType())
 
 	switch msgType := msg.Type; msgType {
@@ -164,7 +167,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// 'ln -s'. The operations performed by this call sets the finite state of the
 		// study. This means that any already existing files are deleted.
 		if err := n.fs.FeedBulkData(msg.GetLoad()); err != nil {
-			return nil, err
+			log.Fatal(err)
+		//	return nil, err
 		}
 
 		// Notify the policy store about the newest changes
@@ -190,6 +194,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		log.Println("Got new policy from policy store!")
 		n.setPolicy(msg)
 
+	case message.MSG_TYPE_PROBE:
+		return n.acknowledgeProbe(msg)
+
 	default:
 		fmt.Printf("Unknown message type: %s\n", msg.GetType())
 	}
@@ -202,14 +209,25 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 }
 
 func (n *Node) gossipHandler(data []byte) ([]byte, error) {
-	log.Println("Gossiper here")
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
 		panic(err)
 	}
 
+	// Might need to move this one? check type!
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
 		log.Fatalf(err.Error())
+	}
+
+	switch msgType := msg.Type; msgType {
+	case message.MSG_TYPE_PROBE:
+		return n.acknowledgeProbe(msg)
+	case message.MSG_TYPE_POLICY_STORE_UPDATE:
+		/*log.Println("Got new policy from policy store!")
+		n.setPolicy(msg)*/
+
+	default:
+		fmt.Printf("Unknown gossip message type: %s\n", msg.GetType())
 	}
 
 	/*
@@ -257,10 +275,12 @@ func (n *Node) studyMetaData(msg message.NodeMessage) ([]byte, error) {
 func (n *Node) setPolicy(msg *pb.Message) {
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
 		log.Fatalf(err.Error())
-	}	
+	}
+	log.Println("Node", n.nodeName, "verified the message in setPolicy()")
 
 	// Determine if the object is a subject or study
-	
+	//gossipMessage := msg.GetGossipMessage()
+
 	// Store the file on disk
 	
 	// Apply the changes in fuse
@@ -277,9 +297,11 @@ func (n *Node) setPolicy(msg *pb.Message) {
 	
 	data, err := proto.Marshal(msg)
 	if err != nil {
+		panic(err)
 		log.Fatalf(err.Error())
 	}
-	n.ifritClient.SetGossipContent(data)
+	_ = data
+	//n.ifritClient.SetGossipContent(data)
 }
 
 func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
@@ -326,19 +348,85 @@ func (n *Node) sendStudyList(addr string) error {
 	return nil
 }
 
+func (n *Node) acknowledgeProbe(msg *pb.Message) ([]byte, error) {
+	//log.Println("Got probing msg from PS with order number", msg.GetProbe().GetOrder())
+	if err := n.verifyPolicyStoreMessage(msg); err != nil {
+		panic(err)
+	}
+
+	//time.Sleep(3 * time.Second)
+
+	// Spread the probe message onwards through the network
+	gossipContent, err := proto.Marshal(msg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	n.ifritClient.SetGossipContent(gossipContent)
+
+	// Acknowledge the probe message
+	resp := &pb.Message{
+		Type: message.MSG_TYPE_PROBE_ACK,
+		Sender: &pb.Node{
+			Name: n.nodeName, 
+			Address: n.ifritClient.Addr(),
+			Role: "Storage node",
+			Id:	[]byte(n.ifritClient.Id()),
+		},
+		Probe: msg.GetProbe(),
+	}
+
+	data, err := proto.Marshal(resp)
+	if err != nil {
+		panic(err)
+	}
+
+	// Sign the acknowledgment response
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		panic(err)
+	}
+	
+	// Message with signature appended to it
+	resp = &pb.Message{
+		Type: message.MSG_TYPE_PROBE_ACK,
+		Sender: &pb.Node{
+			Name: n.nodeName, 
+			Address: n.ifritClient.Addr(),
+			Role: "Storage node",
+			Id:	[]byte(n.ifritClient.Id()),
+		},
+		Signature: &pb.Signature{
+			R: r,
+			S: s,
+		},
+		Probe: msg.GetProbe(),
+	}
+
+	data, err = proto.Marshal(resp)
+	if err != nil {
+		panic(err)
+	}
+
+	n.ifritClient.SendTo(n.PolicyStoreIP, data)
+	return nil, nil
+}
+
 func (n *Node) PolicyStoreHandshake() error {
-	conn, err := n.psClient.Dial(viper.GetString("policy_store_addr"))
+	conn, err := n.psClient.Dial(n.config.PolicyStoreIP)
 	if err != nil {
 		return err
 	}
 	defer conn.CloseConn()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20)
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
 		Name: n.nodeName, 
 		Address: n.ifritClient.Addr(),
+		Role: "Storage node",
+		Id:	[]byte(n.ifritClient.Id()),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -352,24 +440,27 @@ func (n *Node) PolicyStoreHandshake() error {
 }
 
 func (n *Node) MuxHandshake() error {
-	conn, err := n.muxClient.Dial(viper.GetString("lohpi_mux_addr"))
+	conn, err := n.muxClient.Dial(n.config.MuxIP)
 	if err != nil {
 		return err
 	}
 	
 	defer conn.CloseConn()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20)
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
 		Name: n.nodeName, 
 		Address: n.ifritClient.Addr(),
+		Role: "Storage node",
+		Id:	[]byte(n.ifritClient.Id()),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	n.MuxIP = r.GetIp()
+	n.MuxID = r.GetId()
 	return nil 
 }
 
@@ -377,34 +468,22 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
 
-	data, err := proto.Marshal(msg.GetGossipMessage())
+	msg.Signature = nil
+	
+	data, err := proto.Marshal(msg)
 	if err != nil {
 		return err
 	}
-
-	if !n.ifritClient.VerifySignature(r, s, []byte(data), string(n.policyStoreID)) {
-		return errors.New("Could not securely verify the integrity of the new policy from policy store")
+	
+	if !n.ifritClient.VerifySignature(r, s, data, string(n.policyStoreID)) {
+		return errors.New("Could not securely verify the integrity of the policy store message")
 	}
+
+	// Restore message
+	msg.Signature = &pb.Signature{
+		R: r,
+		S: s,
+	}
+
 	return nil
-}
-
-// Not pretty at all
-func decodePublicKey(data []byte) (*ecdsa.PublicKey, error) {
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, errors.New("failed to parse PEM block containing the key")
-	}
-
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-
-	switch pub := pub.(type) {
-	case *ecdsa.PublicKey:
-		return pub, nil
-	default:
-		break // fall through
-	}
-	return nil, errors.New("Key type is not RSA")
 }

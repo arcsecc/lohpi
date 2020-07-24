@@ -10,9 +10,9 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
+	"errors"
 
 	logger "github.com/inconshreveable/log15"
-	"github.com/spf13/viper"
 	"github.com/tomcat-bit/lohpi/internal/core/node"
 	"github.com/jinzhu/configor"
 )
@@ -31,10 +31,6 @@ func main() {
 	//var policyStorePort uint
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	if err := readConfig(); err != nil {
-		panic(err)
-	}
 
 	// Logfile and name flags
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
@@ -62,6 +58,10 @@ func main() {
 	}
 
 	r.SetHandler(h)
+
+	if nodeConfigFile == "" {
+		panic(errors.New("No config file found"))
+	}
 
 	if err := setConfigurations(nodeConfigFile); err != nil {
 		panic(err)
@@ -113,24 +113,4 @@ func Exists(name string) bool {
 		}
 	}
 	return true
-}
-
-func readConfig() error {
-	viper.SetConfigName("lohpi_config")
-	viper.AddConfigPath("/var/tmp")
-	viper.AddConfigPath(".")
-	viper.SetConfigType("yaml")
-
-	err := viper.ReadInConfig()
-	if err != nil {
-		return err
-	}
-
-	// Behavior variables
-	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
-	viper.SetDefault("lohpi_mux_addr", "127.0.1.1:8080")
-	viper.SetDefault("policy_store_addr", "127.0.1.1:8082")
-	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
-	viper.SafeWriteConfig()
-	return nil
 }

@@ -22,9 +22,9 @@ var errSubjectExists = errors.New("Subject already exists")
 
 // Creates a directory tree from the root to 'dirPath' if it does not exist
 func CreateDirectory(dirPath string) error {
-	fmt.Printf("Dir path: %s\n", dirPath)
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+	if _, err := os.Stat(dirPath); err != nil {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			fmt.Println("DIRRRR:", dirPath)
 			return err
 		}
 	}
@@ -128,7 +128,7 @@ func (self *Ptfs) subjectIsEnrolledInStudy(subject, study string) bool {
 	return false
 }
 
-func (self *Ptfs) enrollSubjectIntoStudy(subject, study string) {
+func (self *Ptfs) enrollSubjectIntoStudy(subject, study string) error {
 	// Assign the study to the set of studies the given subject is enrolled in
 	self.subjectStudies[subject] = append(self.subjectStudies[subject], study)
 	self.studySubjects[study] = append(self.studySubjects[study], subject)
@@ -136,8 +136,9 @@ func (self *Ptfs) enrollSubjectIntoStudy(subject, study string) {
 	// Create the directories in the "subjects" side of the tree
 	dirPath := fmt.Sprintf("%s/%s/%s/%s/%s", self.mountDir, SUBJECTS_DIR, subject, STUDIES_DIR, study)
 	if err := CreateDirectory(dirPath); err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 // Re-writes a subject's files and assigns them to a study. This is already done in the

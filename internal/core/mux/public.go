@@ -31,7 +31,7 @@ func (m *Mux) getNodeInfo(node string) (string, error) {
 		return "", err
 	}
 
-	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node), serialized)
+	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node).GetAddress(), serialized)
 	var result string
 	select {
 	case response := <-ch:
@@ -68,7 +68,8 @@ func (m *Mux) loadNode(studyName, node string, md []byte, subjects []string) err
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		panic(err)
+		log.Println(err.Error())
+		return err
 	}
 
 	m.cache.FetchRemoteStudyLists()
@@ -78,14 +79,15 @@ func (m *Mux) loadNode(studyName, node string, md []byte, subjects []string) err
 	}
 
 	// Load the node
-	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node), data)
+	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node).GetAddress(), data)
 	msgResp := &pb.Studies{}
 
 	select {
 		// TODO: timeout handling
 	case response := <-ch:
 		if err := proto.Unmarshal(response, msgResp); err != nil {
-			panic(err)
+			log.Fatalf(err.Error())
+			return err
 		}
 		log.Println("Response", string(response))
 	}

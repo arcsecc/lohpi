@@ -26,7 +26,6 @@ import (
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
 	"github.com/casbin/casbin"
-	"github.com/spf13/viper"
 )
 
 // Directory name constants
@@ -61,6 +60,10 @@ func errno(err error) int {
 	}
 }
 
+type Config struct {
+	MountDirectory string
+}
+
 var (
 	_host     *fuse.FileSystemHost
 	isMounted bool
@@ -93,13 +96,12 @@ type Ptfs struct {
 	ch chan bool
 }
 
-func NewFuseFS(nodeID string) (*Ptfs, error) {
-	startDir := creataLocalMountPointPath(nodeID)
-	mountDir := GetDestinationMountPoint(nodeID)
+func NewFuseFS(nodeID string, config *Config) (*Ptfs, error) {
+	startDir := createLocalMountPointPath(nodeID, config.MountDirectory)
+	mountDir := destinationMountPointPath(nodeID)
 
 	// restoreFuseState() should fill all in-memory structures with the on-disk
 	// contents. This ensures a fault-tolerant model of the fuse module.
-
 	CreateDirectory(startDir)
 	CreateDirectory(mountDir)
 
@@ -125,12 +127,12 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 	_host = fuse.NewFileSystemHost(&ptfs)
 
 	go func() {
-		log.Printf("Mounting dir on %s\n", mountDir)
+		//log.Printf("Mounting dir on %s\n", mountDir)
 		ok := _host.Mount("", opts[4:])
 		if ok != true {
 			log.Fatal(errors.New("Could not mount Fuse system"))
 		}
-		fmt.Printf("Unmounted\n")
+		//fmt.Printf("Unmounted\n")
 	}()
 
 	// Wait for init to complete
@@ -140,8 +142,6 @@ func NewFuseFS(nodeID string) (*Ptfs, error) {
 	}
 
 	ptfs.initiate_daemon()
-	fmt.Printf("Subjects: %v\n", ptfs.subjectStudies)
-	fmt.Printf("Subject permissions: %v\n", ptfs.subjectPermissions)
 	return &ptfs, nil
 }
 
@@ -153,7 +153,6 @@ func (self *Ptfs) Init() {
 	defer trace()()
 	e := syscall.Chdir(self.root)
 	if e == nil {
-		fmt.Printf("Chaning dir\n")
 		self.root = "./"
 	}
 	self.ch <- true
@@ -165,20 +164,18 @@ func (self *Ptfs) Init() {
 func (self *Ptfs) initiate_daemon() {
 	// We start by creating the mounting point. Each change in the mount point shall we reflected into
 	// the start directory
-	fmt.Printf("P: %s\n", self.mountDir+"/"+STUDIES_DIR)
 	CreateDirectory(self.mountDir + "/" + STUDIES_DIR)
 	CreateDirectory(self.mountDir + "/" + SUBJECTS_DIR)
 }
 
 // Returns the path for the local entry point for the FUSE file system
-func creataLocalMountPointPath(nodeName string) string {
-	fmt.Printf("mount: %s\n", viper.GetString("fuse_mount"))
-	return fmt.Sprintf("%s/%s/%s", viper.GetString("fuse_mount"), NODE_DIR, nodeName)
+func createLocalMountPointPath(nodename, dirname string) string {
+	return fmt.Sprintf("%s/%s/%s", dirname, NODE_DIR, nodename)
 }
 
 // Returns the location to which changes in the node's local storage directory
 // are reflected
-func GetDestinationMountPoint(nodeName string) string {
+func destinationMountPointPath(nodeName string) string {
 	return fmt.Sprintf("/tmp/%s/%s", NODE_DIR, nodeName)
 }
 
@@ -189,7 +186,7 @@ func (self *Ptfs) SetNodePermission(permission string) error {
 	// Set permission on mount point both in-memory and in xattr
 	self.xattrMux.Lock()
 	self.nodePermission = permission
-	log.Printf("Setting new permission for node %s: %s\n", self.nodeID, self.nodePermission)
+	//log.Printf("Setting new permission for node %s: %s\n", self.nodeID, self.nodePermission)
 	/*if err := xattr.Set(self.startDir, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
 		return err
 	}*/
@@ -241,7 +238,7 @@ func (self *Ptfs) GetLocalMountPoint() string {
 }
 
 func (self *Ptfs) RemoveSubject(subjectID string) error {
-	fmt.Printf("RemoveSubject not implemented -- nothing to do...\n")
+	//fmt.Printf("RemoveSubject not implemented -- nothing to do...\n")
 	return nil
 }
 
@@ -262,7 +259,7 @@ func (self *Ptfs) Getxattr(path string, attr string) (errc int, res []byte) {
 	res = make([]byte, 100)
 	path = filepath.Join(self.root, path)
 	errc, _ = syscall.Getxattr(path, attr, res)
-	fmt.Printf("Getxattr() -> path: %v\nattr: %v\nres: %s\nerrc: %v\n", path, attr, res, errc)
+	//fmt.Printf("Getxattr() -> path: %v\nattr: %v\nres: %s\nerrc: %v\n", path, attr, res, errc)
 
 	// return errc!!!
 	return errc, res

@@ -30,6 +30,7 @@ message Message {
     Policy policy = 5;      //
     Signature signature = 6;// Integrity check based on ECDSA
     GossipMessage gossipMessage = 7;
+    Probe probe = 8;
 }
 
 // Message to load a node. Distributed to all entities that need it (hint hint REC)
@@ -47,7 +48,8 @@ message Node {
     string name = 1;            // String identifier
     string address = 2;         // IP address
     string role = 3;            // What type of node is it? storage node, compliance engine etc
-    string contact_email = 4;   // Contact of person/entity responsible for the node, preferably an email alias, for non-compliance reports. 
+    string contactEmail = 4;   // Contact of person/entity responsible for the node, preferably an email alias, for non-compliance reports. 
+    bytes id = 5;              // Ifrit id
 }
 
 message Study {
@@ -101,4 +103,9 @@ message GossipMessageBody {
     uint64 version = 2;         // Version numbering 
     Policy policy = 3;
     google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival
+}
+
+message Probe {
+    uint32 order = 1;
+    bytes sessionId = 2;
 }

@@ -20,10 +20,10 @@ import (
 )
 
 type Config struct {
-	MuxIP					string		`default:"127.0.1.1:8080"`
+	MuxIP					string		`default:"127.0.1.1:8081"`
 	PolicyStoreIP 			string		`default:"127.0.1.1:8082"`
 	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
-	RecIP 					string 		`default:"127.0.1.1:8083"`
+	RecIP 					string 		`default:"127.0.1.1:8084"`
 	UpdatePoliciesPerMinute int 		`default:30`
 	UpdateStudiesPerMinute 	int			`default:10`
 	RecDirectory			string 		`required:"true"`
@@ -46,7 +46,6 @@ type Rec struct {
 
 	// Tickers
 	durationPolicyUpdates time.Duration
-	durationUpdateStudies time.Duration
 
 	// gRPC server
 	recServer *gRPCServer
@@ -63,23 +62,18 @@ type Rec struct {
 }
 
 func NewRec(config *Config) (*Rec, error) {
-	ip, err := netutil.LocalIP()
+	portStr := strings.Split(config.RecIP, ":")[1]
+	port, err := strconv.Atoi(portStr)
+	listener, err := netutil.ListenOnPort(port)
 	if err != nil {
 		return nil, err
 	}
 
 	pk := pkix.Name{
-		Locality: []string{ip},
+		Locality: []string{listener.Addr().String()},
 	}
-
+	
 	cu, err := comm.NewCu(pk, config.LohpiCaAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	portStr := strings.Split(config.RecIP, ":")[1]
-	port, err := strconv.Atoi(portStr)
-	listener, err := netutil.ListenOnPort(port)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +97,6 @@ func NewRec(config *Config) (*Rec, error) {
 		name:					"Regional ethics committee",
 		config: 				config,
 		durationPolicyUpdates: 	time.Minute / time.Duration(config.UpdatePoliciesPerMinute),
-		durationUpdateStudies:  time.Minute / time.Duration(config.UpdateStudiesPerMinute),
 		recServer: 				server,
 		muxClient: 				muxClient, 
 		studySubjects:			make(map[string][]string),
@@ -216,7 +209,7 @@ func (r *Rec) storePolicy(p *pb.Policy) error {
 func (r *Rec) defaultPolicy(study string) *pb.Policy {	
 	rand.Seed(time.Now().UnixNano())
 	str := RandStringBytes(10)
-	log.Println("REC policy:", str)
+	//_ = str
 	p := &pb.Policy{
 		Issuer: 	"REC", 
 		StudyName: 	study,
@@ -224,6 +217,7 @@ func (r *Rec) defaultPolicy(study string) *pb.Policy {
 	//	Content: 	[]byte("Default policy from rec"), // set casbin stuff here 
 		Content: []byte(string(str)),
 	}
+	log.Println("REC policy:", string(p.Content))
 	r.studyPolicies[study] = p
 	return p
 }
@@ -255,7 +249,6 @@ func (r *Rec) pushPolicy() {
 	}
 
 	study := r.getRandomStudy()
-	log.Printf("Pushing REC policy for '%s'", study)
 
 	conn, err := r.psClient.Dial(r.config.PolicyStoreIP)
 	if err != nil {
