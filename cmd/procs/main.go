@@ -16,7 +16,6 @@ import (
 	"github.com/tomcat-bit/lohpi/internal/core/policy"
 	"github.com/tomcat-bit/lohpi/internal/netutil"
 	"github.com/jinzhu/configor"
-	"github.com/spf13/viper"
 )
 
 // Global configuration for each system component. Read into the program from a .yml file
@@ -38,12 +37,11 @@ type Application struct {
 
 	// The collection of child processes
 	nodeProcs map[string]*exec.Cmd
+	execPath string
+	nodeConfigPath string
 
 	// The collection of data users to query the Lohpi system
 	clients map[string]*client.Client
-
-	// The path to the executable node
-	execPath string
 
 	// Number of initial nodes in the network
 	numNodes int
@@ -55,6 +53,7 @@ func main() {
 	var numClients int
 	var execPath string = ""
 	var logfile string
+	var nodeConfigPath string = ""
 	var h logger.Handler
 	var applicationConfigFile string
 
@@ -62,6 +61,7 @@ func main() {
 	arg.IntVar(&numNodes, "nodes", 0, "Number of initial nodes in the network.")
 	arg.IntVar(&numClients, "clients", 0, "Number of initial clients to interact with the network.")
 	arg.StringVar(&execPath, "exec", "", "Lohpi node's executable path.")
+	arg.StringVar(&nodeConfigPath, "nodeconfig", "", "Path to node configuration file.")
 	arg.IntVar(&httpPortNum, "port", -1, "Port number to interact with Lohpi. If not set or the selected port is busy, select an open port.")
 	arg.StringVar(&logfile, "logfile", "", "Absolute or relative path to log file.")
 	arg.StringVar(&applicationConfigFile, "config", "", `Configuration file for the application. If not set, use default configuration values.`)
@@ -97,6 +97,11 @@ func main() {
 		log.Println("Using default application configuration")
 	}
 
+	if !fileExists(nodeConfigPath) {
+		fmt.Fprintf(os.Stderr, "Could not use %s as configuration file for node. Exiting\n", nodeConfigPath)
+		os.Exit(2)
+	}
+
 	r := logger.Root()
 	if logfile != "" {
 		h = logger.CallerFileHandler(logger.Must.FileHandler(logfile, logger.LogfmtFormat()))
@@ -112,7 +117,7 @@ func main() {
 		panic(err)
 	}
 
-	app := NewApplication(numNodes, numClients, httpPortNum, execPath)
+	app := NewApplication(numNodes, numClients, httpPortNum, execPath, nodeConfigPath)
 	app.Start()
 
 	channel := make(chan os.Signal, 2)
@@ -122,11 +127,7 @@ func main() {
 	app.Stop()
 }
 
-func NewApplication(numNodes, numClients, httpPortNum int, execPath string) *Application {
-	if err := readConfig(); err != nil {
-		panic(err)
-	}
-
+func NewApplication(numNodes, numClients, httpPortNum int, execPath, nodeConfigPath string) *Application {
 	m, err := mux.NewMux(&ApplicationConfig.MuxConfig, httpPortNum)
 	if err != nil {
 		panic(err)
@@ -137,22 +138,20 @@ func NewApplication(numNodes, numClients, httpPortNum int, execPath string) *App
 		panic(err)
 	}
 
-	//rec, err := rec.NewRec(&appConf.recconfig)
 	rec, err := rec.NewRec(&ApplicationConfig.RecConfig)
 	if err != nil {
 		panic(err)
 	}
 
 	// Clients somewhere here
-	nodes := startStorageNodes(numNodes, execPath)
 
 	return &Application{
-		mux:       	m,
-		numNodes:  	numNodes,
-		execPath:  	execPath,
-		nodeProcs: 	nodes,
-		ps:        	ps,
-		rec:		rec,
+		mux:       		m,
+		numNodes:  		numNodes,
+		execPath:  		execPath,
+		nodeConfigPath: nodeConfigPath,
+		ps:        		ps,
+		rec:			rec,
 		//clients: clients,
 	}
 }
@@ -172,6 +171,10 @@ func (app *Application) Start() {
 	go app.mux.Start()
 	go app.ps.Start()
 	go app.rec.Start()
+
+	// Start the network nodes
+	//time.Sleep(2 * time.Second) 
+	app.nodeProcs = startStorageNodes(app.numNodes, app.execPath, app.nodeConfigPath)
 
 	// Start the clients so that they can interact with Lohpi
 	/*for _, c := range app.clients {
@@ -200,29 +203,33 @@ func fileExists(path string) bool {
 	return !info.IsDir()
 }
 
-func startStorageNodes(numNodes int, execPath string) map[string]*exec.Cmd {
+func startStorageNodes(numNodes int, execPath, nodeConfigPath string) map[string]*exec.Cmd {
 	nodeProcs := make(map[string]*exec.Cmd)
 
 	// Start the child processes aka. the internal Fireflies nodes
 	for i := 0; i < numNodes; i++ {
 		nodeName := fmt.Sprintf("node_%d", i)
 		logfileName := fmt.Sprintf("%s_logfile", nodeName)
-		nodeProc := exec.Command(execPath, "-name", nodeName, "-logfile", logfileName)
+		nodeProc := exec.Command(execPath, "-name", nodeName, "-logfile", logfileName, "-config", nodeConfigPath)
 
 		nodeProcs[nodeName] = nodeProc
 		nodeProc.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 		// Launch several nodes
-		/*
-			go func() {
-				if err := nodeProc.Start(); err != nil {
-					panic(err)
-				}
+		
+		p := nodeProc
+		go func() {
+			p.Stdout = os.Stdout
+			p.Stderr = os.Stderr
+		
+			if err := p.Start(); err != nil {
+				log.Println(err.Error())
+			}
 
-				if err := nodeProc.Wait(); err != nil {
-					panic(err)
-				}
-			}()*/
+			if err := p.Wait(); err != nil {
+				log.Println(err.Error())
+			}
+		}()
 	}
 	return nodeProcs
 }
@@ -242,23 +249,3 @@ func addNetworkClients(numClients int) (map[string]*client.Client, error) {
 	}
 	return clients, nil
 }*/
-
-func readConfig() error {
-	viper.SetConfigName("lohpi_config")
-	viper.AddConfigPath("/var/tmp")
-	viper.AddConfigPath(".")
-	viper.SetConfigType("yaml")
-
-	err := viper.ReadInConfig()
-	if err != nil {
-		return err
-	}
-
-	// Behavior variables
-	viper.SetDefault("policy_store_repo", "/home/thomas/go/src/github.com/tomcat-bit/lohpi/policy_store")
-	viper.SetDefault("lohpi_mux_addr", "127.0.1.1:8080")
-	viper.SetDefault("policy_store_addr", "127.0.1.1:8082")
-	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
-	viper.SafeWriteConfig()
-	return nil
-}

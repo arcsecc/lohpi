@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"io/ioutil"
 	"os"
 
@@ -29,6 +30,7 @@ func (self *Ptfs) FeedBulkData(load *pb.Load) error {
 	// TODO: split this up into more functions.
 	// TODO: use several go-routines here as well to make it go a little faster!
 	for _, subject := range load.GetSubjects() {
+		log.Println("kakekakopsdksapodk")
 		if err := self.BulkDataRunner(subject, study, minFiles, maxFiles); err != nil {
 			return err
 		}
@@ -70,7 +72,9 @@ func (self *Ptfs) FeedBulkData(load *pb.Load) error {
 	// Later, we realize those changes on disk -- these are just in-memory states.
 	if !self.subjectIsEnrolledInStudy(subject, study) {
 		fmt.Printf("Enrolling %s in study %s\n", subject, study)
-		self.enrollSubjectIntoStudy(subject, study)
+		if err := self.enrollSubjectIntoStudy(subject, study); err != nil {
+			return err
+		}
 	} else {
 		fmt.Printf("Subject %s is already enrolled in study %s\n", subject, study)
 	}

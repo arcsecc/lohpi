@@ -2,9 +2,7 @@ package policy
 
 import (
 	"errors"
-	"sort"
 	"fmt"
-	"math"
 	"io/ioutil"
 	"log"
 	"os"
@@ -13,7 +11,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"math/rand"
 	"context"
+	"net"
+	"net/http"
 
 	"crypto"
 	"crypto/rsa"
@@ -22,6 +23,7 @@ import (
 	"github.com/tomcat-bit/lohpi/internal/comm"
 	"github.com/tomcat-bit/lohpi/internal/core/cache"
 	"github.com/tomcat-bit/lohpi/internal/core/message"
+	"github.com/tomcat-bit/lohpi/internal/core/policy/multicast"
 	"github.com/tomcat-bit/lohpi/internal/netutil"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 _	"google.golang.org/grpc/peer"
@@ -31,18 +33,24 @@ _	"google.golang.org/grpc/peer"
 	"github.com/go-git/go-git"
 	"github.com/go-git/go-git/plumbing/object"
 	"github.com/joonnna/ifrit"
-	"github.com/spf13/viper"
-	"github.com/golang/protobuf/ptypes"
+	"github.com/gorilla/mux"
 	"github.com/golang/protobuf/ptypes/empty"
 )
 
 type Config struct {
-	MuxIP					string		`default:"127.0.1.1:8080"`
-	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
-	RecIP 					string 		`default:"127.0.1.1:8083"`
-	BatchSize 				int 		`default:10`
-	ProbeInterval			int32 		`default:10`
-	GossipInterval			int32 		`default:10`
+	// Policy store specific
+	PolicyStoreIP				string 		`default:"127.0.1.1:8082"`
+	BatchSize 					int 		`default:10`
+	ProbeInterval				int32 		`default:10`
+	GossipInterval				int32 		`default:10`
+	HttpPort					int 		`default:8083`
+	MulticastAcceptanceLevel	float64		`default:0.5`
+
+	// Other parameters
+	MuxIP						string		`default:"127.0.1.1:8081"`
+	LohpiCaAddr 				string		`default:"127.0.1.1:8301"`
+	RecIP 						string 		`default:"127.0.1.1:8084"`
+	PolicyStoreGitRepository  	string 		`required:"true`
 }
 
 type service interface {
@@ -50,6 +58,12 @@ type service interface {
 	StudyList(*empty.Empty)
 	SetPolicy(*pb.Policy)
 }
+
+/*type multicastConfig struct {
+	multicastDirectRecipients int 		// sigma	Dynamic
+	multicastInterval time.Duration		// tau	Dynamic
+	acceptanceLevel float64				// phi. Constant 
+}*/
 
 type PolicyStore struct {
 	// Policy store's configuration
@@ -69,7 +83,6 @@ type PolicyStore struct {
 
 	// Sync 
 	exitChan 	chan bool
-	wg       	*sync.WaitGroup
 	networkLock	sync.Mutex
 
 	// Crypto
@@ -87,14 +100,23 @@ type PolicyStore struct {
 	// gRPC client towards the Mux
 	muxClient *comm.MuxGRPCClient
 
-	// Policy distribution
-	policyQueue chan pb.Policy
-	commitQueue chan pb.Policy
+	// Multicast specifics
+	multicastManager *multicast.MulticastManager
+	multicastConfig *multicast.MulticastConfig
 
-	// Multicast stuff
-	ignoredIPAddresses map[string]string
-	lruNodes map[string]int					// ifrit address -> number of invocations
-	recipientPercentage float64
+	// Probing specifics
+	probeManager *multicast.ProbeManager
+	//probeConfig *probe.ProbeConfig
+
+	// Membership manager
+	memManager *multicast.MembershipManager
+
+	// Keeps track of when messages are multicasted
+	multicastTimer 	*time.Timer
+
+	// HTTP server stuff
+	httpListener net.Listener
+	httpServer   *http.Server
 }
 
 func NewPolicyStore(config *Config) (*PolicyStore, error) {
@@ -103,12 +125,12 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	repository, err := initializeGitRepository(viper.GetString("policy_store_repo"))
+	repository, err := initializeGitRepository(config.PolicyStoreGitRepository)
 	if err != nil {
 		return nil, err
 	}
 
-	portString := strings.Split(viper.GetString("policy_store_addr"), ":")[1]
+	portString := strings.Split(config.PolicyStoreIP, ":")[1]
 	port, err := strconv.Atoi(portString)
 	if err != nil {
 		return nil, err
@@ -123,7 +145,7 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		Locality: []string{listener.Addr().String()},
 	}
 
-	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
+	cu, err := comm.NewCu(pk, config.LohpiCaAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -138,27 +160,33 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	cache, err := cache.NewCache(c)
+	cache := cache.NewCache(c)
+
+	// Listener used for interactions
+	httpListener, err := netutil.ListenOnPort(config.HttpPort)
 	if err != nil {
 		return nil, err
 	}
 
+	multicastManager := multicast.NewMulticastManager(c, nil)
+	memManager := multicast.NewMembershipManager(c)
+	probeManager := multicast.NewProbeManager(c, config.MulticastAcceptanceLevel)
+
+	// TODO: remove some of the variables into other interfaces/packages?
 	ps := &PolicyStore{
-		ifritClient:  	c,
-		repository:   	repository,
-		exitChan:     	make(chan bool, 1),
-		wg:           	&sync.WaitGroup{},
-		cache:        	cache,
-		cu:           	cu,
-		grpcs:		  	s,
-		dispatcher: 	workerpool.NewDispatcher(3),
-		muxClient:		muxClient,
-		config: 		config,
-		policyQueue:	make(chan pb.Policy, config.BatchSize),
-		commitQueue: 	make(chan pb.Policy, config.BatchSize),
-		lruNodes: 		make(map[string]int),		// node identifier -> number of times it has been receiving messages
-		ignoredIPAddresses: make(map[string]string),
-		recipientPercentage: 10.0,			// find a proper value for this one
+		ifritClient:  		c,
+		repository:   		repository,
+		exitChan:     		make(chan bool, 1),
+		cache:        		cache,
+		cu:           		cu,
+		grpcs:		  		s,
+		dispatcher: 		workerpool.NewDispatcher(50),
+		muxClient:			muxClient,
+		config: 			config,
+		httpListener:		httpListener,
+		multicastManager:	multicastManager,
+		probeManager:		probeManager,
+		memManager:			memManager,
 	}
 
 	ps.grpcs.Register(ps)
@@ -168,45 +196,151 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 
 func (ps *PolicyStore) Start() {
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
+	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
 	go ps.grpcs.Start()
 	go ps.ifritClient.Start()
+	go ps.HttpHandler()
+	go ps.probeManager.Start()
+
 	ps.dispatcher.Start()
 	log.Println("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
+	
+	// Initialize the Ifrit IP addresses that should be ignored
+	// when using Ifrit message passing
+	ignoredIPs := make(map[string]string)
+	remoteIfritAddr, remoteName, err := ps.ignoreIfritIPAddress(ps.config.MuxIP, "Policy store", ps.ifritClient.Addr())
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// TODO: fix time configs
-	//probeTimer := time.Tick(time.Duration(ps.config.ProbeInterval) * time.Second)
-	probeTimer := time.Tick(10 * time.Second)
-	gossipTimer := time.Tick(5 * time.Second)
-	//gossipTimer := time.Tick(time.Duration(ps.config.GossipInterval) * time.Second)
+	// Make sure we ignore the Mux and compliance engine before
+	// multicasting stuff
+	ignoredIPs[remoteIfritAddr] = remoteName
+	ps.memManager.SetIgnoredIfritNodes(ignoredIPs)
 
-	ps.initializeLruMap()
-
+	// Main event loop for multicasting messages 
 	for {
 		select {
-		case p := <-ps.policyQueue:
-			if err := ps.storePolicy(&p); err != nil {
-				log.Fatalf(err.Error())
-			}
+		// When a probing session starts, it blocks the multicast timer from being reset.
+		// This allows us to run policy updates and probing in an orderly fashion
+		case <-ps.multicastManager.MulticastTimer().C:
+			ps.dispatcher.Submit(func() {
+				if ps.probeManager.IsProbing() {
+					return
+				}
 
-			if err := ps.commitPolicy(&p); err != nil {
-				log.Fatalf(err.Error())
-			}
-		case <-gossipTimer:
-			if err := ps.sendBatch(); err != nil {
-				log.Fatalf(err.Error())
-			}
-		case <-probeTimer:
-			ps.probeNetwork()
+				// Use the latest number of direct recipients (probing sessiong might have changed n)
+				sigma := ps.multicastManager.MulticastConfiguration().MulticastDirectRecipients
+				members, err := ps.memManager.LruMembers(sigma)
+				if err != nil {
+					log.Println(err.Error())
+					panic(err)
+				}
+				
+				if err := ps.multicastManager.Multicast(members); err != nil {
+					log.Println(err.Error())
+				}
+			})
 		}
 	}
 }
 
-func (ps *PolicyStore) Stop() {
+func (ps *PolicyStore) HttpHandler() error {
+	r := mux.NewRouter()
+	log.Printf("Policy store: started HTTP server on port %d\n", ps.config.HttpPort)
+
+	// Public methods exposed to data users (usually through cURL)
+	r.HandleFunc("/probe", ps.probeHandler)
+
+	ps.httpServer = &http.Server{
+		Handler: r,
+		// use timeouts?
+	}
+
+	err := ps.httpServer.Serve(ps.httpListener)
+	if err != nil {
+		log.Fatalf(err.Error())
+		return err
+	}
+	return nil
 }
 
-// Contacts the given HTTP address and ignore its Ifrit address
+// Initializes a probing procedures that awaits for n acknowledgements 
+// using the current network settings
+// TODO: fix queuing 
+func (ps *PolicyStore) probeHandler(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if ps.probeManager.IsProbing() {
+		fmt.Fprintf(w, "Probing session is already running")
+		return
+	} else {
+		fmt.Fprintf(w, "Starting probing session")
+	}
+
+	ps.dispatcher.Submit(func() {
+		// Same configuration as when pushing policy updates
+		mcConfig := ps.multicastManager.MulticastConfiguration()
+		members, err := ps.memManager.LruMembers(mcConfig.MulticastDirectRecipients)
+		if err != nil {
+			log.Println(err.Error())
+			return
+		}
+
+		// Session ID
+		id := make([]byte, 4)
+    	rand.Read(id)
+
+		// Update the probing configuration using the current multicast configuration
+		pConfig := multicast.ProbeConfig{
+			Recipients:			members,
+			NumMembers:			len(ps.ifritClient.Members()) - 1, 		// Subtract Mux from the set
+			AcceptanceLevel: 	ps.config.MulticastAcceptanceLevel,
+			SessionID: 			id,
+		}
+
+		// Set probing configuration using the same interval as pushing policy updates
+		ps.probeManager.SetProbeConfiguration(pConfig)
+		ps.probeManager.SetMulticastConfiguration(mcConfig)
+
+		// Probe the network using the current settings
+		if err := ps.probeManager.ProbeNetwork(members); err != nil {
+			log.Println(err.Error())
+			return
+		}
+
+		log.Println("Probing session done")
+	})
+}
+
+// Invoked by ifrit message handler
+func (ps *PolicyStore) verifyMessage(msg *pb.Message) error {
+	// Verify the integrity of the node
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	msg.Signature = nil
+
+	// Marshal it before verifying its integrity
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+
+	if !ps.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
+		return errors.New("Could not securely verify the integrity of the probe ackowledgment")
+	}
+
+	return nil
+}
+
+func (ps *PolicyStore) Stop() {
+	ps.ifritClient.Stop()
+}
+
+// Contacts the given remote address and adds the remote's Ifrit IP address to the list of ignored IP addresses.
+// The local name and local address is the local identifiers of the Ifrit client.
 func (ps *PolicyStore) ignoreIfritIPAddress(remoteAddr, localName, localAddr string) (string, string, error) {
-	log.Println("Remote addr:", remoteAddr)
 	conn, err := ps.muxClient.Dial(remoteAddr)
 	if err != nil {
 		return "", "", err
@@ -231,34 +365,20 @@ func (ps *PolicyStore) ignoreIfritIPAddress(remoteAddr, localName, localAddr str
 	return r.GetAddress(), r.GetName(), nil
 }
 
-func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
-	msg := &pb.Message{}
-	if err := proto.Unmarshal(data, msg); err != nil {
-		panic(err)
-	}
-
-	switch msgType := msg.Type; msgType {
-	case message.MSG_TYPE_SET_STUDY_LIST:
-		ps.cache.UpdateStudies(msg.GetSender().GetName(), msg.GetStudies().GetStudies())
-
-	case message.MSG_TYPE_PROBE_ACK:
-		//ps.ps.AcknowledgeMessage(msg)
-
-	default:
-		fmt.Printf("Unknown message: %s\n", msgType)
-	}
-
-	return []byte(message.MSG_TYPE_OK), nil
-}
-
 // Handshake endpoint for nodes to join the network
 func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	hr := &pb.HandshakeResponse{}
 	if !ps.cache.NodeExists(node.GetName()) {
-		ps.cache.UpdateNodes(node.GetName(), node.GetAddress())
+		ps.cache.InsertNodes(node.GetName(), &pb.Node{
+			Name: node.GetName(),
+			Address: node.GetAddress(),
+			Role: node.GetRole(),
+			ContactEmail: node.GetContactEmail(),
+			Id: node.GetId(),
+		})
 		hr.Ip = ps.ifritClient.Addr()
 		hr.Id = []byte(ps.ifritClient.Id())
-		//fmt.Printf("Policy store added %s to map with IP %s\n", node.GetName(), node.GetAddress())
+		log.Printf("Policy store added %s to map with IP %s\n", node.GetName(), node.GetAddress())
 	} else {
 		errMsg := fmt.Sprintf("Node '%s' already exists in network\n", node.GetName())
 		return nil, errors.New(errMsg)
@@ -266,6 +386,58 @@ func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.Handsh
 	return hr, nil
 }
 
+// Ifrit message handler
+func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
+	msg := &pb.Message{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		panic(err)
+	}
+
+	if err := ps.verifyMessage(msg); err != nil {
+		return nil, err
+	}
+
+	switch msgType := msg.Type; msgType {
+
+	// When a node is loaded, it sends its latest study list to the policy store
+	case message.MSG_TYPE_SET_STUDY_LIST:
+		ps.cache.UpdateStudies(msg.GetSender().GetName(), msg.GetStudies().GetStudies())
+
+	case message.MSG_TYPE_PROBE_ACK:
+		ps.probeManager.ProbeChan <- *msg
+
+	default:
+		fmt.Printf("Unknown message at policy store: %s\n", msgType)
+	}
+
+	return []byte(message.MSG_TYPE_OK), nil
+}
+
+// Ifrit gossip handler
+func (ps *PolicyStore) gossipHandler(data []byte) ([]byte, error) {
+	msg := &pb.Message{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		panic(err)
+	}
+
+	if err := ps.verifyMessage(msg); err != nil {
+		return nil, err
+	}
+
+	switch msgType := msg.Type; msgType {
+	
+	case message.MSG_TYPE_PROBE_ACK:
+		log.Println("POLICY STORE: received gossip acknowledgment from node")
+		ps.probeManager.ProbeChan <- *msg
+
+	default:
+		fmt.Printf("Unknown message at policy store: %s\n", msgType)
+	}
+
+	return []byte(message.MSG_TYPE_OK), nil
+}
+
+// Returns the list of studies stored in the network
 func (ps *PolicyStore) StudyList(context.Context, *empty.Empty) (*pb.Studies, error) {
 	ps.cache.FetchRemoteStudyLists()
 	studies := &pb.Studies{
@@ -293,8 +465,16 @@ func (ps *PolicyStore) SetPolicy(ctx context.Context, p *pb.Policy) (*empty.Empt
 			return
 		}
 
+		if err := ps.storePolicy(p); err != nil {
+			log.Fatalf(err.Error())
+		}
+		
+		if err := ps.commitPolicy(p); err != nil {
+			log.Fatalf(err.Error())
+		}
+
 		// Submit policy to be commited and gossiped
-		ps.policyQueue <- *p
+		ps.multicastManager.PolicyChan <- *p
 	})
 
 	// Gossip the policy update to the network
@@ -303,13 +483,12 @@ func (ps *PolicyStore) SetPolicy(ctx context.Context, p *pb.Policy) (*empty.Empt
 
 // Stores the given policy on disk
 func (ps *PolicyStore) storePolicy(p *pb.Policy) error {
-	fullPath := filepath.Join(viper.GetString("policy_store_repo"), p.GetFilename())
+	fullPath := filepath.Join(ps.config.PolicyStoreGitRepository, p.GetFilename())
 	return ioutil.WriteFile(fullPath, p.GetContent(), 0644)
 }
 
 // Commit the policy model to the Git repository
 func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
-	log.Println("Committing...")
 	// Get the current worktree
 	worktree, err := ps.repository.Worktree()
 	if err != nil {
@@ -327,13 +506,16 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 		panic(err)
 	}
 
-	// Check status and abort commit if staging changes don't differ from HEAD
+	// Check status and abort commit if staging changes don't differ from HEAD.
+	// TODO: might need to re-consider this one! What if we need to reorder commits?
 	if status.File(p.GetFilename()).Staging == git.Untracked {
 		if err := worktree.Checkout(&git.CheckoutOptions{}); err != nil {
 			panic(err)
-		} 
+		}
+		return nil
 	}
 
+	log.Println("Committing...")
 	// Commit the file
 	// TODO: use RECs attributes when commiting the file
 	c, err := worktree.Commit(p.GetFilename(), &git.CommitOptions{
@@ -363,199 +545,6 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 	return nil
 }
 
-// TODO finish me
-func (ps *PolicyStore) sendBatch() error {	
-	// Fetch all messages from the queue
-	gossipChunks := make([]*pb.GossipMessageBody, 0)
-	for p := range ps.policyQueue {
-		if len(ps.policyQueue) == 0 {
-			break
-		}	
-
-		gossipChunk := &pb.GossipMessageBody{
-			//string object = 1;          // subject or study. Appliy the policy to the object
-    		//uint64 version = 2;         // Version numbering 
-			Policy: &p,
-			//google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival
-		}
-
-		gossipChunks = append(gossipChunks, gossipChunk)
-	}
-
-	gmb := &pb.GossipMessage{
-		Sender: 				"Policy store",				// Do we really need it?
-		MessageType: 			message.GOSSIP_MSG_TYPE_POLICY,
-		Timestamp: 				ptypes.TimestampNow(),
-		GossipMessageBody:		gossipChunks,
-	}
-
-	data, err := proto.Marshal(gmb)
-	if err != nil {
-		return err
-	}
-
-	// Sign the chunks
-	r, s, err := ps.ifritClient.Sign(data)
-
-	// Prepare the message
-	msg := &pb.Message{
-		Type: message.MSG_TYPE_POLICY_STORE_UPDATE,
-		Signature: &pb.Signature{
-			R: r,
-			S: s,
-		},
-		GossipMessage: gmb,
-	}
-
-	// Marshalled message to be multicasted
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		return nil
-	}
-
-	//Multicast the message to a random set of LRU nodes
-	members, err := ps.getLruMembers()
-	if err != nil {
-		return err
-	}
-
-	// Multicast messages in parrallel
-	ps.networkLock.Lock()
-	wg := sync.WaitGroup{}
-	for _, m := range members {
-		member := m
-		wg.Add(1)
-		go func() {
-			ps.ifritClient.SendTo(member, data)
-			wg.Done()
-		}()
-	}
-
-	wg.Wait()
-	ps.networkLock.Unlock()
-	return nil 
-}
-
-
-func (ps *PolicyStore) initializeLruMap() error {
-	remoteIfritAddr, remoteName, err := ps.ignoreIfritIPAddress(ps.config.MuxIP, "Policy store", ps.ifritClient.Addr())
-	if err != nil {
-		return err
-	}
-
-	// Add ignored IP address 
-	ps.ignoredIPAddresses[remoteIfritAddr] = remoteName
-
-	// Initialize the list of LRU members
-	for _, c := range ps.ifritClient.Members() {
-		if !ps.ipIsIgnored(c) {
-			ps.lruNodes[remoteIfritAddr] = 0
-		}
-	}
-	return nil
-}
-
-// Update LRU members list by mirroring the underlying Ifrit network membership list
-func (ps *PolicyStore) updateLruMembers() {
-	tempMap := make(map[string]int)
-
-	// Copy the current map
-	for k, v := range ps.lruNodes {
-		tempMap[k] = v
-	}
-
-	// Hacky...
-	ps.lruNodes = make(map[string]int)
-
-	// Update the map according to the underlying Ifrit members list
-	for _, ifritMember := range ps.ifritClient.Members() {
-		if !ps.ipIsIgnored(ifritMember) {
-			if count, ok := tempMap[ifritMember]; !ok {
-				ps.lruNodes[ifritMember] = 0
-			} else {
-				ps.lruNodes[ifritMember] = count
-			}
-		}
-	}
-}
-
-// Returns the least recently used members of the group of avaiable recipients
-func (ps *PolicyStore) getLruMembers() ([]string, error) {
-	ps.updateLruMembers()
-
-	// Fetch some percentage of recipients
-	numRecipients := float64(len(ps.lruNodes)) / ps.recipientPercentage
-	recipients := make([]string, 0, int(numRecipients))
-
-	// Special case: too few network members
-	if numRecipients < 1.0 {
-		numRecipients = 1
-	}
-
-	if int(numRecipients) > len(ps.lruNodes) {
-		return nil, errors.New("numRecipients is greater than the number of possible recipients")
-	}
-
-	numRecipients = math.Round(float64(numRecipients))
-
-	// List of counts fetched from the LRU map. Sort it in ascending order so that
-	// the members that have sent the least number of times will be used as recipients
-	counts := make([]int, 0)
-	for  _, value := range ps.lruNodes {
-		counts = append(counts, value)
-	}
-
-	sort.Ints(counts)
-	lowest := counts[0]
-	iterations := 0
-
-	// Always keep the number of times a recipient has been contacted as low as possible
-	for k, v := range ps.lruNodes {
-		if v <= lowest {
-			lowest = v
-			
-			recipients = append(recipients, k)
-			iterations += 1
-			ps.lruNodes[k] += 1
-			if iterations >= int(numRecipients) {
-				break
-			}
-		}
-	}
-	return recipients, nil
-}
-
-// Returns true if the given ip address is ignored, returns false otherwise
-func (ps *PolicyStore) ipIsIgnored(ip string) bool {
-	_, ok := ps.ignoredIPAddresses[ip]
-	return ok
-}
-
-// Initializes a probing procedures that awaits for n acknowledgements 
-// using the current network settings
-func (ps *PolicyStore) probeNetwork() {
-	ps.networkLock.Lock()
-	defer ps.networkLock.Unlock()
-
-	// Table of recipients-to-ticker entries.
-	// Start the clock when we have sent the probe and stop it when the ack returns
-	ackTable := make(map[string]time.Time)
-
-	wg := sync.WaitGroup{}
-	for _, m := range ps.ifritClient.Members() {
-		member := m
-		wg.Add(1)
-		go func() {
-			ch := ps.ifritClient.SendTo(member, []byte(""))
-			select {
-			case response := <-ch:
-				
-			}
-			wg.Done()
-		}()
-	}
-}
-
 // Shut down all resources assoicated with the policy store
 func (ps *PolicyStore) Shutdown() {
 	log.Println("Shutting down policy store")
@@ -575,7 +564,7 @@ func initializeGitRepository(path string) (*git.Repository, error) {
 		return nil, errors.New(errMsg)
 	}
 
-	policiesDir := viper.GetString("policy_store_repo") + "/" + "policies"
+	policiesDir := path + "/" + "policies"
 	if err := os.MkdirAll(policiesDir, os.ModePerm); err != nil {
 		return nil, err
 	}
