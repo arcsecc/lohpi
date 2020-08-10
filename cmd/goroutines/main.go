@@ -1,5 +1,5 @@
 package main
-
+/*
 import (
 	"fmt"
 	"flag"
@@ -141,7 +141,7 @@ func (app *Application) CreateStudy(w http.ResponseWriter, r *http.Request) {
 		return		
 	}
 }
-*/
+*
 // Validates the port number of the application by checking if it is free. If it is
 // not, select an open port number
 func validatePortNumber(portNum *int) {
