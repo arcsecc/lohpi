@@ -2,6 +2,7 @@ package multicast
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"sync"
 	"time"
@@ -13,19 +14,48 @@ import (
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 )
 
-// Table of acknowledgments and an order number
+var (
+	errNoMode 					= errors.New("No membership mode given")
+	errInvalidMessageMode		= errors.New("Invalid message mode given")
+)
+
+// Describes each probing round. Should be set at the beginning of each probing round
 type ackRound struct {
+	// Lohpi string identifier mapped to a Probe message
 	table map[string]*pb.Probe
+
+	// Timestamp
+	timestamp time.Time
+
+	// Current configuration
 	config ProbeConfig
+
+	// Monotonically increasing order number
 	order uint32
+
+	// Network members to which probe messages are sent
+	recipients []string
 }
 
-// Each session requires one unique set of data
+// Configuration used to probe the network. Should be set explicitly from outside. 
 type ProbeConfig struct {
-	Recipients []string
+	// Number of storage nodes in the network
 	NumMembers int
+
+	// Percentage of network nodes needed to achieve consistency
 	AcceptanceLevel float64
+
+	// Unique session ID
 	SessionID []byte
+
+	// Time between probing rounds. Fetched from this package
+	MulticastInterval time.Duration
+
+	// The number of recipients of direct messages
+	MulticastDirectRecipients int 		// sigma. Dynamic
+	
+	// Messaging mode
+	Mode MessageMode
 }
 
 type ProbeManager struct {
@@ -61,6 +91,9 @@ type ProbeManager struct {
 
 	isProbing bool
 	isProbingMutex	sync.RWMutex
+
+	// Membership manager 
+	memManager *membershipManager
 }
 
 func NewProbeManager(ifritClient *ifrit.Client, acceptanceLevel float64) *ProbeManager {
@@ -75,6 +108,7 @@ func NewProbeManager(ifritClient *ifrit.Client, acceptanceLevel float64) *ProbeM
 		acceptanceLevel:	acceptanceLevel,
 		mcConfigLock:		sync.RWMutex{},
 		isProbingMutex:		sync.RWMutex{},
+		memManager: newMembershipManager(ifritClient),
 	}
 }
 
@@ -90,7 +124,7 @@ func (p *ProbeManager) IsProbing() bool {
 
 // Probes the network by multicasting a probing messages to the given members. 
 // It uses the current configuration assoicated with the probing manager.
-func (p *ProbeManager) ProbeNetwork(members []string) error {
+func (p *ProbeManager) ProbeNetwork(config ProbeConfig) (*MulticastConfig, error) {
 	p.isProbingMutex.Lock()
 	p.isProbing = true
 	p.isProbingMutex.Unlock()
@@ -98,96 +132,112 @@ func (p *ProbeManager) ProbeNetwork(members []string) error {
 	defer func() {
 		p.isProbingMutex.Lock()
 		p.isProbing = false
-		log.Println("Set isprobing to false")
 		p.isProbingMutex.Unlock()
 	}()
 
-	// Fetch the latest configurations
-	probeConfig := p.ProbeConfiguration()
-	mcConfig := p.MulticastConfiguration()
+	// Fetch the latest configuration for this probing session
+	if config.Mode == ' ' {
+		config.Mode = RandomMembers
+	}
+
+	p.setProbeConfiguration(config)
 
 	// Timer used to wait for acks
-	ackTimer := time.NewTimer(mcConfig.multicastInterval)	
+	ackTimer := time.NewTimer(config.MulticastInterval)	
 		
-	log.Println("At the start of probing session: config ->", probeConfig)
+	log.Println("At the start of probing session: config ->", config)
 
 	order := 1
 	consecutiveSuccesses := 0
 
 	// Main probing loop
-	for i := 0; i < 20; i++ {
+	for {//i := 0; i < 20; i++ {
 		// Fetch the latest configurations
-		probeConfig := p.ProbeConfiguration()
-		mcConfig := p.MulticastConfiguration()
-	
+		probeConfig := p.probeConfiguration()
+		recp, err := p.probeRoundRecipients(probeConfig.Mode, probeConfig.MulticastDirectRecipients)
+		if err != nil {
+			log.Println(err.Error())
+		}
+
 		// Make a new probe round and multicast it
 		r := &ackRound{
-			table:	make(map[string]*pb.Probe),
-			config: probeConfig,
-			order:	uint32(order),
+			table:		make(map[string]*pb.Probe),
+			config: 	probeConfig,
+			order:		uint32(order),
+			recipients: recp,
 		}
+
+		log.Println("probing round ->", r)
 
 		if err := p.multicast(r); err != nil {
-			return err
+			return nil, err
 		}
 
-		ackTimer.Reset(mcConfig.multicastInterval)
+		ackTimer.Reset(probeConfig.MulticastInterval)
 	
 		// Lower limit in time frame, as opposed to the channel
 		// signal from ackTimer
-		lowerLimit := time.Now().Add(mcConfig.multicastInterval / 2)
+		lowerLimit := time.Now().Add(probeConfig.MulticastInterval / 2)
+		upperLimit := time.Now().Add(probeConfig.MulticastInterval)
 
 		select {
-		// Signaled when all valid acks have arrived for this round.
-		// It will always trigger when all acks for this rounds have arrived.
-		case <-p.allAcksChan:
-			log.Println("Channel event: all acks have arrived")
-			if nowIsBeforeLimit(lowerLimit) {
-				log.Println("Got acks before half time has elapsed")	
-				newConfig := p.decreaseMulticastParameters()
-				log.Println("Decreased config:", newConfig)
-				p.SetMulticastConfiguration(*newConfig)
-				ackTimer.Reset(mcConfig.multicastInterval)
-			}
-		
 		case <-ackTimer.C:
-			log.Println("AckTimer expired")
+			//log.Println("AckTimer expired")
 			if !p.acknowledgmentsArrivedInTime() {
-				newConfig := p.increaseMulticastParameters()
-				log.Println("Increased config:", newConfig)
-				p.SetMulticastConfiguration(*newConfig)
+				log.Println("Before increasing config:", p.probeConfiguration())
+				p.increaseProbeParameters(&config)
+				p.setProbeConfiguration(config)
+				log.Println("After increasing config:", p.probeConfiguration())
 				consecutiveSuccesses = 0
 			} else {
 				consecutiveSuccesses++
 			}
-			ackTimer.Reset(mcConfig.multicastInterval)
+			ackTimer.Reset(probeConfig.MulticastInterval)
+		
+		// Signaled when all valid acks have arrived for this round.
+		// It will always trigger when all acks for this rounds have arrived.
+		case <-p.allAcksChan:
+			//log.Println("Channel event: all acks have arrived")
+			if nowIsBeforeLimit(lowerLimit) {
+				log.Println("Before decreasing config:", p.probeConfiguration())
+				p.decreaseProbeParameters(&config)
+				p.setProbeConfiguration(config)
+				log.Println("After decreasing config:", p.probeConfiguration())
+			} else if nowIsBeforeLimit(upperLimit) {
+				consecutiveSuccesses++
+			}
+			ackTimer.Reset(probeConfig.MulticastInterval)
 		
 		case <-p.stopAck:
 			log.Println("Stopping prober...")
-			return nil
+			break
 		}
 
 		if consecutiveSuccesses > 3 {
 			// log config
-			log.Println("At the end of probing session: config ->", p.MulticastConfiguration())
-			return nil
+			log.Println("At the end of probing session: config ->", p.probeConfiguration())
+			break
 		}
 
 		order++
 	}
 
-	log.Println("Probing didn't finish successfully")
-	return nil
+	pConfig := p.probeConfiguration()
+
+	return &MulticastConfig{
+		MulticastDirectRecipients: pConfig.MulticastDirectRecipients,
+		MulticastInterval:	pConfig.MulticastInterval,
+	}, nil
 }
 
 // Sets the probing config 
-func (p *ProbeManager) SetProbeConfiguration(config ProbeConfig) {
+func (p *ProbeManager) setProbeConfiguration(config ProbeConfig) {
 	p.probeConfigLock.Lock()
 	defer p.probeConfigLock.Unlock()
 	p.ProbeConfig = config
 }
 
-func (p *ProbeManager) ProbeConfiguration() ProbeConfig {
+func (p *ProbeManager) probeConfiguration() ProbeConfig {
 	p.probeConfigLock.RLock()
 	defer p.probeConfigLock.RUnlock()
 	return p.ProbeConfig
@@ -208,7 +258,7 @@ func (p *ProbeManager) MulticastConfiguration() MulticastConfig {
 
 // Multicasts a set of probe messages given the order number of the configuration
 func (p *ProbeManager) multicast(round *ackRound) error {
-	config := p.ProbeConfiguration()
+	config := p.probeConfiguration()
 
 	// Prepare message
 	msg := &pb.Message{
@@ -255,13 +305,12 @@ func (p *ProbeManager) multicast(round *ackRound) error {
 
 	// Multicast messages in parrallel
 	wg := sync.WaitGroup{}
-	for _, mem := range config.Recipients {
+	for _, mem := range round.recipients {
 		member := mem
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			p.ifritClient.SendTo(member, data)
-			log.Println("Sending probe to", member, "using order", round.order)
 		}()
 	}
 
@@ -273,21 +322,21 @@ func (p *ProbeManager) multicast(round *ackRound) error {
 func (p *ProbeManager) probeAcknowledger() {
 	for {
 		select {
-		case <-p.stopAck:
-			log.Println("Stopping prober...")
-			return
 		case msg := <-p.ProbeChan:
-			log.Println("MSG:", msg)
-			order := p.getCurrentRound().order
-			config := p.ProbeConfiguration()
-
+			if !p.IsProbing() {
+				continue
+			}
+			
+			currentRound := p.getCurrentRound()
+			order := currentRound.order
+			config := p.probeConfiguration()
+			
 			if !p.isValidAcknowledgment(msg.GetProbe(), &config, order) {
-				log.Println("Required order", order, "got order", msg.GetProbe().GetOrder())
-				return
+				//log.Println("Required order", order, "got order", msg.GetProbe().GetOrder())
+				continue
 			}
 
 			// Insert into map
-			currentRound := p.getCurrentRound()
 			currentRound.table[msg.GetSender().GetName()] = msg.GetProbe()
 
 			// Check if all acks have arrived. Signal if all have arrived
@@ -296,6 +345,9 @@ func (p *ProbeManager) probeAcknowledger() {
 			if len(currentRound.table) >= nAcceptanceNodes(n, a) {
 				p.allAcksChan <-true
 			}
+		case <-p.stopAck:
+			log.Println("Stopping prober...")
+			return
 		}
 	}
 }
@@ -312,10 +364,10 @@ func (p *ProbeManager) setCurrentRound(r *ackRound) {
 	p.currentRound = r
 }
 
-func (p *ProbeManager) getCurrentRound() ackRound {
+func (p *ProbeManager) getCurrentRound() *ackRound {
 	p.currentRoundLock.RLock()
 	defer p.currentRoundLock.RUnlock()
-	return *p.currentRound
+	return p.currentRound
 }
 
 func (p *ProbeManager) appendRound(r *ackRound) {
@@ -329,19 +381,29 @@ func (p *ProbeManager) isValidAcknowledgment(probe *pb.Probe, config *ProbeConfi
 }
 
 // Set tau to 0.75 of its original value
-func (p *ProbeManager) decreaseMulticastParameters() *MulticastConfig {
-	config := p.MulticastConfiguration()
-	ms := float32(config.multicastInterval.Milliseconds()) * 0.75
+func (p *ProbeManager) decreaseProbeParameters(config *ProbeConfig) {
+	p.probeConfigLock.Lock()
+	defer p.probeConfigLock.Unlock()
+	
+	ms := float32(config.MulticastInterval.Milliseconds()) * 0.75
 	newDuration := time.Duration(time.Duration(ms) * time.Millisecond)
+	config.MulticastInterval = newDuration
+}
 
-	return &MulticastConfig{
-		MulticastDirectRecipients: config.MulticastDirectRecipients,
-		multicastInterval: newDuration,
+func (p *ProbeManager) probeRoundRecipients(mode MessageMode, directRecipients int) ([]string, error) {
+	log.Println("direct recipients:", directRecipients)
+	switch mode {
+	case LruMembers:
+		return p.memManager.LruMembers(directRecipients)
+	case RandomMembers:
+		return p.memManager.RandomMembers()
+	default:
+		return nil, errInvalidMessageMode
 	}
 }
 
 func (p *ProbeManager) acknowledgmentsArrivedInTime() bool {
-	config := p.ProbeConfiguration()
+	config := p.probeConfiguration()
 	n := config.NumMembers
 	a := config.AcceptanceLevel
 
@@ -354,35 +416,46 @@ func (p *ProbeManager) acknowledgmentsArrivedInTime() bool {
 }
 
 // Increases the multicast parameters to process more load
-func (p *ProbeManager) increaseMulticastParameters() *MulticastConfig {
-	probeConfig := p.ProbeConfiguration()
-	multicastConfig := p.MulticastConfiguration()
-
+// TODO: sigma preceeds tau
+func (p *ProbeManager) increaseProbeParameters(config *ProbeConfig) {
+	p.probeConfigLock.Lock()
+	defer p.probeConfigLock.Unlock()
+	
 	// Phi is the acceptance level. Always increase sigma until
 	// it reaches its upper bound of ceil((phi * n ) / 2)
-	accLevel := probeConfig.AcceptanceLevel
-	n := probeConfig.NumMembers
-	directRecipients := multicastConfig.MulticastDirectRecipients
-	tau := multicastConfig.multicastInterval
+	accLevel := config.AcceptanceLevel
+	n := config.NumMembers
+	directRecipients := config.MulticastDirectRecipients
+	tau := config.MulticastInterval
 
 	// If sigma already is at its upper bound, double tau.
 	// Else, increase sigma as much as we can
+	/*log.Println("Acc level:", accLevel)
+	log.Println("N:", n)
+	log.Println("Direct recipients:", directRecipients)
+	log.Println("Tau:", tau.String())*/
 	if directRecipients >= int(math.Ceil((accLevel * float64(n)) / 2)) {
-		tau *= 2 // TODO: set upper bound on tau
+		tau *= 2 // TODO: set upper bound on tau. Multiply by 1.5
 		if tau >= time.Duration(1 * time.Hour) {
 			tau = time.Duration(1 * time.Hour)
 		}
 	} else {
-		directRecipients *= 2
 		if directRecipients > int(math.Ceil((accLevel * float64(n)) / 2)) {
 			directRecipients = int(math.Ceil((accLevel * float64(n)) / 2))
+		} else {
+			directRecipients *= 2
 		}
 	}
 
-	return &MulticastConfig{
-		MulticastDirectRecipients: directRecipients,
-		multicastInterval: tau,
-	}
+	config.MulticastDirectRecipients = directRecipients
+	config.MulticastInterval = tau
+	//log.Println("After increasing:")
+	//log.Println("config.MulticastDirectRecipients:", config.MulticastDirectRecipients)
+	//log.Println("config.MulticastInterval:", config.MulticastInterval)
+}
+
+func (p *ProbeManager) SetIgnoredIfritNodes(ignoredIPs map[string]string) {
+	p.memManager.setIgnoredIfritNodes(ignoredIPs)
 }
 
 func nAcceptanceNodes(n int, acceptanceLevel float64) int {

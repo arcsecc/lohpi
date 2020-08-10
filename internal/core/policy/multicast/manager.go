@@ -1,6 +1,7 @@
 package multicast
 
 import (
+	"errors"
 	"log"
 	"time"
 	"sync"
@@ -12,13 +13,28 @@ import (
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 )
 
+type MessageMode byte
+
+const (
+	// Send direct messages to a subset of the least recently used members
+	LruMembers = 'A'
+
+	// Send direct messages to a random set of members
+	RandomMembers = 'B'
+)
+
+var (
+	errInvalidSigma = errors.New("Sigma must be greater than zero")
+	errInvalidTau = errors.New("")
+)
+
 // configuration for network multicasts. Should not be written to from outside this package
 type MulticastConfig struct {
 	// The number of recipients of direct messages
 	MulticastDirectRecipients int 		// sigma. Dynamic
 
 	// The time between each message multicast
-	multicastInterval time.Duration		// tau	Dynamic
+	MulticastInterval time.Duration		// tau	Dynamic
 }
 
 // Maintains all gossip-related events
@@ -34,17 +50,19 @@ type MulticastManager struct {
 	mcLock			sync.RWMutex
 	//networkLock 	sync.Mutex
 
-	// Sends probe messages to the network
+	// Sends messages to the network
 	ifritClient *ifrit.Client
 
 	// Configuration
-	config *MulticastConfig
 	configLock sync.RWMutex
+	config *MulticastConfig
+
+	memManager *membershipManager
 }
 
-// Returns a new MulticastManager, given the Ifrit node and the configuration. if config is nil,
-// use the default configuration.
-func NewMulticastManager(ifritClient *ifrit.Client, config *MulticastConfig) *MulticastManager {	
+// Returns a new MulticastManager, given the Ifrit node and the configuration. Sigma and tau are initial values
+// that may be changed after initiating probing sessions. The values will be adjusted if they are higher than they should be.
+func NewMulticastManager(ifritClient *ifrit.Client, config *MulticastConfig) (*MulticastManager, error) {	
 	m := &MulticastManager{
 		PolicyChan:	make(chan pb.Policy, 100),
 
@@ -52,25 +70,36 @@ func NewMulticastManager(ifritClient *ifrit.Client, config *MulticastConfig) *Mu
 		mcLock:			sync.RWMutex{},
 
 		ifritClient: 	ifritClient,
+
+		config: 		config,
 		configLock:		sync.RWMutex{},
+
+		memManager: newMembershipManager(ifritClient),
 	}
 
-	// Multicast configuration
-	if m.config == nil {
+	if config == nil {
 		m.config = &MulticastConfig{
-			MulticastDirectRecipients: 	1,
-			multicastInterval: 			time.Duration(10 * time.Second),
+			MulticastDirectRecipients: 	5,
+			MulticastInterval: 			10000 * time.Millisecond,
+		}
+	} else {
+		if m.config.MulticastDirectRecipients <= 0 {
+			return nil, errInvalidSigma
+		}
+
+		if m.config.MulticastInterval <= 0 {
+			return nil, errInvalidTau
 		}
 	}
 
-	return m
+	return m, nil
 }
 
 // Returns the current multicast configruation 
-func (m *MulticastManager) MulticastConfiguration() MulticastConfig {
+func (m *MulticastManager) MulticastConfiguration() *MulticastConfig {
 	m.configLock.RLock()
 	defer m.configLock.RUnlock()
-	return *m.config
+	return m.config
 }
 
 // Sets a new configuration for this multicast manager
@@ -86,9 +115,8 @@ func (m *MulticastManager) MulticastTimer() *time.Timer {
 	return m.multicastTimer
 }
 
-
 // Sends a batch of messages to the least recently used members in the network
-func (m *MulticastManager) Multicast(members []string) error {
+func (m *MulticastManager) Multicast(mode MessageMode) error {
 	// Empty channel. Nothing to do 
 	if len(m.PolicyChan) == 0 {
 		log.Println("Queue is empty, nothing to send")
@@ -158,6 +186,7 @@ func (m *MulticastManager) Multicast(members []string) error {
 	wg := sync.WaitGroup{}
 
 	// Multicast messages in parrallel
+	/*
 	for _, mem := range members {
 		member := mem
 		wg.Add(1)
@@ -166,12 +195,12 @@ func (m *MulticastManager) Multicast(members []string) error {
 			wg.Done()
 		}()
 	}
-
+*/
 	wg.Wait()
 
 	// Reset the timers when all messages have been sent
 	currentConfig := m.MulticastConfiguration()
-	m.multicastTimer.Reset(currentConfig.multicastInterval)
+	m.multicastTimer.Reset(currentConfig.MulticastInterval)
 	
 	return nil 
 }
@@ -185,6 +214,10 @@ func (m *MulticastManager) RegisterProbeMessage(msg *pb.Message) {
 func (m *MulticastManager) SendToRandomMembers() error {
 	log.Println("Implement SendToRandomMembers()")
 	return nil
+}
+
+func (m *MulticastManager) SetIgnoredIfritNodes(ignoredIPs map[string]string) {
+	m.memManager.setIgnoredIfritNodes(ignoredIPs)
 }
 
 func (m *MulticastManager) Stop() {

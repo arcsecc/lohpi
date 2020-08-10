@@ -108,9 +108,6 @@ type PolicyStore struct {
 	probeManager *multicast.ProbeManager
 	//probeConfig *probe.ProbeConfig
 
-	// Membership manager
-	memManager *multicast.MembershipManager
-
 	// Keeps track of when messages are multicasted
 	multicastTimer 	*time.Timer
 
@@ -168,8 +165,16 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	multicastManager := multicast.NewMulticastManager(c, nil)
-	memManager := multicast.NewMembershipManager(c)
+	mc := &multicast.MulticastConfig{
+		MulticastDirectRecipients: 1,
+		MulticastInterval: 1000 * time.Millisecond,
+	}
+
+	multicastManager, err := multicast.NewMulticastManager(c, mc)
+	if err != nil {
+		return nil, err
+	}
+
 	probeManager := multicast.NewProbeManager(c, config.MulticastAcceptanceLevel)
 
 	// TODO: remove some of the variables into other interfaces/packages?
@@ -186,7 +191,6 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		httpListener:		httpListener,
 		multicastManager:	multicastManager,
 		probeManager:		probeManager,
-		memManager:			memManager,
 	}
 
 	ps.grpcs.Register(ps)
@@ -195,12 +199,12 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 }
 
 func (ps *PolicyStore) Start() {
-	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
-	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
 	go ps.grpcs.Start()
 	go ps.ifritClient.Start()
 	go ps.HttpHandler()
 	go ps.probeManager.Start()
+	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
+	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
 
 	ps.dispatcher.Start()
 	log.Println("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
@@ -216,7 +220,8 @@ func (ps *PolicyStore) Start() {
 	// Make sure we ignore the Mux and compliance engine before
 	// multicasting stuff
 	ignoredIPs[remoteIfritAddr] = remoteName
-	ps.memManager.SetIgnoredIfritNodes(ignoredIPs)
+	ps.multicastManager.SetIgnoredIfritNodes(ignoredIPs)
+	ps.probeManager.SetIgnoredIfritNodes(ignoredIPs)
 
 	// Main event loop for multicasting messages 
 	for {
@@ -230,19 +235,119 @@ func (ps *PolicyStore) Start() {
 				}
 
 				// Use the latest number of direct recipients (probing sessiong might have changed n)
-				sigma := ps.multicastManager.MulticastConfiguration().MulticastDirectRecipients
-				members, err := ps.memManager.LruMembers(sigma)
+				//sigma := ps.multicastManager.MulticastConfiguration().MulticastDirectRecipients
+				/*members, err := ps.memManager.LruMembers(sigma)
 				if err != nil {
 					log.Println(err.Error())
 					panic(err)
-				}
+				}*/
 				
-				if err := ps.multicastManager.Multicast(members); err != nil {
+				if err := ps.multicastManager.Multicast(multicast.LruMembers); err != nil {
 					log.Println(err.Error())
 				}
+
+				//ps.multicastManager.SetMulticastConfiguration(newMulticastConfiguration)
 			})
 		}
 	}
+}
+
+func (ps *PolicyStore) HttpHandler() error {
+	r := mux.NewRouter()
+	log.Printf("Policy store: started HTTP server on port %d\n", ps.config.HttpPort)
+
+	// Public methods exposed to data users (usually through cURL)
+	r.HandleFunc("/probe", ps.probeHandler)
+
+	ps.httpServer = &http.Server{
+		Handler: r,
+		// use timeouts?
+	}
+
+	err := ps.httpServer.Serve(ps.httpListener)
+	if err != nil {
+		log.Fatalf(err.Error())
+		return err
+	}
+	return nil
+}
+
+// Initializes a probing procedures that awaits for n acknowledgements 
+// using the current network settings
+// TODO: fix queuing 
+func (ps *PolicyStore) probeHandler(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if ps.probeManager.IsProbing() {
+		fmt.Fprintf(w, "Probing session is already running")
+		return
+	} else {
+		fmt.Fprintf(w, "Starting probing session")
+	}
+
+	ps.dispatcher.Submit(func() {
+		defer log.Println("Probing session done")
+
+		// Same configuration as when pushing policy updates
+		mcConfig := ps.multicastManager.MulticastConfiguration()
+		/*members, err := ps.memManager.LruMembers(mcConfig.MulticastDirectRecipients)
+		if err != nil {
+			log.Println(err.Error())
+			return
+		}*/
+
+		// Session ID
+		id := make([]byte, 4)
+    	rand.Read(id)
+
+		// Might not be enough members in the network
+		n := len(ps.ifritClient.Members()) - 1 		// Subtract Mux from the set of nodes
+		if n <= 0 {
+			return
+		}
+
+		// Update the probing configuration using the current multicast configuration
+		pConfig := multicast.ProbeConfig{
+			NumMembers:					n,
+			AcceptanceLevel: 			ps.config.MulticastAcceptanceLevel,
+			SessionID: 					id,
+			MulticastInterval:  		mcConfig.MulticastInterval,
+			MulticastDirectRecipients:	mcConfig.MulticastDirectRecipients,
+			Mode:						multicast.LruMembers,
+		}
+
+		// Probe the network using the current settings
+		newMulticastConfig, err := ps.probeManager.ProbeNetwork(pConfig)
+		if err != nil {
+			log.Println(err.Error())
+			return
+		}
+		
+		// Fetch the latest muilticast configuration based on the probing results
+		ps.multicastManager.SetMulticastConfiguration(newMulticastConfig)
+		log.Println("newMulticastConfig:", newMulticastConfig)
+	})
+}
+
+// Invoked by ifrit message handler
+func (ps *PolicyStore) verifyAcknowledgeMessage(msg *pb.Message) error {
+	// Verify the integrity of the node
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	msg.Signature = nil
+
+	// Marshal it before verifying its integrity
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+
+	if !ps.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
+		return errors.New("Could not securely verify the integrity of the probe ackowledgment")
+	}
+
+	return nil
 }
 
 func (ps *PolicyStore) HttpHandler() error {
@@ -393,17 +498,19 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	if err := ps.verifyMessage(msg); err != nil {
-		return nil, err
+	if err := ps.verifyAcknowledgeMessage(msg); err != nil {
+		log.Println(err.Error())
+		//return nil, err
 	}
 
-	switch msgType := msg.Type; msgType {
+	switch msgType := msg.GetType(); msgType {
 
 	// When a node is loaded, it sends its latest study list to the policy store
 	case message.MSG_TYPE_SET_STUDY_LIST:
 		ps.cache.UpdateStudies(msg.GetSender().GetName(), msg.GetStudies().GetStudies())
 
 	case message.MSG_TYPE_PROBE_ACK:
+		//log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
 		ps.probeManager.ProbeChan <- *msg
 
 	default:
@@ -420,16 +527,15 @@ func (ps *PolicyStore) gossipHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	if err := ps.verifyMessage(msg); err != nil {
-		return nil, err
-	}
+	// TODO: verify message
+	/*if err := ps.verifyGossipMessage(msg); err != nil {
+		log.Println(err.Error())
+	}*/
 
-	switch msgType := msg.Type; msgType {
-	
-	case message.MSG_TYPE_PROBE_ACK:
-		log.Println("POLICY STORE: received gossip acknowledgment from node")
+	switch msgType := msg.GetType(); msgType {
+	case message.MSG_TYPE_PROBE:
 		ps.probeManager.ProbeChan <- *msg
-
+		ps.ifritClient.SetGossipContent(data)
 	default:
 		fmt.Printf("Unknown message at policy store: %s\n", msgType)
 	}
@@ -479,6 +585,36 @@ func (ps *PolicyStore) SetPolicy(ctx context.Context, p *pb.Policy) (*empty.Empt
 
 	// Gossip the policy update to the network
 	return &empty.Empty{}, nil
+}
+
+// Because the policy store is a part of the Ifrit network, we need to verify its own probing message
+// coming from the adjacent nodes.
+func (ps *PolicyStore) verifyGossipMessage(msg *pb.Message) error {
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	msg.Signature = nil
+	
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	if !ps.ifritClient.VerifySignature(r, s, data, string(ps.ifritClient.Id())) {
+		msg.Signature = &pb.Signature{
+			R: r,
+			S: s,
+		}
+		return errors.New("Policy store could not verify the integrity of the gossip message")
+	}
+
+	// Restore message
+	msg.Signature = &pb.Signature{
+		R: r,
+		S: s,
+	}
+
+	return nil
 }
 
 // Stores the given policy on disk

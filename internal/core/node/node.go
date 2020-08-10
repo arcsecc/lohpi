@@ -300,7 +300,8 @@ func (n *Node) setPolicy(msg *pb.Message) {
 		panic(err)
 		log.Fatalf(err.Error())
 	}
-	n.ifritClient.SetGossipContent(data)
+	_ = data
+	//n.ifritClient.SetGossipContent(data)
 }
 
 func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
@@ -348,11 +349,20 @@ func (n *Node) sendStudyList(addr string) error {
 }
 
 func (n *Node) acknowledgeProbe(msg *pb.Message) ([]byte, error) {
+<<<<<<< HEAD
 	log.Println("Got probing msg from PS with order number", msg.GetProbe().GetOrder())
+=======
+	//log.Println("Got probing msg from PS with order number", msg.GetProbe().GetOrder())
+>>>>>>> 1c8f1334657d1991732486f3613e46cdca4fab07
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
 		panic(err)
 	}
 
+<<<<<<< HEAD
+=======
+	//time.Sleep(3 * time.Second)
+
+>>>>>>> 1c8f1334657d1991732486f3613e46cdca4fab07
 	// Spread the probe message onwards through the network
 	gossipContent, err := proto.Marshal(msg)
 	if err != nil {
@@ -405,7 +415,10 @@ func (n *Node) acknowledgeProbe(msg *pb.Message) ([]byte, error) {
 		panic(err)
 	}
 
+<<<<<<< HEAD
 	log.Println(n.nodeName, "sending ack to Policy store")
+=======
+>>>>>>> 1c8f1334657d1991732486f3613e46cdca4fab07
 	n.ifritClient.SendTo(n.PolicyStoreIP, data)
 	return nil, nil
 }
@@ -473,6 +486,7 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 	if err != nil {
 		return err
 	}
+<<<<<<< HEAD
 
 	if !n.ifritClient.VerifySignature(r, s, data, string(n.policyStoreID)) {
 		return errors.New("Could not securely verify the integrity of the new policy from policy store")
@@ -484,5 +498,18 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 		S: s,
 	}
 
+=======
+	
+	if !n.ifritClient.VerifySignature(r, s, data, string(n.policyStoreID)) {
+		return errors.New("Could not securely verify the integrity of the policy store message")
+	}
+
+	// Restore message
+	msg.Signature = &pb.Signature{
+		R: r,
+		S: s,
+	}
+
+>>>>>>> 1c8f1334657d1991732486f3613e46cdca4fab07
 	return nil
 }

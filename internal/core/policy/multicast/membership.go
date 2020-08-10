@@ -2,14 +2,14 @@ package multicast
 
 import (
 	"errors"
-	//"log"
+_	"log"
 	"sort"
 	"sync"
 
 	"github.com/joonnna/ifrit"
 )
 
-type MembershipManager struct {
+type membershipManager struct {
 	// Sends probe messages to the network
 	ifritClient *ifrit.Client
 
@@ -22,8 +22,8 @@ type MembershipManager struct {
 	ignoredIPLock sync.RWMutex
 }
 
-func NewMembershipManager(ifritClient *ifrit.Client) *MembershipManager {
-	return &MembershipManager{
+func newMembershipManager(ifritClient *ifrit.Client) *membershipManager {
+	return &membershipManager{
 		ifritClient:	ifritClient,
 		lruNodesMap:	make(map[string]int),	// Ifrit IP -> number of invocations
 		lruLock:		sync.RWMutex{},
@@ -33,14 +33,15 @@ func NewMembershipManager(ifritClient *ifrit.Client) *MembershipManager {
 
 // Returns a map of the least recently used nodes and the number of
 // times they each have been invoked.
-func (m *MembershipManager) lruNodes() map[string]int {
+func (m *membershipManager) lruNodes() map[string]int {
 	m.lruLock.RLock()
 	defer m.lruLock.RUnlock()
 	return m.lruNodesMap
 }
 
-// Returns a subset of the least recently used members.
-func (m *MembershipManager) LruMembers(numDirectRecipients int) ([]string, error) {
+// Returns a subset of the least recently used members. Returns an array of one element if
+// and only if 0 < numDirectRecipients < 4.
+func (m *membershipManager) LruMembers(numDirectRecipients int) ([]string, error) {
 	m.updateLruMembers()
 
 	// Nothing to do
@@ -82,20 +83,33 @@ func (m *MembershipManager) LruMembers(numDirectRecipients int) ([]string, error
 			}
 		}
 	}
+
+	//log.Println("LRU recipients:", recipients)
 	return recipients, nil
+}
+
+// Returns all available Ifrit members. Ignored IP addresses are filtered from the result
+func (m *membershipManager) AllMembers() []string {
+	members := make([]string, 0)
+	for _, addr := range m.ifritClient.Members() {
+		if !m.ipIsIgnored(addr) {
+			members = append(members, addr)
+		}
+	}
+	return members
 }
 
 // Sets the given list as a black-list for Ifrit IP addresses that receive
 // multicast messages. If the internal black-list is empty, all nodes can 
 // possibly receive a message.
-func (m *MembershipManager) SetIgnoredIfritNodes(ignoredIPs map[string]string) {
+func (m *membershipManager) setIgnoredIfritNodes(ignoredIPs map[string]string) {
 	m.ignoredIPLock.Lock()
 	defer m.ignoredIPLock.Unlock()
 	m.ignoredIPAddresses = ignoredIPs
 }
 
 // Update LRU members list by mirroring the underlying Ifrit network membership list
-func (m *MembershipManager) updateLruMembers() {
+func (m *membershipManager) updateLruMembers() {
 	tempMap := make(map[string]int)
 
 	// Copy the current map
@@ -123,8 +137,12 @@ func (m *MembershipManager) updateLruMembers() {
 	}
 }
 
+func (m *membershipManager) RandomMembers() ([]string, error) {
+	return nil, nil
+}
+
 // Returns true if the given ip address is ignored, returns false otherwise
-func (m *MembershipManager) ipIsIgnored(ip string) bool {
+func (m *membershipManager) ipIsIgnored(ip string) bool {
 	m.ignoredIPLock.RLock()
 	defer m.ignoredIPLock.RUnlock()
 
