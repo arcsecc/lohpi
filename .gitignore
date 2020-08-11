@@ -40,7 +40,7 @@
 
 # End of https://www.gitignore.io/api/go
 
-**/*
+#**/*
 !**/*.go
 !**/
 notes
@@ -48,3 +48,4 @@ files/
 dumping_ground/
 resources/
 policy_store
+*logfile
