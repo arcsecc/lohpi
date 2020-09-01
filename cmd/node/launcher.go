@@ -10,10 +10,10 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
-	"errors"
+	"log"
 
 	logger "github.com/inconshreveable/log15"
-	"github.com/tomcat-bit/lohpi/internal/core/node"
+	"github.com/tomcat-bit/lohpi/pkg/node"
 	"github.com/jinzhu/configor"
 )
 
@@ -36,7 +36,7 @@ func main() {
 	arg := flag.NewFlagSet("args", flag.ExitOnError)
 	arg.StringVar(&logfile, "logfile", "", "Absolute or relative path to log file.")
 	arg.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	arg.StringVar(&nodeConfigFile, "config", "", `Configuration file for the node. If not set, use default configuration values.`)
+	arg.StringVar(&nodeConfigFile, "c", "config.yml", `Configuration file for the node. If not set, use default configuration values.`)
 	//arg.UintVar(&muxPort, "mp", 8080, "HTTPS port at which the mux runs.")
 	//arg.UintVar(&muxPort, "psp", 8082, "HTTPS port at which the policy store runs.")
 
@@ -59,8 +59,8 @@ func main() {
 
 	r.SetHandler(h)
 
-	if nodeConfigFile == "" {
-		panic(errors.New("No config file found"))
+	if !exists(nodeConfigFile) {
+		log.Println("Config file not found. Using default configurations.")
 	}
 
 	if err := setConfigurations(nodeConfigFile); err != nil {
@@ -106,7 +106,7 @@ func setConfigurations(configFile string) error {
 	return conf.Load(&NodeConfig, configFile)
 }
 
-func Exists(name string) bool {
+func exists(name string) bool {
 	if _, err := os.Stat(name); err != nil {
 		if os.IsNotExist(err) {
 			return false

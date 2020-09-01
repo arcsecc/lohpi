@@ -1,5 +1,5 @@
 package main
-
+/*
 import (
 	"flag"
 	"fmt"
@@ -179,7 +179,7 @@ func (app *Application) Start() {
 	// Start the clients so that they can interact with Lohpi
 	/*for _, c := range app.clients {
 		go c.Run()
-	}*/
+	}*
 }
 
 func (app *Application) Stop() {
@@ -233,7 +233,7 @@ func startStorageNodes(numNodes int, execPath, nodeConfigPath string) map[string
 	}
 	return nodeProcs
 }
-
+*/
 /*
 func addNetworkClients(numClients int) (map[string]*client.Client, error) {
 	clients := make(map[string]*client.Client)

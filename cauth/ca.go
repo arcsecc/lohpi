@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"github.com/tomcat-bit/lohpi/internal/netutil"
+	"github.com/tomcat-bit/lohpi/pkg/netutil"
 	"github.com/spf13/viper"
 	"io"
 	"math/big"

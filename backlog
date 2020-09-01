@@ -26,4 +26,7 @@ Instead, make it more seamless.
 - Redo policy and probing files in policy package
 - PS won't always verify the signatures in messages coming from nodes.
 - Network probing doesn't quite work. 
-- 
+- Got TLS handshake error in policy store!
+- Setup git repo in Go code
+- Enable subject-study relation in REC and ps store too.
+- Detatch policy store from underlying gossip stuff

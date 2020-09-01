@@ -1,0 +1,5 @@
+boot_nodes: 10
+certificate_filepath: /var/tmp/certificate
+key_filepath: /var/tmp/key
+num_rings: 10
+port: 8300

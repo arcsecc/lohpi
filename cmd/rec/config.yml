@@ -1,0 +1,7 @@
+recconfig:
+    muxip: 127.0.1.1:8081
+    policystoreip: 127.0.1.1:8082
+    recip: 127.0.1.1:8084
+    lohpicaaddr: 127.0.1.1:8301
+    updatepoliciesperminute: 120
+    recdirectory: "/home/thomas/go/src/github.com/tomcat-bit/lohpi/resources/rec"

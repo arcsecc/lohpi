@@ -1,0 +1,6 @@
+muxconfig:
+    muxhttpport: 8080
+    muxhttpsip: 127.0.1.1:8081
+    policystoreip: 127.0.1.1:8082
+    lohpicaaddr: 127.0.1.1:8301
+    recip: 127.0.1.1:8084

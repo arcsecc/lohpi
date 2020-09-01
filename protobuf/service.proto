@@ -28,7 +28,7 @@ message Message {
     Node sender = 3;        //
     Studies studies = 4;    //    
     Policy policy = 5;      //
-    Signature signature = 6;// Integrity check based on ECDSA
+    MsgSignature signature = 6;// Integrity check based on ECDSA
     GossipMessage gossipMessage = 7;
     Probe probe = 8;
 }
@@ -80,7 +80,7 @@ message Policy {
     bytes content = 4; // Policy details. See Casbin policy 
 }
 
-message Signature {
+message MsgSignature {
     bytes r = 1;
     bytes s = 2;
 }
@@ -94,7 +94,7 @@ message GossipMessage {
     string Sender = 1;              // Who sent it?
     string MessageType = 2;         // Gossip or probing?
     google.protobuf.Timestamp timestamp = 3; // Time at policy store, to keep track of messages     
-    Signature signature = 4;
+    MsgSignature signature = 4;
     repeated GossipMessageBody gossipMessageBody = 5;   
 }
 
