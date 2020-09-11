@@ -1,20 +1,32 @@
 package datauser
 
+import (
+	"sync"
+)
+
 type DataUser struct {
-	clientConfig *tls.Config
+	name string
+
+	// Interpreted as a single 
+	policyAttributes string
+	attrLock sync.RWMutex
 }
 
-func NewDataUser(name string) (*DataUser, error) {
-	if err := readConfig(); err != nil {
-		panic(err)
+func NewDataUser(name string) *DataUser {
+	return &DataUser{
+		name:		name, 
+		attrLock:	sync.RWMutex{},
 	}
+}
 
-	pk := pkix.Name{
-		Locality: []string{name}, // perhaps use another field instead of Locality?
-	}
+func (d *DataUser) SetPolicyAttributes(attr string) {
+	d.attrLock.Lock()
+	defer d.attrLock.Unlock()
+	d.policyAttributes = attr
+}
 
-	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
-	if err != nil {
-		return nil, err
-	}
+func (d *DataUser) GetPolicyAttributes() string {
+	d.attrLock.RLock()
+	d.attrLock.RUnlock()
+	return d.policyAttributes
 }

@@ -74,25 +74,22 @@ type memberFetch struct {
 
 // Returns a new MulticastManager, given the Ifrit node and the configuration. Sigma and tau are initial values
 // that may be changed after initiating probing sessions. The values will be adjusted if they are higher than they should be.
-func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64) (*MulticastManager, error) {	
+func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, multicastInterval time.Duration) (*MulticastManager, error) {	
 	m := &MulticastManager{
 		PolicyChan:	make(chan pb.Policy, 100),
-
 		multicastTimer:	time.NewTimer(1 * time.Second),
 		mcLock:			sync.RWMutex{},
 
 		ifritClient: 	ifritClient,
 
-		// Default config. Change later?
 		config: &multicastConfig {
 			multicastDirectRecipients: 	1,
-			multicastInterval: 			4000 * time.Millisecond,
+			multicastInterval: 			multicastInterval,
 			acceptanceLevel:			acceptanceLevel,
 		},
 
 		configLock:		sync.RWMutex{},
 		memManager: 	newMembershipManager(ifritClient),
-
 		prbManager:		newProbeManager(ifritClient),
 	}
 
@@ -158,15 +155,22 @@ func (m *MulticastManager) ProbeNetwork(mode MessageMode) error {
 	}
 
 	// Set a new configration gained from the probing session
-	m.setMulticastConfiguration(newConfig)
-	log.Println("New config after probe:", m.multicastConfiguration())
+	if newConfig != nil {
+		m.setMulticastConfiguration(newConfig)
+		log.Println("New config after probe:", m.multicastConfiguration())
+	}
 
 	return nil
 }
 
+func (m *MulticastManager) StopProbing() {
+	m.prbManager.Stop()
+}
+
 // FINISH ME
 func (m *MulticastManager) Stop() {
-	
+	log.Println("Stopping multicast manager")
+	m.prbManager.Stop()
 }
 
 func (m *MulticastManager) ResetMulticastTimer() {
@@ -175,11 +179,10 @@ func (m *MulticastManager) ResetMulticastTimer() {
 }
 
 // FINISH ME
-func (m *MulticastManager) getMembers(mode MessageMode) ([]string, error) {
+func (m *MulticastManager) getMembers(mode MessageMode, directRecipients int) ([]string, error) {
 	switch mode {
 	case LruMembers:
-		sigma := m.multicastConfiguration().multicastDirectRecipients
-		return m.memManager.lruMembers(sigma)
+		return m.memManager.lruMembers(directRecipients)
 	case RandomMembers:
 		log.Fatal("Implement me")
 	default:
@@ -191,7 +194,7 @@ func (m *MulticastManager) getMembers(mode MessageMode) ([]string, error) {
 
 // FINISH ME
 func (m *MulticastManager) multicast(mode MessageMode) error {
-	members, err := m.getMembers(mode)
+	members, err := m.getMembers(mode, 2)
 	if err != nil {
 		return err
 	}
@@ -203,11 +206,9 @@ func (m *MulticastManager) multicast(mode MessageMode) error {
 
 	gossipChunks := make([]*pb.GossipMessageBody, 0)
 	// TODO: avoid sizes exceeding 4MB
-	for p := range m.PolicyChan {
-		if len(m.PolicyChan) == 0 {
-			break
-		}	
 
+	log.Println("BEfore sending batch, length is", len(m.PolicyChan))
+	for p := range m.PolicyChan {
 		gossipChunk := &pb.GossipMessageBody{
 			//string object = 1;          // subject or study. Appliy the policy to the object
 			//uint64 version = 2;         // Version numbering 
@@ -216,6 +217,10 @@ func (m *MulticastManager) multicast(mode MessageMode) error {
 		}
 
 		gossipChunks = append(gossipChunks, gossipChunk)
+
+		if len(m.PolicyChan) == 0 {
+			break
+		}	
 	}
 
 	timestamp := ptypes.TimestampNow()

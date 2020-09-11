@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"errors"
 	"sync"
 	"log"
 
@@ -10,92 +11,109 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-// Cache is the internal overview of studies and nodes
+// Cache is the internal overview of objects and nodes
 type Cache struct {
 	// Node's identifier maps to its IP address
-	NodeMap    map[string]*pb.Node
+	nodeMap    map[string]*pb.Node
 	nodesMutex sync.RWMutex
 
-	// Study's identifier maps to the node's identifier
-	StudyMap   map[string]string
-	studyMutex sync.RWMutex
+	// Objects's identifier maps to the object header itself
+	objectHeaderMap   map[string]*pb.ObjectHeader
+	objectHeaderMapMutex sync.RWMutex
 
 	ifritClient *ifrit.Client
 
+	// IP addresses that should be ignored
 	ignoredIP []string
+
+	cacheSize int
 }
 
-// Returns a new Cache. The Ifrit client needs to be in a running state
+// Returns a new Cache. The Ifrit client needs to be in a running state.
+// The cacheSize denotes how many study entries that can be in present at any time.
+// If the cache size is exceeded, LRU study is evicted.
 func NewCache(client *ifrit.Client) *Cache {
 	return &Cache{
-		NodeMap:     make(map[string]*pb.Node),
-		StudyMap:    make(map[string]string), // maybe change this is pb.Study?
-		ifritClient: client,
+		nodeMap:     			make(map[string]*pb.Node),
+		objectHeaderMap:    	make(map[string]*pb.ObjectHeader),
+		objectHeaderMapMutex:	sync.RWMutex{},
+		ifritClient: 	client,
 	}
 }
 
 // Update the cache's map of studies from all nodes in the network
-func (c *Cache) FetchRemoteStudyLists() {
-	c.fetchStudyLists()
+func (c *Cache) FetchRemoteObjectHeaders() {
+	c.fetchObjectHeaders()
 }
 
-// Updates the node's list of studies it stores
-func (c *Cache) UpdateStudies(node string, studies []*pb.Study) {
-	c.updateStudies(node, studies)
+// Updates the cache with the object'd id and the object header itself
+func (c *Cache) InsertObjectHeader(objectId string, objectHeader *pb.ObjectHeader) {
+	c.objectHeaderMapMutex.Lock()
+	defer c.objectHeaderMapMutex.Unlock()
+	c.objectHeaderMap[objectId] = objectHeader
 }
 
-// Sets the list of IP addresses the cache will ignore
+// Returns the storage node that stores the given object header
+func (c *Cache) StorageNode(objectId string) (*pb.Node, error) {
+	if header, exists := c.ObjectHeaders()[objectId]; exists {
+		return header.GetNode(), nil
+	}
+	return nil, errors.New("No such node")
+}
+
+// Sets the list of IP addresses the cache will ignore when interacting with the network
+// TODO: set me elsewhere
 func (c *Cache) SetIgnoredIPs(ips []string) {
 	c.ignoredIP = ips
 }
 
-// Returns the map of node identifiers
+// Returns the map with node identifiers as keys and Node object as values
 func (c *Cache) Nodes() map[string]*pb.Node {
 	//c.updateNodeMembershipList()
 	c.nodesMutex.RLock()
 	defer c.nodesMutex.RUnlock()
-	return c.NodeMap
+	return c.nodeMap
 }
 
-// Returns the map of study storage nodes
-func (c *Cache) Studies() map[string]string {
-	c.studyMutex.RLock()
-	defer c.studyMutex.RUnlock()
-	return c.StudyMap
+// Returns the map of the object id-to-object map
+func (c *Cache) ObjectHeaders() map[string]*pb.ObjectHeader {
+	c.objectHeaderMapMutex.RLock()
+	defer c.objectHeaderMapMutex.RUnlock()
+	return c.objectHeaderMap
 }
 
 // Updates the node's identifier using the address
-func (c *Cache) InsertNodes(nodeName string, node *pb.Node) {
+func (c *Cache) InsertNode(nodeName string, node *pb.Node) {
 	c.nodesMutex.Lock()
 	defer c.nodesMutex.Unlock()
-	c.NodeMap[nodeName] = node
+	c.nodeMap[nodeName] = node
 }
 
 // Returns true if the node exists in the cache, returns false otherwise
 func (c *Cache) NodeExists(node string) bool {
 	c.nodesMutex.RLock()
 	defer c.nodesMutex.RUnlock()
-	if _, ok := c.NodeMap[node]; ok {
+	if _, ok := c.nodeMap[node]; ok {
 		return true
 	}
 	return false
 }
 
 // Returns true if the study exists in the cache, returns false otherwise
-func (c *Cache) StudyExists(study string) bool {
-	defer c.studyMutex.RUnlock()
+func (c *Cache) ObjectExists(object string) bool {
+	c.objectHeaderMapMutex.RLock()
+	defer c.objectHeaderMapMutex.RUnlock()
 
 	// Check local cache. If it fails, fetch the remote lists
-	c.studyMutex.RLock()
-	if _, ok := c.StudyMap[study]; ok {
+	if _, ok := c.objectHeaderMap[object]; ok {
 		return true
 	}
-	c.studyMutex.RUnlock()
-	c.fetchStudyLists()
-	c.studyMutex.RLock()
+	//c.studyMutex.RUnlock()
+	//c.fetchObjectSummaries()
+	//c.objectHeaderMapMutex.RLock()
 
 	// Check local cache again
-	if _, ok := c.StudyMap[study]; ok {
+	if _, ok := c.objectHeaderMap[object]; ok {
 		return true
 	}
 	return false
@@ -105,16 +123,18 @@ func (c *Cache) StudyExists(study string) bool {
 func (c *Cache) NodeAddr(nodeName string) *pb.Node {
 	c.nodesMutex.RLock()
 	defer c.nodesMutex.RUnlock()
-	return c.NodeMap[nodeName]
+	return c.nodeMap[nodeName]
 }
 
 // Returns true if the study exists in any other node than the given node.
 // Ignores if study is contained in the given node
-func (c *Cache) StudyInAnyNodeThan(node, study string) bool {
-	c.studyMutex.RLock()
-	defer c.studyMutex.RUnlock()
-	for s, n := range c.StudyMap {
-		if s == study && n != node {
+// FIX ME
+func (c *Cache) ObjectInAnyNodeThan(node, object string) bool {
+	c.objectHeaderMapMutex.RLock()
+	defer c.objectHeaderMapMutex.RUnlock()
+	for objectId, objectValue := range c.objectHeaderMap {
+		// If the object exists in another node than 'node', return true
+		if objectId == object && objectValue.GetNode().GetName() != node {
 			return true
 		}
 	}
@@ -122,22 +142,20 @@ func (c *Cache) StudyInAnyNodeThan(node, study string) bool {
 }
 
 // Fetches all lists in the network and add them to the internal cache
-func (c *Cache) fetchStudyLists() {
+func (c *Cache) fetchObjectHeaders() {
 	//c.updateNodeMembershipList()
 	wg := sync.WaitGroup{}
-	
 	c.nodesMutex.RLock()
 	defer c.nodesMutex.RUnlock()
 	
-	for nodeName, node := range c.NodeMap {
-		name := nodeName
+	for _, node := range c.nodeMap {
 		d := node.GetAddress()
 		wg.Add(1)
 
 		go func() {
 			defer wg.Done()
 			msg := &pb.Message{
-				Type: message.MSG_TYPE_GET_STUDY_LIST,
+				Type: message.MSG_TYPE_GET_OBJECT_HEADER_LIST,
 			}
 			
 			data, err := proto.Marshal(msg)
@@ -146,17 +164,20 @@ func (c *Cache) fetchStudyLists() {
 			}
 
 			ch := c.ifritClient.SendTo(d, data)
-			msgResp := &pb.Studies{}
+			msgResp := &pb.Message{}
 
 			select {
 			case response := <-ch:
 				if err := proto.Unmarshal(response, msgResp); err != nil {
 					panic(err)
 				}
+				
+				// Verify signature too
+				for _, header := range msgResp.GetObjectHeaders().GetObjectHeaders() {
+					objectID := header.GetName()
+					c.UpdateObjectHeader(objectID, header)
+				}
 			}
-
-			// Add the node to the list of studies the node stores
-			c.updateStudies(name, msgResp.GetStudies())
 		}()
 	}
 
@@ -171,11 +192,11 @@ func (c *Cache) updateNodeMembershipList() {
 	c.nodesMutex.Lock()
 	defer c.nodesMutex.Unlock()
 
-	log.Println("Length of map:", len(c.NodeMap))
+	log.Println("Length of map:", len(c.nodeMap))
 
-	for nodeName, node := range c.NodeMap {
+	for nodeName, node := range c.nodeMap {
 		if !c.nodeIsAlive(node.GetAddress()) {
-			delete(c.NodeMap, nodeName)
+			delete(c.nodeMap, nodeName)
 			log.Println(node.GetName(), "is dead")
 		}
 	}
@@ -194,14 +215,11 @@ func (c *Cache) nodeIsAlive(addr string) bool {
 }
 
 // Updates the given node with a list of new studies
-func (c *Cache) updateStudies(node string, studies []*pb.Study) {
-	c.studyMutex.Lock()
-	defer c.studyMutex.Unlock()
-	for _, study := range studies {
-		if _, ok := c.StudyMap[study.GetName()]; !ok {
-			c.StudyMap[study.GetName()] = node
-		}
-	}
+func (c *Cache) UpdateObjectHeader(objectId string, objectHeader *pb.ObjectHeader) {
+	c.objectHeaderMapMutex.Lock()
+	defer c.objectHeaderMapMutex.Unlock()
+	c.objectHeaderMap[objectId] = objectHeader
+	log.Println("Inserting", objectHeader, "into cache")
 }
 
 func (c *Cache) ipIsIgnored(ip string) bool {

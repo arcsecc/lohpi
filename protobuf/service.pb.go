@@ -26,12 +26,106 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.ProtoPackageIsVersion3 // please upgrade the proto package
 
+type StudyCount struct {
+	Count                uint32   `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *StudyCount) Reset()         { *m = StudyCount{} }
+func (m *StudyCount) String() string { return proto.CompactTextString(m) }
+func (*StudyCount) ProtoMessage()    {}
+func (*StudyCount) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a0b84a42fa06f626, []int{0}
+}
+
+func (m *StudyCount) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_StudyCount.Unmarshal(m, b)
+}
+func (m *StudyCount) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_StudyCount.Marshal(b, m, deterministic)
+}
+func (m *StudyCount) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_StudyCount.Merge(m, src)
+}
+func (m *StudyCount) XXX_Size() int {
+	return xxx_messageInfo_StudyCount.Size(m)
+}
+func (m *StudyCount) XXX_DiscardUnknown() {
+	xxx_messageInfo_StudyCount.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_StudyCount proto.InternalMessageInfo
+
+func (m *StudyCount) GetCount() uint32 {
+	if m != nil {
+		return m.Count
+	}
+	return 0
+}
+
+type DataUserRequest struct {
+	Name                 string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	PolicyAttributes     string   `protobuf:"bytes,2,opt,name=policyAttributes,proto3" json:"policyAttributes,omitempty"`
+	Study                string   `protobuf:"bytes,3,opt,name=study,proto3" json:"study,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *DataUserRequest) Reset()         { *m = DataUserRequest{} }
+func (m *DataUserRequest) String() string { return proto.CompactTextString(m) }
+func (*DataUserRequest) ProtoMessage()    {}
+func (*DataUserRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a0b84a42fa06f626, []int{1}
+}
+
+func (m *DataUserRequest) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_DataUserRequest.Unmarshal(m, b)
+}
+func (m *DataUserRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_DataUserRequest.Marshal(b, m, deterministic)
+}
+func (m *DataUserRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_DataUserRequest.Merge(m, src)
+}
+func (m *DataUserRequest) XXX_Size() int {
+	return xxx_messageInfo_DataUserRequest.Size(m)
+}
+func (m *DataUserRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_DataUserRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_DataUserRequest proto.InternalMessageInfo
+
+func (m *DataUserRequest) GetName() string {
+	if m != nil {
+		return m.Name
+	}
+	return ""
+}
+
+func (m *DataUserRequest) GetPolicyAttributes() string {
+	if m != nil {
+		return m.PolicyAttributes
+	}
+	return ""
+}
+
+func (m *DataUserRequest) GetStudy() string {
+	if m != nil {
+		return m.Study
+	}
+	return ""
+}
+
 // Used in direct messaging
 type Message struct {
 	Type                 string         `protobuf:"bytes,1,opt,name=Type,proto3" json:"Type,omitempty"`
 	Load                 *Load          `protobuf:"bytes,2,opt,name=load,proto3" json:"load,omitempty"`
 	Sender               *Node          `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
-	Studies              *Studies       `protobuf:"bytes,4,opt,name=studies,proto3" json:"studies,omitempty"`
+	ObjectHeaders        *ObjectHeaders `protobuf:"bytes,4,opt,name=objectHeaders,proto3" json:"objectHeaders,omitempty"`
 	Policy               *Policy        `protobuf:"bytes,5,opt,name=policy,proto3" json:"policy,omitempty"`
 	Signature            *MsgSignature  `protobuf:"bytes,6,opt,name=signature,proto3" json:"signature,omitempty"`
 	GossipMessage        *GossipMessage `protobuf:"bytes,7,opt,name=gossipMessage,proto3" json:"gossipMessage,omitempty"`
@@ -45,7 +139,7 @@ func (m *Message) Reset()         { *m = Message{} }
 func (m *Message) String() string { return proto.CompactTextString(m) }
 func (*Message) ProtoMessage()    {}
 func (*Message) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{0}
+	return fileDescriptor_a0b84a42fa06f626, []int{2}
 }
 
 func (m *Message) XXX_Unmarshal(b []byte) error {
@@ -87,9 +181,9 @@ func (m *Message) GetSender() *Node {
 	return nil
 }
 
-func (m *Message) GetStudies() *Studies {
+func (m *Message) GetObjectHeaders() *ObjectHeaders {
 	if m != nil {
-		return m.Studies
+		return m.ObjectHeaders
 	}
 	return nil
 }
@@ -124,22 +218,19 @@ func (m *Message) GetProbe() *Probe {
 
 // Message to load a node. Distributed to all entities that need it (hint hint REC)
 type Load struct {
-	Node                 *Node     `protobuf:"bytes,1,opt,name=node,proto3" json:"node,omitempty"`
-	StudyName            string    `protobuf:"bytes,2,opt,name=StudyName,proto3" json:"StudyName,omitempty"`
-	Minfiles             uint32    `protobuf:"varint,3,opt,name=Minfiles,proto3" json:"Minfiles,omitempty"`
-	Maxfiles             uint32    `protobuf:"varint,4,opt,name=Maxfiles,proto3" json:"Maxfiles,omitempty"`
-	Subjects             []string  `protobuf:"bytes,5,rep,name=subjects,proto3" json:"subjects,omitempty"`
-	Metadata             *Metadata `protobuf:"bytes,6,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
-	XXX_unrecognized     []byte    `json:"-"`
-	XXX_sizecache        int32     `json:"-"`
+	ObjectHeader         *ObjectHeader `protobuf:"bytes,1,opt,name=objectHeader,proto3" json:"objectHeader,omitempty"`
+	Minfiles             uint32        `protobuf:"varint,2,opt,name=Minfiles,proto3" json:"Minfiles,omitempty"`
+	Maxfiles             uint32        `protobuf:"varint,3,opt,name=Maxfiles,proto3" json:"Maxfiles,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
+	XXX_unrecognized     []byte        `json:"-"`
+	XXX_sizecache        int32         `json:"-"`
 }
 
 func (m *Load) Reset()         { *m = Load{} }
 func (m *Load) String() string { return proto.CompactTextString(m) }
 func (*Load) ProtoMessage()    {}
 func (*Load) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{1}
+	return fileDescriptor_a0b84a42fa06f626, []int{3}
 }
 
 func (m *Load) XXX_Unmarshal(b []byte) error {
@@ -160,18 +251,11 @@ func (m *Load) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Load proto.InternalMessageInfo
 
-func (m *Load) GetNode() *Node {
+func (m *Load) GetObjectHeader() *ObjectHeader {
 	if m != nil {
-		return m.Node
+		return m.ObjectHeader
 	}
 	return nil
-}
-
-func (m *Load) GetStudyName() string {
-	if m != nil {
-		return m.StudyName
-	}
-	return ""
 }
 
 func (m *Load) GetMinfiles() uint32 {
@@ -186,20 +270,6 @@ func (m *Load) GetMaxfiles() uint32 {
 		return m.Maxfiles
 	}
 	return 0
-}
-
-func (m *Load) GetSubjects() []string {
-	if m != nil {
-		return m.Subjects
-	}
-	return nil
-}
-
-func (m *Load) GetMetadata() *Metadata {
-	if m != nil {
-		return m.Metadata
-	}
-	return nil
 }
 
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
@@ -218,7 +288,7 @@ func (m *Node) Reset()         { *m = Node{} }
 func (m *Node) String() string { return proto.CompactTextString(m) }
 func (*Node) ProtoMessage()    {}
 func (*Node) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{2}
+	return fileDescriptor_a0b84a42fa06f626, []int{4}
 }
 
 func (m *Node) XXX_Unmarshal(b []byte) error {
@@ -274,10 +344,9 @@ func (m *Node) GetId() []byte {
 	return nil
 }
 
-type Study struct {
+type ObjectHeader struct {
 	Name                 string    `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Node                 *Node     `protobuf:"bytes,2,opt,name=node,proto3" json:"node,omitempty"`
-	RecContactEmail      string    `protobuf:"bytes,3,opt,name=rec_contact_email,json=recContactEmail,proto3" json:"rec_contact_email,omitempty"`
 	Metadata             *Metadata `protobuf:"bytes,4,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	Policy               *Policy   `protobuf:"bytes,5,opt,name=policy,proto3" json:"policy,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}  `json:"-"`
@@ -285,101 +354,180 @@ type Study struct {
 	XXX_sizecache        int32     `json:"-"`
 }
 
-func (m *Study) Reset()         { *m = Study{} }
-func (m *Study) String() string { return proto.CompactTextString(m) }
-func (*Study) ProtoMessage()    {}
-func (*Study) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{3}
+func (m *ObjectHeader) Reset()         { *m = ObjectHeader{} }
+func (m *ObjectHeader) String() string { return proto.CompactTextString(m) }
+func (*ObjectHeader) ProtoMessage()    {}
+func (*ObjectHeader) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a0b84a42fa06f626, []int{5}
 }
 
-func (m *Study) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_Study.Unmarshal(m, b)
+func (m *ObjectHeader) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_ObjectHeader.Unmarshal(m, b)
 }
-func (m *Study) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_Study.Marshal(b, m, deterministic)
+func (m *ObjectHeader) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_ObjectHeader.Marshal(b, m, deterministic)
 }
-func (m *Study) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_Study.Merge(m, src)
+func (m *ObjectHeader) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ObjectHeader.Merge(m, src)
 }
-func (m *Study) XXX_Size() int {
-	return xxx_messageInfo_Study.Size(m)
+func (m *ObjectHeader) XXX_Size() int {
+	return xxx_messageInfo_ObjectHeader.Size(m)
 }
-func (m *Study) XXX_DiscardUnknown() {
-	xxx_messageInfo_Study.DiscardUnknown(m)
+func (m *ObjectHeader) XXX_DiscardUnknown() {
+	xxx_messageInfo_ObjectHeader.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_Study proto.InternalMessageInfo
+var xxx_messageInfo_ObjectHeader proto.InternalMessageInfo
 
-func (m *Study) GetName() string {
+func (m *ObjectHeader) GetName() string {
 	if m != nil {
 		return m.Name
 	}
 	return ""
 }
 
-func (m *Study) GetNode() *Node {
+func (m *ObjectHeader) GetNode() *Node {
 	if m != nil {
 		return m.Node
 	}
 	return nil
 }
 
-func (m *Study) GetRecContactEmail() string {
-	if m != nil {
-		return m.RecContactEmail
-	}
-	return ""
-}
-
-func (m *Study) GetMetadata() *Metadata {
+func (m *ObjectHeader) GetMetadata() *Metadata {
 	if m != nil {
 		return m.Metadata
 	}
 	return nil
 }
 
-func (m *Study) GetPolicy() *Policy {
+func (m *ObjectHeader) GetPolicy() *Policy {
 	if m != nil {
 		return m.Policy
 	}
 	return nil
 }
 
-type Studies struct {
-	Studies              []*Study `protobuf:"bytes,1,rep,name=studies,proto3" json:"studies,omitempty"`
+type ObjectHeaders struct {
+	ObjectHeaders        []*ObjectHeader `protobuf:"bytes,1,rep,name=objectHeaders,proto3" json:"objectHeaders,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}        `json:"-"`
+	XXX_unrecognized     []byte          `json:"-"`
+	XXX_sizecache        int32           `json:"-"`
+}
+
+func (m *ObjectHeaders) Reset()         { *m = ObjectHeaders{} }
+func (m *ObjectHeaders) String() string { return proto.CompactTextString(m) }
+func (*ObjectHeaders) ProtoMessage()    {}
+func (*ObjectHeaders) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a0b84a42fa06f626, []int{6}
+}
+
+func (m *ObjectHeaders) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_ObjectHeaders.Unmarshal(m, b)
+}
+func (m *ObjectHeaders) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_ObjectHeaders.Marshal(b, m, deterministic)
+}
+func (m *ObjectHeaders) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ObjectHeaders.Merge(m, src)
+}
+func (m *ObjectHeaders) XXX_Size() int {
+	return xxx_messageInfo_ObjectHeaders.Size(m)
+}
+func (m *ObjectHeaders) XXX_DiscardUnknown() {
+	xxx_messageInfo_ObjectHeaders.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_ObjectHeaders proto.InternalMessageInfo
+
+func (m *ObjectHeaders) GetObjectHeaders() []*ObjectHeader {
+	if m != nil {
+		return m.ObjectHeaders
+	}
+	return nil
+}
+
+type Object struct {
+	ObjectHeader         *ObjectHeader `protobuf:"bytes,1,opt,name=objectHeader,proto3" json:"objectHeader,omitempty"`
+	ObjectData           *ObjectData   `protobuf:"bytes,2,opt,name=objectData,proto3" json:"objectData,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
+	XXX_unrecognized     []byte        `json:"-"`
+	XXX_sizecache        int32         `json:"-"`
+}
+
+func (m *Object) Reset()         { *m = Object{} }
+func (m *Object) String() string { return proto.CompactTextString(m) }
+func (*Object) ProtoMessage()    {}
+func (*Object) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a0b84a42fa06f626, []int{7}
+}
+
+func (m *Object) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_Object.Unmarshal(m, b)
+}
+func (m *Object) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_Object.Marshal(b, m, deterministic)
+}
+func (m *Object) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Object.Merge(m, src)
+}
+func (m *Object) XXX_Size() int {
+	return xxx_messageInfo_Object.Size(m)
+}
+func (m *Object) XXX_DiscardUnknown() {
+	xxx_messageInfo_Object.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Object proto.InternalMessageInfo
+
+func (m *Object) GetObjectHeader() *ObjectHeader {
+	if m != nil {
+		return m.ObjectHeader
+	}
+	return nil
+}
+
+func (m *Object) GetObjectData() *ObjectData {
+	if m != nil {
+		return m.ObjectData
+	}
+	return nil
+}
+
+type ObjectData struct {
+	Content              []byte   `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *Studies) Reset()         { *m = Studies{} }
-func (m *Studies) String() string { return proto.CompactTextString(m) }
-func (*Studies) ProtoMessage()    {}
-func (*Studies) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{4}
+func (m *ObjectData) Reset()         { *m = ObjectData{} }
+func (m *ObjectData) String() string { return proto.CompactTextString(m) }
+func (*ObjectData) ProtoMessage()    {}
+func (*ObjectData) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a0b84a42fa06f626, []int{8}
 }
 
-func (m *Studies) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_Studies.Unmarshal(m, b)
+func (m *ObjectData) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_ObjectData.Unmarshal(m, b)
 }
-func (m *Studies) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_Studies.Marshal(b, m, deterministic)
+func (m *ObjectData) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_ObjectData.Marshal(b, m, deterministic)
 }
-func (m *Studies) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_Studies.Merge(m, src)
+func (m *ObjectData) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_ObjectData.Merge(m, src)
 }
-func (m *Studies) XXX_Size() int {
-	return xxx_messageInfo_Studies.Size(m)
+func (m *ObjectData) XXX_Size() int {
+	return xxx_messageInfo_ObjectData.Size(m)
 }
-func (m *Studies) XXX_DiscardUnknown() {
-	xxx_messageInfo_Studies.DiscardUnknown(m)
+func (m *ObjectData) XXX_DiscardUnknown() {
+	xxx_messageInfo_ObjectData.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_Studies proto.InternalMessageInfo
+var xxx_messageInfo_ObjectData proto.InternalMessageInfo
 
-func (m *Studies) GetStudies() []*Study {
+func (m *ObjectData) GetContent() []byte {
 	if m != nil {
-		return m.Studies
+		return m.Content
 	}
 	return nil
 }
@@ -395,7 +543,7 @@ func (m *Subject) Reset()         { *m = Subject{} }
 func (m *Subject) String() string { return proto.CompactTextString(m) }
 func (*Subject) ProtoMessage()    {}
 func (*Subject) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{5}
+	return fileDescriptor_a0b84a42fa06f626, []int{9}
 }
 
 func (m *Subject) XXX_Unmarshal(b []byte) error {
@@ -435,7 +583,7 @@ func (m *Metadata) Reset()         { *m = Metadata{} }
 func (m *Metadata) String() string { return proto.CompactTextString(m) }
 func (*Metadata) ProtoMessage()    {}
 func (*Metadata) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{6}
+	return fileDescriptor_a0b84a42fa06f626, []int{10}
 }
 
 func (m *Metadata) XXX_Unmarshal(b []byte) error {
@@ -472,7 +620,7 @@ func (m *Metadata) GetSubjects() []string {
 
 type Policy struct {
 	Issuer               string   `protobuf:"bytes,1,opt,name=issuer,proto3" json:"issuer,omitempty"`
-	StudyName            string   `protobuf:"bytes,2,opt,name=studyName,proto3" json:"studyName,omitempty"`
+	ObjectName           string   `protobuf:"bytes,2,opt,name=objectName,proto3" json:"objectName,omitempty"`
 	Filename             string   `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
 	Content              []byte   `protobuf:"bytes,4,opt,name=content,proto3" json:"content,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -484,7 +632,7 @@ func (m *Policy) Reset()         { *m = Policy{} }
 func (m *Policy) String() string { return proto.CompactTextString(m) }
 func (*Policy) ProtoMessage()    {}
 func (*Policy) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{7}
+	return fileDescriptor_a0b84a42fa06f626, []int{11}
 }
 
 func (m *Policy) XXX_Unmarshal(b []byte) error {
@@ -512,9 +660,9 @@ func (m *Policy) GetIssuer() string {
 	return ""
 }
 
-func (m *Policy) GetStudyName() string {
+func (m *Policy) GetObjectName() string {
 	if m != nil {
-		return m.StudyName
+		return m.ObjectName
 	}
 	return ""
 }
@@ -545,7 +693,7 @@ func (m *MsgSignature) Reset()         { *m = MsgSignature{} }
 func (m *MsgSignature) String() string { return proto.CompactTextString(m) }
 func (*MsgSignature) ProtoMessage()    {}
 func (*MsgSignature) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{8}
+	return fileDescriptor_a0b84a42fa06f626, []int{12}
 }
 
 func (m *MsgSignature) XXX_Unmarshal(b []byte) error {
@@ -592,7 +740,7 @@ func (m *HandshakeResponse) Reset()         { *m = HandshakeResponse{} }
 func (m *HandshakeResponse) String() string { return proto.CompactTextString(m) }
 func (*HandshakeResponse) ProtoMessage()    {}
 func (*HandshakeResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{9}
+	return fileDescriptor_a0b84a42fa06f626, []int{13}
 }
 
 func (m *HandshakeResponse) XXX_Unmarshal(b []byte) error {
@@ -642,7 +790,7 @@ func (m *GossipMessage) Reset()         { *m = GossipMessage{} }
 func (m *GossipMessage) String() string { return proto.CompactTextString(m) }
 func (*GossipMessage) ProtoMessage()    {}
 func (*GossipMessage) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{10}
+	return fileDescriptor_a0b84a42fa06f626, []int{14}
 }
 
 func (m *GossipMessage) XXX_Unmarshal(b []byte) error {
@@ -712,7 +860,7 @@ func (m *GossipMessageBody) Reset()         { *m = GossipMessageBody{} }
 func (m *GossipMessageBody) String() string { return proto.CompactTextString(m) }
 func (*GossipMessageBody) ProtoMessage()    {}
 func (*GossipMessageBody) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{11}
+	return fileDescriptor_a0b84a42fa06f626, []int{15}
 }
 
 func (m *GossipMessageBody) XXX_Unmarshal(b []byte) error {
@@ -773,7 +921,7 @@ func (m *Probe) Reset()         { *m = Probe{} }
 func (m *Probe) String() string { return proto.CompactTextString(m) }
 func (*Probe) ProtoMessage()    {}
 func (*Probe) Descriptor() ([]byte, []int) {
-	return fileDescriptor_a0b84a42fa06f626, []int{12}
+	return fileDescriptor_a0b84a42fa06f626, []int{16}
 }
 
 func (m *Probe) XXX_Unmarshal(b []byte) error {
@@ -809,11 +957,15 @@ func (m *Probe) GetSessionId() []byte {
 }
 
 func init() {
+	proto.RegisterType((*StudyCount)(nil), "proto.StudyCount")
+	proto.RegisterType((*DataUserRequest)(nil), "proto.DataUserRequest")
 	proto.RegisterType((*Message)(nil), "proto.Message")
 	proto.RegisterType((*Load)(nil), "proto.Load")
 	proto.RegisterType((*Node)(nil), "proto.Node")
-	proto.RegisterType((*Study)(nil), "proto.Study")
-	proto.RegisterType((*Studies)(nil), "proto.Studies")
+	proto.RegisterType((*ObjectHeader)(nil), "proto.ObjectHeader")
+	proto.RegisterType((*ObjectHeaders)(nil), "proto.ObjectHeaders")
+	proto.RegisterType((*Object)(nil), "proto.Object")
+	proto.RegisterType((*ObjectData)(nil), "proto.ObjectData")
 	proto.RegisterType((*Subject)(nil), "proto.Subject")
 	proto.RegisterType((*Metadata)(nil), "proto.Metadata")
 	proto.RegisterType((*Policy)(nil), "proto.Policy")
@@ -827,62 +979,67 @@ func init() {
 func init() { proto.RegisterFile("service.proto", fileDescriptor_a0b84a42fa06f626) }
 
 var fileDescriptor_a0b84a42fa06f626 = []byte{
-	// 867 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xbc, 0x55, 0xdf, 0x8f, 0xdb, 0x44,
-	0x10, 0x8e, 0x1d, 0xe7, 0x87, 0x27, 0x49, 0xab, 0x5b, 0xaa, 0xca, 0x32, 0xa0, 0x46, 0x8b, 0xa8,
-	0x4e, 0x45, 0x4a, 0x69, 0x5a, 0x24, 0x04, 0x2f, 0x08, 0x54, 0xe0, 0xa4, 0x5e, 0x55, 0x6d, 0xfa,
-	0x5e, 0xf9, 0xec, 0x69, 0x30, 0x24, 0x5e, 0xcb, 0xbb, 0xa9, 0x1a, 0x89, 0xbf, 0x87, 0x67, 0xfe,
-	0x00, 0x9e, 0xe1, 0x85, 0xbf, 0x09, 0xa1, 0x9d, 0x5d, 0x3b, 0x76, 0xee, 0x0e, 0x0e, 0x1e, 0xfa,
-	0x74, 0x9e, 0x99, 0x6f, 0x6f, 0xbf, 0xf9, 0xe6, 0xdb, 0x09, 0xcc, 0x14, 0x56, 0x6f, 0xf2, 0x14,
-	0x17, 0x65, 0x25, 0xb5, 0x64, 0x03, 0xfa, 0x13, 0xbf, 0xbf, 0x96, 0x72, 0xbd, 0xc1, 0x87, 0x14,
-	0x5d, 0xec, 0x5e, 0x3f, 0xc4, 0x6d, 0xa9, 0xf7, 0x16, 0x13, 0xdf, 0x3b, 0x2e, 0xea, 0x7c, 0x8b,
-	0x4a, 0x27, 0xdb, 0xd2, 0x02, 0xf8, 0x1f, 0x3e, 0x8c, 0xce, 0x51, 0xa9, 0x64, 0x8d, 0x8c, 0x41,
-	0xf0, 0x72, 0x5f, 0x62, 0xe4, 0xcd, 0xbd, 0xd3, 0x50, 0xd0, 0x37, 0xbb, 0x07, 0xc1, 0x46, 0x26,
-	0x59, 0xe4, 0xcf, 0xbd, 0xd3, 0xc9, 0x72, 0x62, 0x4f, 0x2d, 0x9e, 0xc9, 0x24, 0x13, 0x54, 0x60,
-	0x1f, 0xc1, 0x50, 0x61, 0x91, 0x61, 0x15, 0xf5, 0x3b, 0x90, 0xe7, 0x32, 0x43, 0xe1, 0x4a, 0xec,
-	0x14, 0x46, 0x4a, 0xef, 0xb2, 0x1c, 0x55, 0x14, 0x10, 0xea, 0x96, 0x43, 0xad, 0x6c, 0x56, 0xd4,
-	0x65, 0xf6, 0x31, 0x0c, 0x4b, 0xb9, 0xc9, 0xd3, 0x7d, 0x34, 0x20, 0xe0, 0xcc, 0x01, 0x5f, 0x50,
-	0x52, 0xb8, 0x22, 0x7b, 0x04, 0xa1, 0xca, 0xd7, 0x45, 0xa2, 0x77, 0x15, 0x46, 0x43, 0x42, 0xbe,
-	0xe7, 0x90, 0xe7, 0x6a, 0xbd, 0xaa, 0x4b, 0xe2, 0x80, 0x62, 0x5f, 0xc0, 0x6c, 0x2d, 0x95, 0xca,
-	0x4b, 0xd7, 0x6e, 0x34, 0xa2, 0x63, 0x77, 0xdc, 0xb1, 0xef, 0xda, 0x35, 0xd1, 0x85, 0x32, 0x0e,
-	0x46, 0xec, 0x0b, 0x8c, 0xc6, 0x74, 0x66, 0x5a, 0x93, 0x32, 0x39, 0x61, 0x4b, 0xfc, 0x77, 0x0f,
-	0x02, 0xa3, 0x8b, 0x91, 0xac, 0x90, 0x99, 0x95, 0xf1, 0x48, 0x0f, 0x2a, 0xb0, 0x0f, 0x20, 0x34,
-	0x7d, 0xef, 0x9f, 0x27, 0x5b, 0x24, 0x61, 0x43, 0x71, 0x48, 0xb0, 0x18, 0xc6, 0xe7, 0x79, 0xf1,
-	0x3a, 0xdf, 0xa0, 0x22, 0x49, 0x67, 0xa2, 0x89, 0xa9, 0x96, 0xbc, 0xb5, 0xb5, 0xc0, 0xd5, 0x5c,
-	0x6c, 0x6a, 0x6a, 0x77, 0xf1, 0x23, 0xa6, 0x5a, 0x45, 0x83, 0x79, 0xff, 0x34, 0x14, 0x4d, 0xcc,
-	0x3e, 0x81, 0xf1, 0x16, 0x75, 0x92, 0x25, 0x3a, 0x71, 0x6a, 0xdd, 0xae, 0xd5, 0x72, 0x69, 0xd1,
-	0x00, 0xf8, 0xcf, 0x10, 0x18, 0xb2, 0xc6, 0x0e, 0x85, 0x61, 0xe8, 0xec, 0x60, 0xbe, 0x59, 0x04,
-	0xa3, 0x24, 0xcb, 0x2a, 0x54, 0xca, 0x11, 0xaf, 0x43, 0x83, 0xae, 0xe4, 0x06, 0x89, 0x72, 0x28,
-	0xe8, 0x9b, 0x71, 0x98, 0xa6, 0xb2, 0xd0, 0x49, 0xaa, 0x9f, 0x6e, 0x93, 0x7c, 0x43, 0x94, 0x43,
-	0xd1, 0xc9, 0xb1, 0x5b, 0xe0, 0xe7, 0x19, 0x0d, 0x7b, 0x2a, 0xfc, 0x3c, 0xe3, 0xbf, 0x79, 0x30,
-	0x20, 0x31, 0xae, 0xbc, 0xbf, 0xd6, 0xd6, 0xbf, 0x4e, 0xdb, 0x07, 0x70, 0x52, 0x61, 0xfa, 0xca,
-	0x5d, 0xf1, 0x0a, 0xe9, 0x5e, 0xcb, 0xe9, 0x76, 0x85, 0xe9, 0x37, 0xed, 0xab, 0xdb, 0xaa, 0x04,
-	0xff, 0xa2, 0xca, 0x0d, 0x8d, 0xc9, 0x1f, 0xc1, 0xc8, 0x79, 0x9a, 0xdd, 0x3f, 0x98, 0xde, 0x9b,
-	0xf7, 0x5b, 0xb6, 0xa1, 0xf6, 0x1a, 0xcb, 0xf3, 0x0f, 0x61, 0xb4, 0xb2, 0x83, 0xba, 0xaa, 0x65,
-	0xfe, 0x15, 0x8c, 0x6b, 0x3a, 0x46, 0x7e, 0xd3, 0x19, 0x16, 0x9a, 0x20, 0x53, 0x51, 0x87, 0x9d,
-	0xe9, 0xfb, 0xdd, 0xe9, 0x73, 0x0d, 0x43, 0xcb, 0x92, 0xdd, 0x85, 0x61, 0xae, 0xd4, 0x0e, 0x2b,
-	0x77, 0x83, 0x8b, 0x8c, 0x23, 0xd5, 0xb1, 0x23, 0x55, 0xdb, 0x91, 0xc6, 0x62, 0xc4, 0xcc, 0x4a,
-	0xd9, 0xc4, 0x6d, 0x46, 0x41, 0x87, 0x11, 0x7f, 0x00, 0xd3, 0xf6, 0x53, 0x64, 0x53, 0xf0, 0x2a,
-	0xc7, 0xda, 0xab, 0x4c, 0x64, 0x2d, 0x34, 0x15, 0x9e, 0xe2, 0x8f, 0xe1, 0xe4, 0xfb, 0xa4, 0xc8,
-	0xd4, 0x0f, 0xc9, 0x4f, 0x28, 0x50, 0x95, 0xb2, 0x50, 0x48, 0xce, 0x28, 0x1d, 0x51, 0x3f, 0x2f,
-	0x9d, 0x53, 0xfc, 0xc6, 0x29, 0x7f, 0x79, 0x30, 0xeb, 0xbc, 0x5a, 0xd3, 0xde, 0xca, 0xee, 0x22,
-	0xd7, 0x9e, 0x8d, 0xd8, 0x1c, 0x26, 0x0e, 0x42, 0xfb, 0xcd, 0x36, 0xd8, 0x4e, 0xb1, 0xcf, 0x21,
-	0x6c, 0x36, 0xa3, 0x5b, 0x64, 0xf1, 0xc2, 0xee, 0xce, 0x45, 0xbd, 0x3b, 0x17, 0x2f, 0x6b, 0x84,
-	0x38, 0x80, 0xbb, 0x9b, 0x28, 0xb8, 0xd1, 0x26, 0xfa, 0x16, 0x4e, 0x3a, 0xeb, 0xe5, 0x6b, 0x99,
-	0xed, 0xe9, 0xc9, 0x4e, 0x96, 0xd1, 0x55, 0xdb, 0xc8, 0xd4, 0xc5, 0xe5, 0x23, 0xfc, 0x17, 0x0f,
-	0x4e, 0x2e, 0x01, 0x8d, 0x08, 0x92, 0x06, 0x5f, 0x8b, 0x60, 0x23, 0x33, 0xa9, 0x37, 0x58, 0xa9,
-	0x5c, 0x16, 0x24, 0x40, 0x20, 0xea, 0xb0, 0x65, 0xed, 0xfe, 0x3f, 0xed, 0xdc, 0x8e, 0x46, 0xc1,
-	0x7f, 0xd0, 0x88, 0x7f, 0x09, 0x03, 0x5a, 0x95, 0xec, 0x0e, 0x0c, 0x64, 0x55, 0xcf, 0x67, 0x26,
-	0x6c, 0x40, 0xee, 0x43, 0x65, 0xa8, 0x9c, 0xd5, 0xf3, 0x3d, 0x24, 0x96, 0x7f, 0x7a, 0xd0, 0x3f,
-	0xdf, 0xbd, 0x65, 0x4f, 0x20, 0x6c, 0x3c, 0xc2, 0xda, 0x2f, 0x3f, 0xae, 0x45, 0xbb, 0x64, 0x21,
-	0xde, 0x63, 0x9f, 0xb9, 0x5d, 0xfb, 0x2c, 0x57, 0x9a, 0xdd, 0xbd, 0x44, 0xf7, 0xa9, 0xf9, 0xad,
-	0x8c, 0x8f, 0x7e, 0x8d, 0x78, 0x8f, 0x7d, 0x0a, 0x33, 0x3a, 0xd6, 0xbc, 0xbc, 0xce, 0xdb, 0x8d,
-	0x8f, 0xf7, 0x04, 0xef, 0xb1, 0xfb, 0x30, 0x3e, 0x5b, 0x17, 0xb2, 0xc2, 0xb3, 0x17, 0x5d, 0x76,
-	0xed, 0x80, 0xf7, 0x96, 0xbf, 0x7a, 0x30, 0xb1, 0xc2, 0xae, 0xb4, 0xac, 0xf0, 0xdd, 0xb6, 0xf5,
-	0x04, 0xc2, 0x15, 0x6a, 0xb7, 0x0c, 0xba, 0x63, 0x8e, 0xaf, 0xf9, 0x2f, 0xbc, 0xb7, 0x94, 0xd0,
-	0x17, 0x98, 0xfe, 0x4f, 0xa6, 0x4b, 0x18, 0xaf, 0x50, 0xdb, 0x8d, 0xde, 0x15, 0xf1, 0xda, 0x0b,
-	0x2f, 0x86, 0x94, 0x79, 0xfc, 0x77, 0x00, 0x00, 0x00, 0xff, 0xff, 0xf7, 0x6b, 0x03, 0x53, 0xf1,
-	0x08, 0x00, 0x00,
+	// 958 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x56, 0xfb, 0x8e, 0xdb, 0xc4,
+	0x17, 0x8e, 0x13, 0x6f, 0x36, 0x3e, 0x6b, 0xff, 0xda, 0xcc, 0xaf, 0x5a, 0x59, 0xe1, 0xb2, 0xab,
+	0x41, 0x54, 0x55, 0x91, 0x52, 0x75, 0x5b, 0x89, 0xab, 0xb8, 0x94, 0x96, 0x76, 0x11, 0xbb, 0x54,
+	0x93, 0xf2, 0x00, 0x93, 0xf8, 0x34, 0x18, 0x12, 0x8f, 0xf1, 0x8c, 0x97, 0x46, 0x42, 0xe2, 0x31,
+	0x78, 0x03, 0xde, 0x89, 0x17, 0xe0, 0x31, 0x10, 0x9a, 0x8b, 0x1d, 0x3b, 0x97, 0xaa, 0xec, 0x5f,
+	0xf1, 0x39, 0xe7, 0x9b, 0x99, 0x73, 0xf9, 0xe6, 0x9b, 0x40, 0x24, 0xb1, 0xb8, 0x4a, 0x67, 0x38,
+	0xce, 0x0b, 0xa1, 0x04, 0x39, 0x30, 0x3f, 0xa3, 0xb7, 0xe6, 0x42, 0xcc, 0x17, 0x78, 0xcf, 0x58,
+	0xd3, 0xf2, 0xe5, 0x3d, 0x5c, 0xe6, 0x6a, 0x65, 0x31, 0xa3, 0x93, 0xcd, 0xa0, 0x4a, 0x97, 0x28,
+	0x15, 0x5f, 0xe6, 0x16, 0x40, 0x29, 0xc0, 0x44, 0x95, 0xc9, 0xea, 0x6b, 0x51, 0x66, 0x8a, 0xdc,
+	0x82, 0x83, 0x99, 0xfe, 0x88, 0xbd, 0x53, 0xef, 0x4e, 0xc4, 0xac, 0x41, 0xe7, 0x70, 0xe3, 0x31,
+	0x57, 0xfc, 0x07, 0x89, 0x05, 0xc3, 0x5f, 0x4a, 0x94, 0x8a, 0x10, 0xf0, 0x33, 0xbe, 0x44, 0x83,
+	0x0b, 0x98, 0xf9, 0x26, 0x77, 0xe1, 0x66, 0x2e, 0x16, 0xe9, 0x6c, 0xf5, 0x95, 0x52, 0x45, 0x3a,
+	0x2d, 0x15, 0xca, 0xb8, 0x6b, 0xe2, 0x5b, 0x7e, 0x7d, 0x90, 0xd4, 0xc7, 0xc6, 0x3d, 0x03, 0xb0,
+	0x06, 0xfd, 0xab, 0x0b, 0x87, 0x17, 0x28, 0x25, 0x9f, 0xa3, 0x3e, 0xe1, 0xc5, 0x2a, 0xaf, 0x4f,
+	0xd0, 0xdf, 0xe4, 0x04, 0xfc, 0x85, 0xe0, 0x89, 0xd9, 0xf5, 0xe8, 0xec, 0xc8, 0x96, 0x30, 0xfe,
+	0x4e, 0xf0, 0x84, 0x99, 0x00, 0x79, 0x0f, 0xfa, 0x12, 0xb3, 0x04, 0x0b, 0xb3, 0xef, 0x1a, 0x72,
+	0x29, 0x12, 0x64, 0x2e, 0x44, 0x3e, 0x81, 0x48, 0x4c, 0x7f, 0xc2, 0x99, 0x7a, 0x86, 0x3c, 0xc1,
+	0x42, 0xc6, 0xbe, 0xc1, 0xde, 0x72, 0xd8, 0xef, 0x9b, 0x31, 0xd6, 0x86, 0x92, 0xf7, 0xa1, 0x6f,
+	0x6b, 0x89, 0x0f, 0xcc, 0xa2, 0xc8, 0x2d, 0x7a, 0x6e, 0x9c, 0xcc, 0x05, 0xc9, 0x7d, 0x08, 0x64,
+	0x3a, 0xcf, 0xb8, 0x2a, 0x0b, 0x8c, 0xfb, 0x06, 0xf9, 0x7f, 0x87, 0xbc, 0x90, 0xf3, 0x49, 0x15,
+	0x62, 0x6b, 0x94, 0xce, 0x6a, 0x2e, 0xa4, 0x4c, 0x73, 0xd7, 0x80, 0xf8, 0xb0, 0x95, 0xd5, 0xd3,
+	0x66, 0x8c, 0xb5, 0xa1, 0x84, 0x82, 0xe6, 0xc2, 0x14, 0xe3, 0x81, 0x59, 0x13, 0x56, 0x49, 0x69,
+	0x1f, 0xb3, 0x21, 0xfa, 0x2b, 0xf8, 0xba, 0x51, 0xe4, 0x43, 0x08, 0x9b, 0x25, 0x99, 0xfe, 0xae,
+	0xb3, 0x6b, 0x16, 0xcf, 0x5a, 0x40, 0x32, 0x82, 0xc1, 0x45, 0x9a, 0xbd, 0x4c, 0x17, 0x6e, 0xac,
+	0x11, 0xab, 0x6d, 0x13, 0xe3, 0xaf, 0x6c, 0xac, 0xe7, 0x62, 0xce, 0xa6, 0xbf, 0x81, 0xaf, 0xdb,
+	0xbf, 0x93, 0x32, 0x31, 0x1c, 0xf2, 0x24, 0x29, 0x50, 0x56, 0x4c, 0xa9, 0x4c, 0x8d, 0x2e, 0xc4,
+	0x02, 0x1d, 0x3f, 0xcc, 0x37, 0xa1, 0x10, 0xce, 0x44, 0xa6, 0xf8, 0x4c, 0x3d, 0x59, 0xf2, 0x74,
+	0x61, 0xe6, 0x16, 0xb0, 0x96, 0x8f, 0xfc, 0x0f, 0xba, 0x69, 0x62, 0x86, 0x13, 0xb2, 0x6e, 0x9a,
+	0xd0, 0x3f, 0x3c, 0x08, 0x9b, 0x45, 0xed, 0x4c, 0xe3, 0x04, 0xfc, 0x4c, 0x24, 0xb8, 0xc1, 0x2b,
+	0x43, 0x1a, 0x13, 0x20, 0x1f, 0xc0, 0x60, 0x89, 0x8a, 0x27, 0x5c, 0x71, 0xc7, 0x96, 0x1b, 0xd5,
+	0x38, 0x9d, 0x9b, 0xd5, 0x80, 0x37, 0xe4, 0x08, 0xfd, 0x16, 0xa2, 0x16, 0xd5, 0xc8, 0xc7, 0x9b,
+	0xbc, 0xf4, 0x4e, 0x7b, 0xfb, 0x46, 0xd3, 0x46, 0x52, 0x05, 0x7d, 0x1b, 0xbe, 0xfe, 0x78, 0xef,
+	0x03, 0x58, 0x5b, 0x5f, 0x75, 0xd7, 0x89, 0x61, 0x6b, 0x99, 0x0e, 0xb0, 0x06, 0x88, 0xde, 0x06,
+	0x58, 0x47, 0xf4, 0x2c, 0xf5, 0x24, 0xd0, 0xa9, 0x47, 0xc8, 0x2a, 0x93, 0xbe, 0x03, 0x87, 0x93,
+	0xd2, 0xa6, 0xb7, 0xa3, 0xfb, 0xf4, 0x4b, 0x18, 0x54, 0x5d, 0xdc, 0xbf, 0x89, 0xa6, 0x98, 0xb4,
+	0x9b, 0x68, 0xae, 0xf4, 0xee, 0x04, 0xac, 0xb6, 0xe9, 0x15, 0xf4, 0x6d, 0x73, 0xc9, 0x31, 0xf4,
+	0x53, 0x29, 0x4b, 0x57, 0x78, 0xc0, 0x9c, 0x45, 0xde, 0xad, 0xaa, 0xbb, 0xd4, 0xa7, 0x5b, 0xae,
+	0x35, 0x3c, 0x7a, 0x77, 0xcd, 0x56, 0x93, 0x9b, 0xa5, 0x5c, 0x6d, 0x37, 0x73, 0xf2, 0xdb, 0x85,
+	0xdd, 0x85, 0xb0, 0x79, 0x9d, 0x49, 0x08, 0x5e, 0xe1, 0xf2, 0xf6, 0x0a, 0x6d, 0x59, 0x5a, 0x87,
+	0xcc, 0x93, 0xf4, 0x01, 0x0c, 0x9f, 0xf1, 0x2c, 0x91, 0x3f, 0xf2, 0x9f, 0x91, 0xa1, 0xcc, 0x45,
+	0x26, 0xd1, 0xb0, 0x35, 0x77, 0xa9, 0x76, 0xd3, 0xdc, 0xb1, 0xb7, 0x5b, 0xb3, 0xf7, 0x1f, 0x0f,
+	0xa2, 0xd6, 0xcd, 0xd7, 0x05, 0x4e, 0xac, 0xc2, 0xb9, 0x02, 0xad, 0x45, 0x4e, 0xe1, 0xc8, 0x41,
+	0x8c, 0x6a, 0xda, 0x0a, 0x9b, 0x2e, 0xf2, 0x11, 0x04, 0xb5, 0xf8, 0x3b, 0x79, 0x1c, 0x8d, 0xed,
+	0xf3, 0x30, 0xae, 0x9e, 0x87, 0xf1, 0x8b, 0x0a, 0xc1, 0xd6, 0xe0, 0xb6, 0x9a, 0xf9, 0x6f, 0xa4,
+	0x66, 0xdf, 0xc0, 0xb0, 0x25, 0x51, 0x8f, 0x44, 0xa2, 0xaf, 0x83, 0xe6, 0x73, 0xbc, 0x4b, 0xd1,
+	0x74, 0x9c, 0x6d, 0x2f, 0xa1, 0x7f, 0x7a, 0x30, 0xdc, 0x02, 0xea, 0x26, 0xd8, 0xd9, 0x55, 0x4d,
+	0xb0, 0x96, 0x9e, 0xd4, 0x15, 0x16, 0x32, 0x15, 0x99, 0x69, 0x80, 0xcf, 0x2a, 0xb3, 0x71, 0x27,
+	0x7b, 0xaf, 0xd3, 0xed, 0x56, 0x8f, 0xfc, 0xff, 0xd0, 0x23, 0xfa, 0x29, 0x1c, 0x18, 0xb9, 0xd5,
+	0x2f, 0x9b, 0x28, 0xaa, 0xf9, 0x44, 0xcc, 0x1a, 0xe4, 0x6d, 0x08, 0x24, 0x4a, 0x9d, 0xca, 0x79,
+	0x35, 0xdf, 0xb5, 0xe3, 0xec, 0xef, 0x2e, 0xf4, 0x2e, 0xca, 0x57, 0xe4, 0x21, 0x04, 0x35, 0x47,
+	0x48, 0x53, 0x86, 0x46, 0x55, 0xd3, 0xb6, 0x28, 0x44, 0x3b, 0xe4, 0x11, 0xdc, 0x7c, 0x8a, 0xaa,
+	0xad, 0x25, 0xc7, 0x5b, 0x59, 0x3f, 0xd1, 0xff, 0x0a, 0x46, 0x3b, 0x1f, 0x39, 0xda, 0x21, 0x9f,
+	0xc3, 0xb0, 0xde, 0xa3, 0xbe, 0x8c, 0xc7, 0x0e, 0xbc, 0xf1, 0xf8, 0x8f, 0x36, 0xb5, 0x8f, 0x76,
+	0xc8, 0x17, 0x26, 0x07, 0x77, 0xcb, 0x2f, 0xcb, 0xe5, 0x14, 0x8b, 0xbd, 0xcb, 0x2b, 0x55, 0x59,
+	0xff, 0xef, 0xa0, 0x1d, 0xf2, 0x19, 0x44, 0x75, 0x02, 0x8f, 0x5f, 0x77, 0xf8, 0xb6, 0x26, 0xd1,
+	0x0e, 0xb9, 0x0d, 0x83, 0xf3, 0x79, 0x26, 0x0a, 0x3c, 0x7f, 0xde, 0xee, 0x5b, 0xd3, 0xa0, 0x9d,
+	0xb3, 0x15, 0x1c, 0xd9, 0x89, 0x4f, 0x94, 0x28, 0xf0, 0x9a, 0xfd, 0x7e, 0x08, 0xc1, 0x04, 0x95,
+	0x13, 0x9c, 0x36, 0x91, 0x46, 0x7b, 0xfa, 0x4e, 0x3b, 0x67, 0xbf, 0x43, 0x8f, 0xe1, 0xec, 0xda,
+	0x23, 0x1e, 0x9a, 0x8c, 0x5b, 0x2f, 0xd9, 0x2e, 0x51, 0xdf, 0x9f, 0xc0, 0xb4, 0x6f, 0x3c, 0x0f,
+	0xfe, 0x0d, 0x00, 0x00, 0xff, 0xff, 0x78, 0x26, 0x81, 0xc1, 0x46, 0x0a, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -898,8 +1055,10 @@ const _ = grpc.SupportPackageIsVersion4
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type MuxClient interface {
 	Handshake(ctx context.Context, in *Node, opts ...grpc.CallOption) (*HandshakeResponse, error)
-	StudyList(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*Studies, error)
-	StudyMetadata(ctx context.Context, in *Study, opts ...grpc.CallOption) (*Metadata, error)
+	GetObjectHeaders(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*ObjectHeaders, error)
+	GetObjectMetadata(ctx context.Context, in *DataUserRequest, opts ...grpc.CallOption) (*Metadata, error)
+	GetSubjectNumber(ctx context.Context, in *DataUserRequest, opts ...grpc.CallOption) (*StudyCount, error)
+	GetObjectData(ctx context.Context, in *DataUserRequest, opts ...grpc.CallOption) (*ObjectData, error)
 	IgnoreIP(ctx context.Context, in *Node, opts ...grpc.CallOption) (*Node, error)
 }
 
@@ -920,18 +1079,36 @@ func (c *muxClient) Handshake(ctx context.Context, in *Node, opts ...grpc.CallOp
 	return out, nil
 }
 
-func (c *muxClient) StudyList(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*Studies, error) {
-	out := new(Studies)
-	err := c.cc.Invoke(ctx, "/proto.Mux/StudyList", in, out, opts...)
+func (c *muxClient) GetObjectHeaders(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*ObjectHeaders, error) {
+	out := new(ObjectHeaders)
+	err := c.cc.Invoke(ctx, "/proto.Mux/GetObjectHeaders", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *muxClient) StudyMetadata(ctx context.Context, in *Study, opts ...grpc.CallOption) (*Metadata, error) {
+func (c *muxClient) GetObjectMetadata(ctx context.Context, in *DataUserRequest, opts ...grpc.CallOption) (*Metadata, error) {
 	out := new(Metadata)
-	err := c.cc.Invoke(ctx, "/proto.Mux/StudyMetadata", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/proto.Mux/GetObjectMetadata", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *muxClient) GetSubjectNumber(ctx context.Context, in *DataUserRequest, opts ...grpc.CallOption) (*StudyCount, error) {
+	out := new(StudyCount)
+	err := c.cc.Invoke(ctx, "/proto.Mux/GetSubjectNumber", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *muxClient) GetObjectData(ctx context.Context, in *DataUserRequest, opts ...grpc.CallOption) (*ObjectData, error) {
+	out := new(ObjectData)
+	err := c.cc.Invoke(ctx, "/proto.Mux/GetObjectData", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -950,8 +1127,10 @@ func (c *muxClient) IgnoreIP(ctx context.Context, in *Node, opts ...grpc.CallOpt
 // MuxServer is the server API for Mux service.
 type MuxServer interface {
 	Handshake(context.Context, *Node) (*HandshakeResponse, error)
-	StudyList(context.Context, *empty.Empty) (*Studies, error)
-	StudyMetadata(context.Context, *Study) (*Metadata, error)
+	GetObjectHeaders(context.Context, *empty.Empty) (*ObjectHeaders, error)
+	GetObjectMetadata(context.Context, *DataUserRequest) (*Metadata, error)
+	GetSubjectNumber(context.Context, *DataUserRequest) (*StudyCount, error)
+	GetObjectData(context.Context, *DataUserRequest) (*ObjectData, error)
 	IgnoreIP(context.Context, *Node) (*Node, error)
 }
 
@@ -962,11 +1141,17 @@ type UnimplementedMuxServer struct {
 func (*UnimplementedMuxServer) Handshake(ctx context.Context, req *Node) (*HandshakeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Handshake not implemented")
 }
-func (*UnimplementedMuxServer) StudyList(ctx context.Context, req *empty.Empty) (*Studies, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StudyList not implemented")
+func (*UnimplementedMuxServer) GetObjectHeaders(ctx context.Context, req *empty.Empty) (*ObjectHeaders, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetObjectHeaders not implemented")
 }
-func (*UnimplementedMuxServer) StudyMetadata(ctx context.Context, req *Study) (*Metadata, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StudyMetadata not implemented")
+func (*UnimplementedMuxServer) GetObjectMetadata(ctx context.Context, req *DataUserRequest) (*Metadata, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetObjectMetadata not implemented")
+}
+func (*UnimplementedMuxServer) GetSubjectNumber(ctx context.Context, req *DataUserRequest) (*StudyCount, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSubjectNumber not implemented")
+}
+func (*UnimplementedMuxServer) GetObjectData(ctx context.Context, req *DataUserRequest) (*ObjectData, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetObjectData not implemented")
 }
 func (*UnimplementedMuxServer) IgnoreIP(ctx context.Context, req *Node) (*Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IgnoreIP not implemented")
@@ -994,38 +1179,74 @@ func _Mux_Handshake_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Mux_StudyList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Mux_GetObjectHeaders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(empty.Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MuxServer).StudyList(ctx, in)
+		return srv.(MuxServer).GetObjectHeaders(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/proto.Mux/StudyList",
+		FullMethod: "/proto.Mux/GetObjectHeaders",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MuxServer).StudyList(ctx, req.(*empty.Empty))
+		return srv.(MuxServer).GetObjectHeaders(ctx, req.(*empty.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Mux_StudyMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Study)
+func _Mux_GetObjectMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataUserRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MuxServer).StudyMetadata(ctx, in)
+		return srv.(MuxServer).GetObjectMetadata(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/proto.Mux/StudyMetadata",
+		FullMethod: "/proto.Mux/GetObjectMetadata",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MuxServer).StudyMetadata(ctx, req.(*Study))
+		return srv.(MuxServer).GetObjectMetadata(ctx, req.(*DataUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Mux_GetSubjectNumber_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MuxServer).GetSubjectNumber(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.Mux/GetSubjectNumber",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MuxServer).GetSubjectNumber(ctx, req.(*DataUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Mux_GetObjectData_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataUserRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MuxServer).GetObjectData(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.Mux/GetObjectData",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MuxServer).GetObjectData(ctx, req.(*DataUserRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1057,12 +1278,20 @@ var _Mux_serviceDesc = grpc.ServiceDesc{
 			Handler:    _Mux_Handshake_Handler,
 		},
 		{
-			MethodName: "StudyList",
-			Handler:    _Mux_StudyList_Handler,
+			MethodName: "GetObjectHeaders",
+			Handler:    _Mux_GetObjectHeaders_Handler,
 		},
 		{
-			MethodName: "StudyMetadata",
-			Handler:    _Mux_StudyMetadata_Handler,
+			MethodName: "GetObjectMetadata",
+			Handler:    _Mux_GetObjectMetadata_Handler,
+		},
+		{
+			MethodName: "GetSubjectNumber",
+			Handler:    _Mux_GetSubjectNumber_Handler,
+		},
+		{
+			MethodName: "GetObjectData",
+			Handler:    _Mux_GetObjectData_Handler,
 		},
 		{
 			MethodName: "IgnoreIP",
@@ -1078,7 +1307,8 @@ var _Mux_serviceDesc = grpc.ServiceDesc{
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type PolicyStoreClient interface {
 	Handshake(ctx context.Context, in *Node, opts ...grpc.CallOption) (*HandshakeResponse, error)
-	StudyList(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*Studies, error)
+	//rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
+	//rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
 	SetPolicy(ctx context.Context, in *Policy, opts ...grpc.CallOption) (*empty.Empty, error)
 }
 
@@ -1099,15 +1329,6 @@ func (c *policyStoreClient) Handshake(ctx context.Context, in *Node, opts ...grp
 	return out, nil
 }
 
-func (c *policyStoreClient) StudyList(ctx context.Context, in *empty.Empty, opts ...grpc.CallOption) (*Studies, error) {
-	out := new(Studies)
-	err := c.cc.Invoke(ctx, "/proto.PolicyStore/StudyList", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *policyStoreClient) SetPolicy(ctx context.Context, in *Policy, opts ...grpc.CallOption) (*empty.Empty, error) {
 	out := new(empty.Empty)
 	err := c.cc.Invoke(ctx, "/proto.PolicyStore/SetPolicy", in, out, opts...)
@@ -1120,7 +1341,8 @@ func (c *policyStoreClient) SetPolicy(ctx context.Context, in *Policy, opts ...g
 // PolicyStoreServer is the server API for PolicyStore service.
 type PolicyStoreServer interface {
 	Handshake(context.Context, *Node) (*HandshakeResponse, error)
-	StudyList(context.Context, *empty.Empty) (*Studies, error)
+	//rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
+	//rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
 	SetPolicy(context.Context, *Policy) (*empty.Empty, error)
 }
 
@@ -1130,9 +1352,6 @@ type UnimplementedPolicyStoreServer struct {
 
 func (*UnimplementedPolicyStoreServer) Handshake(ctx context.Context, req *Node) (*HandshakeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Handshake not implemented")
-}
-func (*UnimplementedPolicyStoreServer) StudyList(ctx context.Context, req *empty.Empty) (*Studies, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StudyList not implemented")
 }
 func (*UnimplementedPolicyStoreServer) SetPolicy(ctx context.Context, req *Policy) (*empty.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetPolicy not implemented")
@@ -1156,24 +1375,6 @@ func _PolicyStore_Handshake_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PolicyStoreServer).Handshake(ctx, req.(*Node))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PolicyStore_StudyList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(empty.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PolicyStoreServer).StudyList(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/proto.PolicyStore/StudyList",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PolicyStoreServer).StudyList(ctx, req.(*empty.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1205,10 +1406,6 @@ var _PolicyStore_serviceDesc = grpc.ServiceDesc{
 			Handler:    _PolicyStore_Handshake_Handler,
 		},
 		{
-			MethodName: "StudyList",
-			Handler:    _PolicyStore_StudyList_Handler,
-		},
-		{
 			MethodName: "SetPolicy",
 			Handler:    _PolicyStore_SetPolicy_Handler,
 		},
@@ -1222,7 +1419,7 @@ var _PolicyStore_serviceDesc = grpc.ServiceDesc{
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type RecClient interface {
 	Handshake(ctx context.Context, in *Node, opts ...grpc.CallOption) (*HandshakeResponse, error)
-	SetStudy(ctx context.Context, in *Study, opts ...grpc.CallOption) (*empty.Empty, error)
+	StoreObjectHeader(ctx context.Context, in *ObjectHeader, opts ...grpc.CallOption) (*empty.Empty, error)
 }
 
 type recClient struct {
@@ -1242,9 +1439,9 @@ func (c *recClient) Handshake(ctx context.Context, in *Node, opts ...grpc.CallOp
 	return out, nil
 }
 
-func (c *recClient) SetStudy(ctx context.Context, in *Study, opts ...grpc.CallOption) (*empty.Empty, error) {
+func (c *recClient) StoreObjectHeader(ctx context.Context, in *ObjectHeader, opts ...grpc.CallOption) (*empty.Empty, error) {
 	out := new(empty.Empty)
-	err := c.cc.Invoke(ctx, "/proto.Rec/SetStudy", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/proto.Rec/StoreObjectHeader", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1254,7 +1451,7 @@ func (c *recClient) SetStudy(ctx context.Context, in *Study, opts ...grpc.CallOp
 // RecServer is the server API for Rec service.
 type RecServer interface {
 	Handshake(context.Context, *Node) (*HandshakeResponse, error)
-	SetStudy(context.Context, *Study) (*empty.Empty, error)
+	StoreObjectHeader(context.Context, *ObjectHeader) (*empty.Empty, error)
 }
 
 // UnimplementedRecServer can be embedded to have forward compatible implementations.
@@ -1264,8 +1461,8 @@ type UnimplementedRecServer struct {
 func (*UnimplementedRecServer) Handshake(ctx context.Context, req *Node) (*HandshakeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Handshake not implemented")
 }
-func (*UnimplementedRecServer) SetStudy(ctx context.Context, req *Study) (*empty.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetStudy not implemented")
+func (*UnimplementedRecServer) StoreObjectHeader(ctx context.Context, req *ObjectHeader) (*empty.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StoreObjectHeader not implemented")
 }
 
 func RegisterRecServer(s *grpc.Server, srv RecServer) {
@@ -1290,20 +1487,20 @@ func _Rec_Handshake_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Rec_SetStudy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Study)
+func _Rec_StoreObjectHeader_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ObjectHeader)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RecServer).SetStudy(ctx, in)
+		return srv.(RecServer).StoreObjectHeader(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/proto.Rec/SetStudy",
+		FullMethod: "/proto.Rec/StoreObjectHeader",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RecServer).SetStudy(ctx, req.(*Study))
+		return srv.(RecServer).StoreObjectHeader(ctx, req.(*ObjectHeader))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1317,8 +1514,8 @@ var _Rec_serviceDesc = grpc.ServiceDesc{
 			Handler:    _Rec_Handshake_Handler,
 		},
 		{
-			MethodName: "SetStudy",
-			Handler:    _Rec_SetStudy_Handler,
+			MethodName: "StoreObjectHeader",
+			Handler:    _Rec_StoreObjectHeader_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

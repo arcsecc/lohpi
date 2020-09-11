@@ -40,10 +40,12 @@ func (m *membershipManager) lruNodes() map[string]int {
 }
 
 // Returns a subset of the least recently used members. Returns an array of one element if
-// and only if 0 < numDirectRecipients < 4. numDirectRecipients is a whole number (not percetage)
+// and only if 0 < numDirectRecipients < 4. numDirectRecipients is a whole number (not percetage).
+// TODO: numDirectRecipients tends to live its own life. Fix this!
 func (m *membershipManager) lruMembers(numDirectRecipients int) ([]string, error) {
 	m.updateLruMembers()
 
+	// BUG HERE!
 	// Nothing to do
 	if len(m.lruNodes()) == 0 {
 		return nil, errors.New("No members in LRU list")
@@ -93,6 +95,7 @@ func (m *membershipManager) lruMembers(numDirectRecipients int) ([]string, error
 			recipients = append(recipients, k)
 			iterations += 1
 			m.lruNodesMap[k] += 1
+			log.Println("In memmanger:", numDirectRecipients)
 			if iterations >= int(numDirectRecipients) {
 				break
 			}

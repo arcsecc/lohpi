@@ -1,7 +1,7 @@
 package multicast
 
 import (
-	//"bytes"
+	"bytes"
 	"errors"
 	"math"
 	"math/rand"
@@ -113,6 +113,7 @@ func (p* probeManager) initializeProbingSession(mcConfig multicastConfig) {
 
 // Probes the network by multicasting a probing messages to the given members. 
 // It uses the current configuration assoicated with the probing manager.
+// If probing is aborted prematurely, multicastConfig is nil.
 func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode) (*multicastConfig, error) {
 	p.isProbingMutex.Lock()
 	p.isProbing = true
@@ -143,6 +144,8 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 			return nil, err
 		}
 
+		log.Println("recipients", recipients)
+
 		r := newProbeRound(&tau, &sigma, mode, &order, &phi, recipients)
 		p.appendRound(r)
 		p.setCurrentRound(r)
@@ -160,6 +163,10 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 		ackTimer.Reset(tau)	
 		
 		select {
+		case <-p.stopAck:
+			log.Println("Stopping prober...")
+			return nil, nil
+		
 		case <-ackTimer.C:
 			log.Println("AckTimer expired")
 			if p.acknowledgmentsArrivedInTime() {
@@ -187,9 +194,6 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 			}
 			ackTimer.Reset(prbSessionConfig.multicastInterval)
 		*/
-		case <-p.stopAck:
-			log.Println("Stopping prober...")
-			break
 		}
 
 		if consecutiveSuccesses > 2 {
@@ -211,8 +215,8 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 	return cc, nil
 }
 
-func (p *probeManager) prepareRound() {
-
+func (p *probeManager) Stop() {
+	p.stopAck <- true
 }
 
 // Sets the probing config 
@@ -285,7 +289,7 @@ func (p *probeManager) multicast(round *ackRound) error {
 	}
 
 	// Marshal before multicast probe messages
-	data, err = proto.Marshal(msg)
+	binaryData, err := proto.Marshal(msg)
 	if err != nil {
 		return err
 	}
@@ -297,7 +301,7 @@ func (p *probeManager) multicast(round *ackRound) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			p.ifritClient.SendTo(member, data)
+			p.ifritClient.SendTo(member, binaryData)
 		}()
 	}
 
@@ -344,7 +348,6 @@ func (p *probeManager) probeAcknowledger() {
 				return*/
 			}
 	}
-	log.Println("kake")
 }
 
 func (p *probeManager) getAckRounds() []*ackRound {
@@ -372,8 +375,8 @@ func (p *probeManager) appendRound(r *ackRound) {
 }
 
 func (p *probeManager) isValidAcknowledgment(probe *pb.Probe, config *probeSessionConfig, order uint32) bool {
-	//return probe.GetOrder() == order && bytes.Compare(probe.GetSessionId(), config.sessionID) == 0 
-	return probe.GetOrder() == order
+	return probe.GetOrder() == order && bytes.Compare(probe.GetSessionId(), config.sessionID) == 0 
+	//return probe.GetOrder() == order
 }
 
 // Set tau to 0.75 of its original value
@@ -387,7 +390,6 @@ func (p *probeManager) decreaseProbeSessionConfiguration() {
 }
 
 func (p *probeManager) probeRoundRecipients(mode MessageMode, directRecipients int) ([]string, error) {
-	log.Println("direct recipients:", directRecipients)
 	switch mode {
 	case LruMembers:
 		return p.memManager.lruMembers(directRecipients)
@@ -427,7 +429,6 @@ func (p *probeManager) increaseProbeParameters(tau *time.Duration, sigma *int) {
 	n := sessionConfig.numMembers
 	
 	if *sigma < int(math.Ceil((accLevel * float64(n)) / 2)) {
-		log.Println("Increasing sigma")
 		*sigma *= 2
 
 		if *sigma > int(math.Ceil((accLevel * float64(n)) / 2)) {
@@ -435,7 +436,7 @@ func (p *probeManager) increaseProbeParameters(tau *time.Duration, sigma *int) {
 		}
 	} else if *sigma == int(math.Ceil((accLevel * float64(n)) / 2)) {
 		//s := float64(tau.Milliseconds()) * 1.5 // TODO: set upper bound on tau. Multiply by 1.5
-		log.Println("Increasing tau")
+		// TODO: increase by 1.5
 		*tau *= 2
 		if *tau >= time.Duration(1 * time.Hour) {
 			*tau = time.Duration(1 * time.Hour)

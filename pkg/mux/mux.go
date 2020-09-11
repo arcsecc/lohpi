@@ -10,6 +10,8 @@ import (
 	"github.com/tomcat-bit/lohpi/pkg/cache"
 	"github.com/tomcat-bit/lohpi/pkg/netutil"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
+	"github.com/tomcat-bit/lohpi/pkg/message"
 	"net"
 	"net/http"
 	"strconv"
@@ -35,12 +37,18 @@ type MuxConfig struct {
 	PolicyStoreIP			string 		`default:"127.0.1.1:8082"`
 	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
 	RecIP 					string 		`default:"127.0.1.1:8084"`
+	CacheSize 				int 		`default: 1000`
 }
 
 type service interface {
 	Register(pb.MuxServer)
 	StudyList()
 	Handshake()
+}
+
+// 
+type NeighborNode struct {
+
 }
 
 type Mux struct {
@@ -63,10 +71,10 @@ type Mux struct {
 	exitChan chan bool
 
 	// gRPC service
-	listener     net.Listener
-	serverConfig *tls.Config
-	grpcs *gRPCServer
-	s service
+	listener     	net.Listener
+	serverConfig 	*tls.Config
+	grpcs 			*gRPCServer
+	s 				service
 
 	// Rec client
 	recClient *comm.RecGRPCClient
@@ -112,6 +120,7 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 		return nil, err
 	}
 	
+	// Move me somewhere else because im not a part of the Lohpi network!
 	recClient, err := comm.NewRecClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
 		return nil, err
@@ -158,10 +167,35 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 
 func (m *Mux) Start() {
 	go m.ifritClient.Start()
+	m.ifritClient.RegisterMsgHandler(m.messageHandler)
 	go m.HttpHandler()
 	go m.grpcs.Start()
 	
 	log.Println("Mux running gRPC server at", m.grpcs.Addr(), "and Ifrit client at", m.ifritClient.Addr())
+}
+
+func (m *Mux) messageHandler(data []byte) ([]byte, error) {
+	msg := &pb.Message{}
+	if err := proto.Unmarshal(data, msg); err != nil {
+		panic(err)
+	}
+
+	if err := m.verifyMessageSignature(msg); err != nil {
+		panic(err)
+	}
+
+	switch msgType := msg.Type; msgType {
+	case message.MSG_TYPE_OBJECT_HEADER_LIST:
+		m.updateObjectHeaders(msg.GetObjectHeaders())
+	default:
+		fmt.Printf("Unknown message type: %s\n", msg.GetType())
+	}
+
+	resp, err := proto.Marshal(&pb.Message{Type: message.MSG_TYPE_OK})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (m *Mux) Configuration() *MuxConfig {
@@ -172,27 +206,50 @@ func (m *Mux) Stop() {
 	m.ifritClient.Stop()
 }
 
+// Updates the internal cache by assigning the object headers' ids to the object headers themselves
+func (m *Mux) updateObjectHeaders(objectHeaders *pb.ObjectHeaders) {
+	for _, header := range objectHeaders.GetObjectHeaders() {
+		objectID := header.GetName()
+		m.cache.InsertObjectHeader(objectID, header)
+	}
+}
+
 // Returns a list of studies available to the network
-func (m *Mux) StudyList(ctx context.Context, e *empty.Empty) (*pb.Studies, error) {
-	m.cache.FetchRemoteStudyLists()
-	studies := &pb.Studies{
-		Studies: make([]*pb.Study, 0),
+func (m *Mux) GetObjectHeaders(ctx context.Context, e *empty.Empty) (*pb.ObjectHeaders, error) {
+	/*m.cache.FetchRemoteObjectHeaders()
+	studies := &pb.ObjectHeaders{
+		ObjectHeaders: make([]*pb.ObjectHeader, 0),
 	}
 
-	for s := range m.cache.Studies() {
-		study := pb.Study{
-			Name: s,
+	for objectName, objectValue := range m.cache.ObjectHeaders() {
+		object := pb.ObjectHeader{
+			Name: 		objectName,
+			Node:		&pb.Node{
+				Address:	objectValue.GetAddress(),
 		}
 
 		studies.Studies = append(studies.Studies, &study)
-	}
-	return studies, nil
+	}*/
+		return nil, nil
+	//return studies, nil
+}
+
+func (m *Mux) GetObjectMetadata(ctx context.Context, req *pb.DataUserRequest) (*pb.Metadata, error) {
+	return nil, nil
+}
+
+func (m *Mux) GetSubjectNumber(ctx context.Context, req *pb.DataUserRequest) (*pb.StudyCount, error) {
+	return nil, nil
+}
+
+func (m *Mux) GetObjectData(ctx context.Context, req *pb.DataUserRequest) (*pb.ObjectData, error) {
+	return nil, nil
 }
 
 // Adds the given node to the network and returns the Mux's IP address
 func (m *Mux) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if !m.cache.NodeExists(node.GetName()) {
-		m.cache.InsertNodes(node.GetName(), &pb.Node{
+		m.cache.InsertNode(node.GetName(), &pb.Node{
 			Name: 			node.GetName(),
 			Address: 		node.GetAddress(),
 			Role: 			node.GetRole(),
@@ -219,6 +276,36 @@ func (m *Mux) IgnoreIP(ctx context.Context, node *pb.Node) (*pb.Node, error) {
 	}, nil
 }
 
-func (m *Mux) StudyMetadata(context.Context, *pb.Study) (*pb.Metadata, error) {
+func (m *Mux) StudyMetadata(context.Context, *pb.ObjectHeader) (*pb.Metadata, error) {
 	return nil, nil 
+}
+
+// Invoked by ifrit message handler
+func (m *Mux) verifyMessageSignature(msg *pb.Message) error {
+	return nil
+	// Verify the integrity of the node
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	log.Printf("MSG: %v+\n", msg)
+
+	msg.Signature = nil
+
+	// Marshal it before verifying its integrity
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}	
+	
+	if !m.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
+		return errors.New("Mux could not securely verify the integrity of the message")
+	}
+
+	// Restore message. Defer?
+	msg.Signature = &pb.MsgSignature{
+		R: r,
+		S: s,
+	}
+
+	return nil
 }

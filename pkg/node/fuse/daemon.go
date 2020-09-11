@@ -23,9 +23,10 @@ import (
 	"sync"
 	"syscall"
 
+	pb "github.com/tomcat-bit/lohpi/protobuf" 
 	"github.com/billziss-gh/cgofuse/examples/shared"
 	"github.com/billziss-gh/cgofuse/fuse"
-	"github.com/casbin/casbin"
+	"github.com/pkg/xattr"
 )
 
 // Directory name constants
@@ -69,53 +70,49 @@ var (
 	isMounted bool
 )
 
+// Pass-through file system
 type Ptfs struct {
 	fuse.FileSystemBase
 	root      string
-	startDir  string
-	mountDir  string
+	StartDir  string
+	MountDir  string
 	nodeID    string
 	xattrMux  sync.Mutex
 	xattrFlag bool
 
-	// Node permission lock and permission string
-	nodeLock       sync.Mutex
-	nodePermission string
+	// Internal maps that keeps information about subjects and objects
+	objectHeadersMap  		map[string][]*pb.ObjectHeader      // subectID -> object they are a part of
+	objectHeadersMapLock 	sync.RWMutex
 
-	// Collection of subject-centric data structures
-	// TODO: more bullet-proof identification of subjects..?
-	subjectStudies  map[string][]string                    // subectID -> studies they participate in
-	studySubjects   map[string][]string                    // studyID -> participants in a study
-	studies         map[string]interface{}                 // studyID -> "". Used only for O(1) indexing
-	subjectPolicies map[string]map[string]*casbin.Enforcer // studyID -> policy.SubjectPolicy
+	// Subject mapped to objects 
+	subjectsMap   	map[string][]string
+	subjectsMapLock	sync.RWMutex
 
-	// WAT?? TO BE REMOVED
-	subjectPermissions map[string]string // subjectID -> permission
-
-	// Used to wait until FUSE in mounted
 	ch chan bool
 }
 
 func NewFuseFS(nodeID string, config *Config) (*Ptfs, error) {
-	startDir := createLocalMountPointPath(nodeID, config.MountDirectory)
+	startDir := localMountPointPath(nodeID, config.MountDirectory)
 	mountDir := destinationMountPointPath(nodeID)
 
 	// restoreFuseState() should fill all in-memory structures with the on-disk
 	// contents. This ensures a fault-tolerant model of the fuse module.
-	CreateDirectory(startDir)
-	CreateDirectory(mountDir)
+	createDirectory(startDir)
+	createDirectory(mountDir)
 
 	syscall.Umask(0)
 	ptfs := Ptfs{
-		startDir:           startDir,
-		mountDir:           mountDir,
+		StartDir:           startDir,
+		MountDir:           mountDir,
 		nodeID:             nodeID,
 		xattrFlag:          false, // can we set xattr?
-		subjectStudies:     make(map[string][]string, 0),
-		studySubjects:      make(map[string][]string, 0),
-		studies:            make(map[string]interface{}, 0),
-		subjectPermissions: make(map[string]string, 0),
-		subjectPolicies:    make(map[string]map[string]*casbin.Enforcer),
+		
+		objectHeadersMap:		make(map[string][]*pb.ObjectHeader),
+		objectHeadersMapLock: 	sync.RWMutex{},
+		
+		subjectsMap:		make(map[string][]string),
+		subjectsMapLock:	sync.RWMutex{},
+
 		ch:                 make(chan bool, 0),
 	}
 
@@ -141,12 +138,10 @@ func NewFuseFS(nodeID string, config *Config) (*Ptfs, error) {
 		break
 	}
 
-	ptfs.initiate_daemon()
+	if err := ptfs.initiate_daemon(); err != nil {
+		log.Fatalf(err.Error())
+	}
 	return &ptfs, nil
-}
-
-func (fs *Ptfs) Root() string {
-	return fs.root
 }
 
 func (self *Ptfs) Init() {
@@ -158,18 +153,117 @@ func (self *Ptfs) Init() {
 	self.ch <- true
 }
 
+func (self *Ptfs) ObjectHeaders() map[string][]*pb.ObjectHeader {
+	self.objectHeadersMapLock.RLock()
+	defer self.objectHeadersMapLock.RUnlock()
+	return self.objectHeadersMap
+}
+
+func (self *Ptfs) InsertObjectHeader(objectId string, header *pb.ObjectHeader) {
+	self.objectHeadersMapLock.Lock()
+	defer self.objectHeadersMapLock.Unlock()
+	if self.objectHeadersMap[objectId] == nil {
+		self.objectHeadersMap[objectId] = make([]*pb.ObjectHeader, 0)
+	}
+
+	self.objectHeadersMap[objectId] = append(self.objectHeadersMap[objectId], header)
+}
+
+func (self *Ptfs) Subjects() map[string][]string {
+	self.subjectsMapLock.RLock()
+	defer self.subjectsMapLock.RUnlock()
+	return self.subjectsMap
+}
+
+func (self *Ptfs) InsertSubject(subject string, objectId string) {
+	self.subjectsMapLock.RLock()
+	defer self.subjectsMapLock.RUnlock()
+	if self.subjectsMap[subject] == nil {
+		self.subjectsMap[subject] = make([]string, 0)
+	}
+
+	self.subjectsMap[subject] = append(self.subjectsMap[subject], objectId)
+}
+
+func (self *Ptfs) EraseObjectsFromSubject(subjectId string) {
+	self.subjectsMapLock.RLock()
+	defer self.subjectsMapLock.RUnlock()
+	self.subjectsMap[subjectId] = make([]string, 0)
+}
+
+func (self *Ptfs) SubjectExists(subjectId string) bool {
+	self.subjectsMapLock.RLock()
+	defer self.subjectsMapLock.RUnlock()
+	_, ok := self.subjectsMap[subjectId]
+	return ok
+}
+
+func (self *Ptfs) ObjectHeaderExists(objectId string) bool {
+	self.objectHeadersMapLock.Lock()
+	defer self.objectHeadersMapLock.Unlock()
+	_, ok := self.objectHeadersMap[objectId] 
+	return ok
+}
+
+func (self *Ptfs) SubjectExistsInObject(subjectId, objectId string) bool {
+	allHeaders := self.ObjectHeaders()
+	headers := allHeaders[objectId]
+
+	if headers == nil {
+		return false
+	}
+
+	for _, header := range headers {
+		for _, s := range header.GetMetadata().GetSubjects() {
+			if subjectId == s {
+				return true
+			}
+		}
+	}
+	
+	return false
+}
+
+func (self *Ptfs) SetExtendedAttribute(path, name string, value []byte) error {
+	//return xattr.SetWithFlags(path, XATTR_PREFIX+"test", value, xattr.XATTR_CREATE)
+	return xattr.Set(path, XATTR_PREFIX+name, value)
+}
+
+func (self *Ptfs) ListExtendedAttributes(path string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (self *Ptfs) GetExtendedAttribute(path, name string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (self *Ptfs) RemoveExtendedAttribute(path, name string) ([]string, error) {
+	return []string{}, nil
+}
+
+/*func (self *Ptfs) SetExtendedAttributeWithFlags(path, name string, data []byte, flags int) error {
+	return nil
+}*/
+
 // Searches the fuse mounting point recursively three levels down to restore
 // the state of the daemon. As a feature later in time, we might ask the rest of the network
 // about the correct state of this node
-func (self *Ptfs) initiate_daemon() {
+func (self *Ptfs) initiate_daemon() error {
 	// We start by creating the mounting point. Each change in the mount point shall we reflected into
 	// the start directory
-	CreateDirectory(self.mountDir + "/" + STUDIES_DIR)
-	CreateDirectory(self.mountDir + "/" + SUBJECTS_DIR)
+	if err := createDirectory(self.MountDir + "/" + STUDIES_DIR); err != nil {
+		return err
+	}
+
+	if err := createDirectory(self.MountDir + "/" + SUBJECTS_DIR); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Returns the path for the local entry point for the FUSE file system
-func createLocalMountPointPath(nodename, dirname string) string {
+func localMountPointPath(nodename, dirname string) string {
 	return fmt.Sprintf("%s/%s/%s", dirname, NODE_DIR, nodename)
 }
 
@@ -179,26 +273,8 @@ func destinationMountPointPath(nodeName string) string {
 	return fmt.Sprintf("/tmp/%s/%s", NODE_DIR, nodeName)
 }
 
-// Sets the permission globally for the entire node to which this is attatched
-// NOTE: this is only temporarily; the entire system relies on a statically defined
-// file tree
-func (self *Ptfs) SetNodePermission(permission string) error {
-	// Set permission on mount point both in-memory and in xattr
-	self.xattrMux.Lock()
-	self.nodePermission = permission
-	//log.Printf("Setting new permission for node %s: %s\n", self.nodeID, self.nodePermission)
-	/*if err := xattr.Set(self.startDir, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
-		return err
-	}*/
-	self.xattrMux.Unlock()
-	return nil
-}
-
 func (self *Ptfs) setXattrFlag(path, permission string) error {
 	// might use lock here...
-	/*self.xattrMux.Lock()
-	self.xattrFlag = true
-	fmt.Printf("Set %s on %s\n", permission, path)*/
 	/*if err := xattr.Set(path, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
 		fmt.Println(err.Error())
 		return err
@@ -234,7 +310,7 @@ func (self *Ptfs) canSetXattr() bool {
 }
 
 func (self *Ptfs) GetLocalMountPoint() string {
-	return self.startDir
+	return self.StartDir
 }
 
 func (self *Ptfs) RemoveSubject(subjectID string) error {
@@ -265,30 +341,19 @@ func (self *Ptfs) Getxattr(path string, attr string) (errc int, res []byte) {
 	return errc, res
 }
 
-/*
 func (self *Ptfs) Setxattr(path string, attr string, data []byte, flags int) (errc int) {
-	/*if !self.canSetXattr() {
-		fmt.Printf("Setxattr\n")
-		return int(unix.EPERM)
-	}*
-
 	defer trace(path, attr, data, flags)(&errc)
 	path = filepath.Join(self.root, path)
 	errc = errno(syscall.Setxattr(path, attr, data, flags))
 	return
-}*/
-/*
-func (self *Ptfs) Removexattr(path string, attr string) (errc int) {
-	if !self.canSetXattr() {
-		fmt.Printf("Removexattr = %d\n", int(unix.EPERM))
-		return -int(fuse.EACCES)
-	}
+}
 
+func (self *Ptfs) Removexattr(path string, attr string) (errc int) {
 	defer trace(path, attr)(&errc)
 	path = filepath.Join(self.root, path)
 	errc = errno(syscall.Removexattr(path, attr))
 	return errc
-}*/
+}
 
 func (self *Ptfs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
 	defer trace(path)(&errc, stat)
@@ -493,4 +558,14 @@ func Shutdown() {
 	/*if _host.Unmount() != true {
 		fmt.Errorf("Unmount failed\n")
 	}*/
+}
+
+// Creates a directory tree from the root to 'dirPath' if it does not exist
+func createDirectory(dirPath string) error {
+	if _, err := os.Stat(dirPath); err != nil {
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			return err
+		}
+	}
+	return nil
 }

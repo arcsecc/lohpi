@@ -41,8 +41,7 @@ type PolicyStoreConfig struct {
 	// Policy store specific
 	PolicyStoreIP				string 		`default:"127.0.1.1:8082"`
 	BatchSize 					int 		`default:10`
-	ProbeInterval				int32 		`default:10`
-	GossipInterval				int32 		`default:10`
+	GossipInterval				int 		`default:10`
 	HttpPort					int 		`default:8083`
 	MulticastAcceptanceLevel	float64		`default:0.5`
 
@@ -62,11 +61,6 @@ type service interface {
 var (
 	policiesStringToken = "policies"
 )
-/*type multicastConfig struct {
-	multicastDirectRecipients int 		// sigma	Dynamic
-	multicastInterval time.Duration		// tau	Dynamic
-	acceptanceLevel float64				// phi. Constant 
-}*/
 
 type PolicyStore struct {
 	// Policy store's configuration
@@ -106,12 +100,6 @@ type PolicyStore struct {
 
 	// Multicast specifics
 	multicastManager *multicast.MulticastManager
-
-	// Probing specifics
-	//probeConfig *probe.ProbeConfig
-
-	// Keeps track of when messages are multicasted
-	multicastTimer 	*time.Timer
 
 	// HTTP server stuff
 	httpListener net.Listener
@@ -172,12 +160,12 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	multicastManager, err := multicast.NewMulticastManager(c, config.MulticastAcceptanceLevel)
+	t := time.Duration(config.GossipInterval) * time.Second
+
+	multicastManager, err := multicast.NewMulticastManager(c, config.MulticastAcceptanceLevel, t)
 	if err != nil {
 		return nil, err
 	}
-
-	//probeManager := multicast.NewProbeManager(c, config.MulticastAcceptanceLevel)
 
 	// TODO: remove some of the variables into other interfaces/packages?
 	ps := &PolicyStore{
@@ -193,7 +181,6 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		configLock:			sync.RWMutex{},
 		httpListener:		httpListener,
 		multicastManager:	multicastManager,
-//		probeManager:		probeManager,
 	}
 
 	ps.grpcs.Register(ps)
@@ -204,9 +191,8 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 func (ps *PolicyStore) Start() {
 	go ps.grpcs.Start()
 	go ps.ifritClient.Start()
-	go ps.HttpHandler()
-	//go ps.probeManager.Start()
-
+	go ps.httpHandler()
+	
 	// Set Ifrit callbacks
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
 	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
@@ -250,16 +236,18 @@ func (ps *PolicyStore) Start() {
 	}
 }
 
-func (ps *PolicyStore) HttpHandler() error {
+func (ps *PolicyStore) httpHandler() error {
 	r := mux.NewRouter()
 	log.Printf("Policy store: started HTTP server on port %d\n", ps.config.HttpPort)
 
 	// Public methods exposed to data users (usually through cURL)
 	r.HandleFunc("/probe", ps.probeHandler)
+	r.HandleFunc("/probe/stop", ps.stopProbe)
 
 	ps.httpServer = &http.Server{
 		Handler: r,
-		// use timeouts?
+		ReadTimeout:    10 * time.Minute,
+		WriteTimeout:   10 * time.Minute,
 	}
 
 	err := ps.httpServer.Serve(ps.httpListener)
@@ -285,9 +273,36 @@ func (ps *PolicyStore) verifyMessageSignature(msg *pb.Message) error {
 		return err
 	}	
 
-	// Does not work!!!
 	if !ps.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
-		//return errors.New("Policy store could not securely verify the integrity of the message")
+		return errors.New("Policy store could not securely verify the integrity of the message")
+	}
+
+	// Restore message
+	msg.Signature = &pb.MsgSignature{
+		R: r,
+		S: s,
+	}
+
+	return nil
+}
+
+// Invoked by ifrit message handler
+func (ps *PolicyStore) verifyPolicyStoreGossipSignature(msg *pb.Message) error {
+	// Verify the integrity of the node
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	msg.Signature = nil
+
+	// Marshal it before verifying its integrity
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}	
+
+	if !ps.ifritClient.VerifySignature(r, s, data, string(ps.ifritClient.Id())) {
+		return errors.New("Policy store could not securely verify the gossip  of the message")
 	}
 
 	// Restore message
@@ -315,6 +330,20 @@ func (ps *PolicyStore) probeHandler(w http.ResponseWriter, r *http.Request) {
 		if err := ps.multicastManager.ProbeNetwork(multicast.LruMembers); err != nil {
 			fmt.Fprintf(w, err.Error())
 		}
+	})
+}
+
+func (ps *PolicyStore) stopProbe(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if !ps.multicastManager.IsProbing() {
+		fmt.Fprintf(w, "Probing session is not running")
+		return
+	} else {
+		fmt.Fprintf(w, "Stopping probing session")
+	}
+
+	ps.dispatcher.Submit(func() {
+		ps.multicastManager.StopProbing()
 	})
 }
 
@@ -353,7 +382,7 @@ func (ps *PolicyStore) ignoreMuxIfritIPAddress() (string, string, error) {
 func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	hr := &pb.HandshakeResponse{}
 	if !ps.cache.NodeExists(node.GetName()) {
-		ps.cache.InsertNodes(node.GetName(), &pb.Node{
+		ps.cache.InsertNode(node.GetName(), &pb.Node{
 			Name: node.GetName(),
 			Address: node.GetAddress(),
 			Role: node.GetRole(),
@@ -377,16 +406,17 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	if err := ps.verifyMessageSignature(msg); err != nil {
-		log.Fatal(err.Error())
+	// ENABLE ME!
+	/*if err := ps.verifyMessageSignature(msg); err != nil {
+		panic(err)
 		return nil, err
-	}
+	}*/
 
 	switch msgType := msg.GetType(); msgType {
 
 	// When a node is loaded, it sends its latest study list to the policy store
-	case message.MSG_TYPE_SET_STUDY_LIST:
-		ps.cache.UpdateStudies(msg.GetSender().GetName(), msg.GetStudies().GetStudies())
+	case message.MSG_TYPE_OBJECT_HEADER_LIST:
+		ps.updateObjectHeaders(msg.GetObjectHeaders())
 
 	case message.MSG_TYPE_PROBE_ACK:
 		//log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
@@ -397,7 +427,12 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 		fmt.Printf("Unknown message at policy store: %s\n", msgType)
 	}
 
-	return []byte(message.MSG_TYPE_OK), nil
+	// Sign response too
+	resp, err := proto.Marshal(&pb.Message{Type: message.MSG_TYPE_OK})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
 }
 
 // Ifrit gossip handler
@@ -407,15 +442,12 @@ func (ps *PolicyStore) gossipHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	// TODO: verify message
-	/*if err := ps.verifyGossipMessage(msg); err != nil {
-		log.Println(err.Error())
-	}*/
-
+	if err := ps.verifyPolicyStoreGossipSignature(msg); err != nil {
+		return []byte{}, nil
+	}
 	
 	switch msgType := msg.GetType(); msgType {
 	case message.MSG_TYPE_PROBE:
-		ps.multicastManager.RegisterProbeMessage(msg)
 		ps.ifritClient.SetGossipContent(data)
 	default:
 		fmt.Printf("Unknown message at policy store: %s\n", msgType)
@@ -425,7 +457,8 @@ func (ps *PolicyStore) gossipHandler(data []byte) ([]byte, error) {
 }
 
 // Returns the list of studies stored in the network
-func (ps *PolicyStore) StudyList(context.Context, *empty.Empty) (*pb.Studies, error) {
+/*
+func (ps *PolicyStore) StudyList(context.Context, *empty.Empty) (*pb.ObjectHeaders, error) {
 	ps.cache.FetchRemoteStudyLists()
 	studies := &pb.Studies{
 		Studies: make([]*pb.Study, 0),
@@ -439,16 +472,15 @@ func (ps *PolicyStore) StudyList(context.Context, *empty.Empty) (*pb.Studies, er
 		studies.Studies = append(studies.Studies, &study)
 	}
 	return studies, nil
-}
+}*/
 
-// Main entry point for setting the policies 
+// Main entry point for setting the policies
 func (ps *PolicyStore) SetPolicy(ctx context.Context, p *pb.Policy) (*empty.Empty, error) {
 	// TODO: only REC can set study-centric policies
 
 	ps.dispatcher.Submit(func() {
-		_, ok := ps.cache.Studies()[p.GetStudyName()]
-		if !ok {
-			log.Println("No such study", p.GetStudyName(), "is known to policy store")
+		if !ps.cache.ObjectExists(p.GetObjectName()) {
+			log.Println("No such object", p.GetObjectName(), "is known to policy store")
 			return
 		}
 
@@ -468,37 +500,37 @@ func (ps *PolicyStore) SetPolicy(ctx context.Context, p *pb.Policy) (*empty.Empt
 	return &empty.Empty{}, nil
 }
 
-// Because the policy store is a part of the Ifrit network, we need to verify its own probing message
-// coming from the adjacent nodes.
-func (ps *PolicyStore) verifyGossipMessage(msg *pb.Message) error {
-	r := msg.GetSignature().GetR()
-	s := msg.GetSignature().GetS()
+func (ps *PolicyStore) StoreObjectHeader(ctx context.Context, objectHeader *pb.ObjectHeader) (*empty.Empty, error) {
+	ps.dispatcher.Submit(func() {
+		objectName := objectHeader.GetName()
+		ps.cache.InsertObjectHeader(objectName, objectHeader)
+		
+		policy := objectHeader.GetPolicy()
+		if policy == nil {
+			panic(errors.New("Policy must be supplied!"))
+		}
 
-	msg.Signature = nil
-	
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		return err
-	}
+		if err := ps.storePolicy(policy); err != nil {
+			log.Fatalf(err.Error())
+		}
+		
+		if err := ps.commitPolicy(policy); err != nil {
+			log.Fatalf(err.Error())
+		}
 
-	if !ps.ifritClient.VerifySignature(r, s, data, string(ps.ifritClient.Id())) {
-		return errors.New("Policy store could not verify the integrity of the gossip message")
-	}
+		// Submit policy to be commited and gossiped
+		ps.multicastManager.PolicyChan <- *objectHeader.GetPolicy()
+	})
 
-	// Restore message
-	msg.Signature = &pb.MsgSignature{
-		R: r,
-		S: s,
-	}
-
-	return nil
+	// Gossip the policy update to the network
+	return &empty.Empty{}, nil
 }
 
 // Stores the given policy on disk
 func (ps *PolicyStore) storePolicy(p *pb.Policy) error {
 	// Check if directory exists for the given study and subject
 	// Use "git-repo/study/subject/policy/policy.conf" paths 
-	dirPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetStudyName())
+	dirPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetObjectName())
 	ok, err := exists(dirPath)
 	if err != nil {
 		log.Fatalf(err.Error())
@@ -511,7 +543,7 @@ func (ps *PolicyStore) storePolicy(p *pb.Policy) error {
 		}
 	}
 
-	fullPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetStudyName(), p.GetFilename())
+	fullPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetObjectName(), p.GetFilename())
 	return ioutil.WriteFile(fullPath, p.GetContent(), 0644)
 }
 
@@ -524,7 +556,7 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 	}
 
 	// Add the file to the staging area
-	path := filepath.Join(policiesStringToken, p.GetStudyName(), p.GetFilename())
+	path := filepath.Join(policiesStringToken, p.GetObjectName(), p.GetFilename())
 	_, err = worktree.Add(path)
 	if err != nil {
 		panic(err)
@@ -583,6 +615,14 @@ func (ps *PolicyStore) PsConfig() PolicyStoreConfig {
 func (ps *PolicyStore) Shutdown() {
 	log.Println("Shutting down policy store")
 	ps.ifritClient.Stop()
+}
+
+// Updates the internal cache by assigning the object headers' ids to the object headers themselves
+func (ps *PolicyStore) updateObjectHeaders(objectHeaders *pb.ObjectHeaders) {
+	for _, header := range objectHeaders.GetObjectHeaders() {
+		objectID := header.GetName()
+		ps.cache.InsertObjectHeader(objectID, header)
+	}
 }
 
 // Sets up the Git resources in an already-existing Git repository

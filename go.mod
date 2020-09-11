@@ -13,6 +13,7 @@ require (
 	github.com/jinzhu/configor v1.2.0
 	github.com/joonnna/ifrit v0.0.0-20200609102945-b957d66f469e
 	github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727
+	github.com/pkg/xattr v0.4.1
 	github.com/spf13/viper v1.7.1
 	golang.org/x/net v0.0.0-20200707034311-ab3426394381
 	google.golang.org/grpc v1.31.0

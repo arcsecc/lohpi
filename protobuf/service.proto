@@ -5,28 +5,41 @@ package proto;
 
 service Mux {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc StudyList (google.protobuf.Empty) returns (Studies) {}
-    rpc StudyMetadata (Study) returns (Metadata) {}
+    rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
+    rpc GetObjectMetadata (DataUserRequest) returns (Metadata) {}
+    rpc GetSubjectNumber (DataUserRequest) returns (StudyCount) {}
+    rpc GetObjectData (DataUserRequest) returns (ObjectData) {}
     rpc IgnoreIP (Node) returns (Node) {}
 }
 
 service PolicyStore {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc StudyList (google.protobuf.Empty) returns (Studies) {}
+    //rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
+    //rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
     rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
 }
 
 service Rec {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc SetStudy (Study) returns (google.protobuf.Empty) {}
+    rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
+}
+
+message StudyCount {
+    uint32 count = 1;
+}
+
+message DataUserRequest {
+    string name = 1;
+    string policyAttributes = 2;
+    string study = 3;
 }
 
 // Used in direct messaging
 message Message {
     string Type = 1;        // What kind of message is it?
-    Load load = 2;          // 
+    Load load = 2;          // Used to load node with data
     Node sender = 3;        //
-    Studies studies = 4;    //    
+    ObjectHeaders objectHeaders = 4;    //    
     Policy policy = 5;      //
     MsgSignature signature = 6;// Integrity check based on ECDSA
     GossipMessage gossipMessage = 7;
@@ -35,12 +48,9 @@ message Message {
 
 // Message to load a node. Distributed to all entities that need it (hint hint REC)
 message Load {
-    Node node = 1;                  //
-    string StudyName = 2;           //
-    uint32 Minfiles = 3;            //
-    uint32 Maxfiles = 4;            //
-    repeated string subjects = 5;   //
-    Metadata metadata = 6;          //
+    ObjectHeader objectHeader = 1;           
+    uint32 Minfiles = 2;            
+    uint32 Maxfiles = 3;            
 }
 
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
@@ -52,16 +62,24 @@ message Node {
     bytes id = 5;              // Ifrit id
 }
 
-message Study {
+message ObjectHeader {
     string name = 1;                // Name for this study
     Node node = 2;                  // The node that stores this study
-    string rec_contact_email = 3;   // Contact email of REC person responsible, in case we want to send updates **future**
-    Metadata metadata = 4;          // Metadata!
+    Metadata metadata = 4;          // Metadata! Move to 'load'
     Policy policy = 5;              // Policy in effect
 }
 
-message Studies {
-    repeated Study studies = 1;
+message ObjectHeaders {
+    repeated ObjectHeader objectHeaders = 1;
+}
+
+message Object {
+    ObjectHeader objectHeader = 1;
+    ObjectData objectData = 2;
+}
+
+message ObjectData {
+    bytes content = 1;
 }
 
 message Subject {
@@ -69,13 +87,13 @@ message Subject {
 }
 
 message Metadata {
-    bytes content = 1;     // File contents 
+    bytes content = 1;     // Metadata file contents 
     repeated string subjects = 2;  // Participating subjects
 }
 
 message Policy {
     string issuer = 1;
-    string studyName = 2;
+    string objectName = 2;
     string filename = 3;
     bytes content = 4; // Policy details. See Casbin policy 
 }

@@ -82,6 +82,9 @@ type Node struct {
 	// Policy store 
 	psClient *comm.PolicyStoreGRPCClient
 
+	// REC client
+	recClient *comm.RecGRPCClient
+
 	// Used for identifying data coming from policy store
 	MuxID []byte
 	policyStoreID []byte
@@ -115,11 +118,17 @@ func NewNode(nodeName string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
+	recClient, err := comm.NewRecClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	if err != nil {
+		return nil, err
+	}
+
 	return &Node{
 		nodeName:     	nodeName,
 		ifritClient:  	ifritClient,
 		muxClient: 		muxClient, 
-		config: 			config,
+		recClient:		recClient,
+		config: 		config,
 		psClient: 		psClient,
 	}, nil
 }
@@ -150,8 +159,6 @@ func (n *Node) Shutdown() {
 }
 
 // Main entry point for handling Ifrit direct messaging
-// TODO: Use go-routines to avoid clients waiting for replies
-// TODO: use protobuf
 func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
@@ -166,24 +173,30 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// If the study exists, we still add the subject's at the node and link to them using
 		// 'ln -s'. The operations performed by this call sets the finite state of the
 		// study. This means that any already existing files are deleted.
-		if err := n.fs.FeedBulkData(msg.GetLoad()); err != nil {
+		if err := n.generateData(msg.GetLoad()); err != nil {
 			log.Fatal(err)
 		//	return nil, err
 		}
 
+		// Send REC the newest updates
+		// TODO MOVE ME
+		/*if err := n.sendRecUpdate(msg.GetLoad().GetObjectHeader()); err != nil {
+			panic(err)
+		}*/
+
 		// Notify the policy store about the newest changes
 		// TODO: avoid sending all updates - only send the newest data
 		// TODO: remove this because we send the list twice!
-		if err := n.sendStudyList(n.PolicyStoreIP); err != nil {
-			return nil, err
+		if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
+			panic(err)
 		}
 
-		// Returns updates studies to the mux
-		// TODO: send mux the study list in the same way as with policy store
-		return n.studyList()
+		if err := n.sendObjectHeaderList(n.MuxIP); err != nil {
+			panic(err)
+		}
 
-	case message.MSG_TYPE_GET_STUDY_LIST:
-		return n.studyList()
+	case message.MSG_TYPE_GET_OBJECT_HEADER_LIST:
+		return n.marshalledObjectHeaderList()
 
 	case message.MSG_TYPE_GET_NODE_INFO:
 		return n.nodeInfo()
@@ -196,17 +209,29 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		n.setPolicy(msg)
 
 	case message.MSG_TYPE_PROBE:
-		return n.acknowledgeProbe(msg)
+		return n.acknowledgeProbe(msg, data)
 
 	default:
 		fmt.Printf("Unknown message type: %s\n", msg.GetType())
 	}
 
-	resp, err := proto.Marshal(&pb.Message{Type: message.MSG_TYPE_OK})
+	return n.acknowledgeMessage()
+}
+
+func (n *Node) acknowledgeMessage() ([]byte, error) {
+	msg := &pb.Message{Type: message.MSG_TYPE_OK}
+	data, err := proto.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		panic(err)
+	}
+	
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	return proto.Marshal(msg)
 }
 
 func (n *Node) gossipHandler(data []byte) ([]byte, error) {
@@ -216,13 +241,13 @@ func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 	}
 
 	// Might need to move this one? check type!
-	if err := n.verifyPolicyStoreMessage(msg); err != nil {
+	/*if err := n.verifyPolicyStoreMessage(msg); err != nil {
 		log.Fatalf(err.Error())
-	}
+	}*/
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_PROBE:
-		return n.acknowledgeProbe(msg)
+		//n.ifritClient.SetGossipContent(data)
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		/*log.Println("Got new policy from policy store!")
 		n.setPolicy(msg)*/
@@ -242,7 +267,7 @@ func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 
 func (n *Node) nodeInfo() ([]byte, error) {
 	str := fmt.Sprintf("Info about node '%s':\n-> Ifrit IP: %s\n-> Stored studies: %s\n",
-		n.nodeName, n.address(), n.fs.Studies())
+		n.nodeName, n.address(), n.fs.ObjectHeaders())
 	return []byte(str), nil
 }
 
@@ -254,56 +279,77 @@ func (n *Node) NodeName() string {
 	return n.nodeName
 }
 
-func (n *Node) studyList() ([]byte, error) {
-	// Studies known to this node
-	studies := &pb.Studies{
-		Studies: make([]*pb.Study, 0),
-	}
-
-	for _, s := range n.fs.Studies() {
-		study := pb.Study{
-			Name: s,
-		}
-		studies.Studies = append(studies.Studies, &study)
-	}	
-	return proto.Marshal(studies)
-}
-
 func (n *Node) studyMetaData(msg message.NodeMessage) ([]byte, error) {
-	return n.fs.StudyMetaData(msg)
+	//return n.fs.StudyMetaData(msg)
+	return []byte{}, nil
 }
 
 func (n *Node) setPolicy(msg *pb.Message) {
-	if err := n.verifyPolicyStoreMessage(msg); err != nil {
-		log.Fatalf(err.Error())
+	/*if err := n.verifyPolicyStoreMessage(msg); err != nil {
+		log.Println(err.Error())
+		return
 	}
-	log.Println("Node", n.nodeName, "verified the message in setPolicy()")
+
+	/*
+	go func() {
+		data, err := proto.Marshal(msg)
+			if err != nil {
+				log.Fatalf(err.Error())
+			}
+		n.ifritClient.SetGossipContent(data)
+	}()*/
 
 	// Determine if the object is a subject or study
 	//gossipMessage := msg.GetGossipMessage()
 
-	// Store the file on disk
-	
 	// Apply the changes in fuse
 
 	/*fileName := msg.Filename
 	fileName = msg.Study + "_model.conf"
-	modelText := string(msg.Extras)
+	modelText := string(msg.Extras)*
 
-	if err := n.fs.SetStudyPolicy(msg.Study, fileName, modelText); err != nil {
-		return []byte(message.MSG_TYPE_ERROR), err
+	// Fetch the gossip chunks and apply the segments that 
+	// concern this node
+	policyChunks := msg.GetGossipMessage().GetGossipMessageBody()
+	log.Println("Len of batch:", len(policyChunks))
+	for _, chunk := range policyChunks {
+		policy := chunk.GetPolicy()
+		//fileName := policy.GetFilename()
+		//policyText := policy.GetContent()
+		obectName := policy.GetObjectName()
+
+		if !n.fs.ObjectExists(obectName) {
+			continue
+		}
+
+		/*if err := n.fs.SetStudyPolicy(studyName, fileName, string(policyText)); err != nil {
+			log.Println(err.Error())
+		}*
 	}*/
-
-	// Inspect the content of the 
-	
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		panic(err)
-		log.Fatalf(err.Error())
-	}
-	_ = data
-	//n.ifritClient.SetGossipContent(data)
 }
+
+// Move to bootstrap module?
+func (n *Node) sendRecUpdate(header *pb.ObjectHeader) error {
+	conn, err := n.recClient.Dial(n.config.RecIP)
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	
+	// Metadata to be sent to REC
+	_, err = conn.StoreObjectHeader(ctx, header)
+
+	if err != nil {
+		log.Println(err.Error())
+		return err
+	}
+	
+	return nil 
+}
+
 
 func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
 	//	requestPolicy := msg.Populator.MetaData.Meta_data_info.PolicyAttriuteStrings()
@@ -311,28 +357,49 @@ func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
 	return []byte(""), nil
 }
 
-func (n *Node) sendStudyList(addr string) error {
-	studies := &pb.Studies{
-		Studies: make([]*pb.Study, 0),
+// Sends the newest object header list to the Ifrit node at 'addr'
+func (n *Node) sendObjectHeaderList(addr string) error {
+	data, err := n.marshalledObjectHeaderList()
+	if err != nil {
+		panic(err)
 	}
 
-	for _, s := range n.fs.Studies() {
-		study := pb.Study{
-			Name: s,
+	ch := n.ifritClient.SendTo(addr, data)
+	select {
+	case response := <-ch:
+		msgResp := &pb.Message{}
+		if err := proto.Unmarshal(response, msgResp); err != nil {
+			panic(err)
 		}
 
-		studies.Studies = append(studies.Studies, &study)
+		// Verify signature too
+		if string(msgResp.GetType()) != message.MSG_TYPE_OK {
+			panic(errors.New("Sending study list failed"))
+		}
+	}
+
+	return nil
+}
+
+// Returns a signed and marshalled list of object headers
+func (n *Node) marshalledObjectHeaderList() ([]byte, error) {
+	objectHeaders := &pb.ObjectHeaders{
+		ObjectHeaders: make([]*pb.ObjectHeader, 0),
+	}
+
+	for _, header := range n.fs.ObjectHeaders() {
+		objectHeaders.ObjectHeaders = append(objectHeaders.ObjectHeaders, header...)
 	}	
 	
 	msg := &pb.Message{
-		Type: message.MSG_TYPE_SET_STUDY_LIST,
+		Type: message.MSG_TYPE_OBJECT_HEADER_LIST,
 		Sender: &pb.Node{
 			Name: n.nodeName, 
 			Address: n.ifritClient.Addr(),
 			Role: "Storage node",
 			Id:	[]byte(n.ifritClient.Id()),
 		},
-		Studies: studies,
+		ObjectHeaders: objectHeaders,
 	}
 	
 	data, err := proto.Marshal(msg)
@@ -347,45 +414,15 @@ func (n *Node) sendStudyList(addr string) error {
 	}
 
 	// Append the signature to the message
-	msg = &pb.Message{
-		Type: message.MSG_TYPE_SET_STUDY_LIST,
-		Sender: &pb.Node{
-			Name: n.nodeName, 
-			Address: n.ifritClient.Addr(),
-			Role: "Storage node",
-			Id:	[]byte(n.ifritClient.Id()),
-		},
-		Studies: studies,
-		Signature: &pb.MsgSignature{
-			R: r,
-			S: s,
-		},
-	}
-
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		panic(err)
-	}
-
-	// TODO: return error from response instead?
-	ch := n.ifritClient.SendTo(addr, data)
-	select {
-	case response := <-ch:
-		if string(response) != message.MSG_TYPE_OK {
-			return errors.New("Sending study list failed")
-		}
-	}
-
-	return nil
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	return proto.Marshal(msg)
 }
 
-func (n *Node) acknowledgeProbe(msg *pb.Message) ([]byte, error) {
-	log.Println("Got probing msg from PS with order number", msg.GetProbe().GetOrder())
+// Acknowledges the given probe message.  TODO MORE HERE
+func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
 		panic(err)
 	}
-
-	time.Sleep(4 * time.Second)
 
 	// Spread the probe message onwards through the network
 	gossipContent, err := proto.Marshal(msg)
@@ -504,6 +541,7 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 	
 	data, err := proto.Marshal(msg)
 	if err != nil {
+		log.Println(err.Error())
 		return err
 	}
 	

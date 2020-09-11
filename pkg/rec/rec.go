@@ -1,14 +1,20 @@
 package rec
 
 import (
+	"io"
+	"bytes"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"log"
 	"crypto/x509/pkix"
+	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 	"context"
+	"sync"
 	"os"
 	pb "github.com/tomcat-bit/lohpi/protobuf" 
 	empty "github.com/golang/protobuf/ptypes/empty"
@@ -17,6 +23,7 @@ import (
 	//"github.com/tomcat-bit/lohpi/internal/core/policy"
 	"github.com/tomcat-bit/lohpi/pkg/comm"
 	"github.com/tomcat-bit/lohpi/pkg/netutil"
+	"github.com/gorilla/mux"
 )
 
 type RecConfig struct {
@@ -24,6 +31,7 @@ type RecConfig struct {
 	PolicyStoreIP 			string		`default:"127.0.1.1:8082"`
 	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
 	RecIP 					string 		`default:"127.0.1.1:8084"`
+	HttpPort				int  		`default:8085`
 	UpdatePoliciesPerMinute int 		`default:30`
 	UpdateStudiesPerMinute 	int			`default:10`
 	RecDirectory			string 		`required:"true"`
@@ -54,11 +62,23 @@ type Rec struct {
 	muxClient *comm.MuxGRPCClient
 	psClient *comm.PolicyStoreGRPCClient
 
-	// In-memory map. subject -> list of subjects in this study
-	studySubjects map[string][]string
+	// In-memory map. study -> list of subjects in this study
+	objectSubjects map[string][]string
+	objectSubjectsLock sync.RWMutex
 
 	// Study identifier -> policy object
-	studyPolicies map[string]*pb.Policy
+	objectPolicies map[string]*pb.Policy
+	objectPoliciesLock sync.RWMutex
+
+	// Subject -> list of objects it participates in
+	subjectObjects map[string][]string
+	subjectObjectsLock sync.RWMutex
+
+	httpListener net.Listener
+	httpServer   *http.Server
+
+	broadcastPoliciesChan chan bool 
+	stopBroadcastingChan chan bool
 }
 
 func NewRec(config *RecConfig) (*Rec, error) {
@@ -93,15 +113,33 @@ func NewRec(config *RecConfig) (*Rec, error) {
 		return nil, err
 	}
 
+	// Initiate HTTP connection without TLS.
+	httpListener, err := netutil.ListenOnPort(config.HttpPort)
+	if err != nil {
+		return nil, err
+	}
+
 	rec := &Rec{
 		name:					"Regional ethics committee",
 		config: 				config,
 		durationPolicyUpdates: 	time.Minute / time.Duration(config.UpdatePoliciesPerMinute),
 		recServer: 				server,
 		muxClient: 				muxClient, 
-		studySubjects:			make(map[string][]string),
-		studyPolicies:			make(map[string]*pb.Policy),
+		
+		objectSubjects:			make(map[string][]string),
+		objectSubjectsLock:		sync.RWMutex{},
+		
+		objectPolicies:			make(map[string]*pb.Policy),
+		objectPoliciesLock:		sync.RWMutex{},
+		
+		subjectObjects:			make(map[string][]string),
+		subjectObjectsLock:		sync.RWMutex{},
+		
 		psClient: 				psClient,
+		httpListener: 			httpListener,
+
+		broadcastPoliciesChan: 	make(chan bool),
+		stopBroadcastingChan:	make(chan bool),
 	}
 
 	rec.recServer.Register(rec)
@@ -112,59 +150,199 @@ func NewRec(config *RecConfig) (*Rec, error) {
 func (r *Rec) Start() {
 	log.Println("REC running at", r.recServer.Addr())
 	go r.recServer.Start()
+	go r.HttpHandler()
+	go r.broadcastPolicies()
 	
-	policyUpdatesTicker := time.Tick(r.durationPolicyUpdates)
+	//policyUpdatesTicker := time.Tick(r.durationPolicyUpdates)
 
 	// Setup directories containing the studies and the metadata
 	r.setupDirectoryTree(r.config.RecDirectory + "/" + "metadata")
 	r.setupDirectoryTree(r.config.RecDirectory + "/" + "policies")
 
 	//for i := 0; i < 100; i++ {
-	for {
+	/*for {
 		select {
 		case <-policyUpdatesTicker:
-			r.pushPolicy()
+			r.pushStudyPolicy()
+		}
+	}*/
+
+}
+
+func (r *Rec) HttpHandler() error {
+	router := mux.NewRouter()
+	log.Printf("REC: Started HTTP server on port %d\n", r.config.HttpPort)
+
+	router.HandleFunc("/studies", r.studiesHandler).Methods("GET")
+	router.HandleFunc("/study/set_policy", r.setPolicyHandler).Methods("POST")
+	router.HandleFunc("/study/broadcast_policies/start", r.startBroadcastPoliciesHandler)
+	router.HandleFunc("/study/broadcast_policies/stop", r.stopBroadcastPoliciesHandler)
+	router.HandleFunc("/help", r.httpHelp)
+
+	r.httpServer = &http.Server{
+		Handler: router,
+		// use timeouts?
+	}
+
+	err := r.httpServer.Serve(r.httpListener)
+	if err != nil {
+		log.Fatalf(err.Error())
+	}
+	return nil
+}
+
+// Invoked each time a HTTP client requests information about the studies
+func (r *Rec) studiesHandler(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	if req.Method != http.MethodGet {
+		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	m := r.objectPoliciesMap()
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Studies and their assoicated policies:\n")
+
+	for o, p := range m {
+		fmt.Fprintf(w, "Study: %s\tPolicy text: \n%s\n\n", o, p.GetContent())
+	}
+}
+
+// Invoked each time a new policy is set
+func (r *Rec) setPolicyHandler(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+
+	err := req.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.MultipartForm == nil || req.MultipartForm.File == nil {
+		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
+		return
+	}
+
+	if req.Method != http.MethodPost {
+		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Evaluate the study
+	objectName := req.PostFormValue("object")
+	if !r.objectExists(objectName) {
+		fmt.Fprintf(w, "Object %s is not known to REC\n", objectName)
+		return
+	}
+
+	// Process the policy file
+	policyFile, policyFileHeader, err := req.FormFile("policy")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer policyFile.Close()
+	
+	// Read the multipart file from the client
+	buf := bytes.NewBuffer(nil)
+	if _, err := io.Copy(buf, policyFile); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+
+	p := &pb.Policy{
+		Issuer: 	r.name,
+		ObjectName:	objectName,
+		Filename:	policyFileHeader.Filename,
+		Content:	buf.Bytes(),
+	}
+
+	// Send the new policy to the policy store
+	if err := r.publishStudyPolicy(p); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+
+	// Store the policy in the map
+	r.setObjectPolicy(objectName, p)
+
+	if err := r.storeObjectHeader(p); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (r *Rec) startBroadcastPoliciesHandler(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+
+	r.broadcastPoliciesChan <- true
+}
+
+func (r *Rec) stopBroadcastPoliciesHandler(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	log.Println("kake")
+	fmt.Fprintf(w, "OK!")
+	r.stopBroadcastingChan <- true
+}
+
+func (r *Rec) broadcastPolicies() {
+	for {
+		select {
+		case <-r.broadcastPoliciesChan:
+			for {
+				select {
+				case <- r.stopBroadcastingChan:
+					log.Println("Breaking from inner loop")
+					break
+				}
+				log.Println("Running!")
+			}
+		case <- r.stopBroadcastingChan:
+			log.Println("Stopping stuff")
 		}
 	}
 }
 
+// Performs a handshake, given the node. 
 func (r *Rec) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	hr := &pb.HandshakeResponse{}
 	return hr, nil
 }
 
-// Stores the given study in REC. It does not include the actual data; it only stores metadata
-// and sets a default policy.
-func (r *Rec) SetStudy(ctx context.Context, study *pb.Study) (*empty.Empty, error) {
-	// Add study to internal memory map. Assign the subjects to that study.
-	// Performs a complete overwrite of the data structures
-	if r.studySubjects[study.GetName()] == nil {
-		r.studySubjects[study.GetName()] = make([]string, 0)
-		r.studySubjects[study.GetName()] = append(r.studySubjects[study.GetName()], study.GetMetadata().GetSubjects()...)
-	} else {
-		for _, sub := range study.GetMetadata().GetSubjects() {
-			if !r.subjectInStudy(sub, study.GetName()) {
-				r.studySubjects[study.GetName()] = append(r.studySubjects[study.GetName()], sub)
-			}
-		}
-	}
+// Prints verbose information about REC to the HTTP client
+func (r *Rec) httpHelp(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `The REC process is a running entity that pushes study-centric policies to the policy store. 
+	Whenever a node is explicitly loaded with study data and a policy,
+	REC is anounced using the study name, study subjects and policy. REC then stores this data.
+	The following HTTP end-points are avaiable:` + "\n\n")
+	fmt.Fprintf(w, `/studies -- GET method` + "\n" + `Returns a list of 2-tuples, where the first element is the study name	and the second element is the policy in effect.` + "\n\n")
+	fmt.Fprintf(w, `/study/set_policy -- POST method` + "\n\n" + `Requires a study name and a policy file as parameters.
+	Use multipart form (-F in cURL) to do this` + "\n")
+}
+
+// Stores the given study in REC, along with the metadata and the policy
+func (r *Rec) StoreObjectHeader(ctx context.Context, objectHeader *pb.ObjectHeader) (*empty.Empty, error) {
+	// Creates the given study 
+	r.createObject(objectHeader)
+
+	// Enrolls subjects into the study. Each subject can participate in several studies
+	r.enrollSubjects(objectHeader)
 
 	// Store the metadata on stable storage
-	if err := r.storeMetadata(study.GetName(), study.GetMetadata().GetContent()); err != nil {
+	if err := r.storeMetadata(objectHeader.GetName(), objectHeader.GetMetadata().GetContent()); err != nil {
 		panic(err)	// use more descriptive error
 	}
 
-	// Default policy
-	p := r.defaultPolicy(study.GetName())
+	r.setObjectPolicy(objectHeader.GetName(), objectHeader.GetPolicy())
 	
 	// Store the default policy
-	if err := r.storePolicy(p); err != nil {
+	if err := r.storeObjectHeader(objectHeader.GetPolicy()); err != nil {
 		panic(err)
 	}
 
 	return &empty.Empty{}, nil
 }
 
+// Stores the given metadata on disk
 func (r *Rec) storeMetadata(study string, metadata []byte) error {
 	filePath := r.config.RecDirectory + "/" + "metadata" + "/" + study + ".json"
 	mdFile, err := os.Create(filePath)
@@ -185,8 +363,9 @@ func (r *Rec) storeMetadata(study string, metadata []byte) error {
 	return nil 
 }
 
-func (r *Rec) storePolicy(p *pb.Policy) error {
-	filePath := r.config.RecDirectory + "/" + "policies" + "/" + p.GetStudyName() + ".json"
+// Stores the given policy on disk
+func (r *Rec) storeObjectHeader(p *pb.Policy) error {
+	filePath := r.config.RecDirectory + "/" + "policies" + "/" + p.GetObjectName() + ".json"
 	mdFile, err := os.Create(filePath)
 
 	if err != nil {
@@ -205,51 +384,8 @@ func (r *Rec) storePolicy(p *pb.Policy) error {
 	return nil 
 }
 
-// Sets the default policy for the study. The version
-func (r *Rec) defaultPolicy(study string) *pb.Policy {	
-	rand.Seed(time.Now().UnixNano())
-	str := RandStringBytes(10)
-	//_ = str
-	p := &pb.Policy{
-		Issuer: 	"REC", 
-		StudyName: 	study,
-		Filename:	study + ".json",
-	//	Content: 	[]byte("Default policy from rec"), // set casbin stuff here 
-		Content: []byte(string(str)),
-	}
-	log.Println("REC policy:", string(p.Content))
-	r.studyPolicies[study] = p
-	return p
-}
-
-const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-func RandStringBytes(n int) string {
-    b := make([]byte, n)
-    for i := range b {
-        b[i] = letterBytes[rand.Intn(len(letterBytes))]
-    }
-    return string(b)
-}
-
-func (r *Rec) subjectInStudy(subject, study string) bool {
-	subjects := r.studySubjects[study]
-	for _, s := range subjects {
-		if s == subject {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Rec) pushPolicy() {
-	// Fetch a random study and an assoicated policy
-	if len(r.studySubjects) < 1 {
-		return
-	}
-
-	study := r.getRandomStudy()
-
+// Sends the given policy to the policy store
+func (r *Rec) publishStudyPolicy(p *pb.Policy) error {
 	conn, err := r.psClient.Dial(r.config.PolicyStoreIP)
 	if err != nil {
 		log.Fatalf(err.Error())
@@ -259,12 +395,12 @@ func (r *Rec) pushPolicy() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2 * time.Minute)
 	defer cancel()
 
-	p := r.studyPolicies[study]
-
 	_, err = conn.SetPolicy(ctx, p)
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
+
+	return nil
 }
 
 // TODO: create a nice public library for these operations :)
@@ -279,11 +415,19 @@ func (r *Rec) setupDirectoryTree(path string) error {
 
 // Returns a random study
 func (r *Rec) getRandomStudy() string {
-	studyIdx := rand.Int() % len(r.studySubjects) 
-	studies := reflect.ValueOf(r.studyPolicies).MapKeys()
-	return studies[studyIdx].String()
+	objects := r.objectSubjectsMap()
+	objIdx := rand.Int() % len(objects) 
+	objList := reflect.ValueOf(objects).MapKeys()
+	return objList[objIdx].String()
+}
+
+func (r *Rec) getRandomSubject() string {
+	studies := r.subjectStudiesMap()
+	studyIdx := rand.Int() % len(studies) 
+	subjects := reflect.ValueOf(studies).MapKeys()
+	return subjects[studyIdx].String()
 }
 
 func (r *Rec) Stop() {
-
+	// Stop grpc and http server...
 }

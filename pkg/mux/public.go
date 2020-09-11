@@ -41,7 +41,7 @@ func (m *Mux) getNodeInfo(node string) (string, error) {
 }
 
 // Orders a node to create test data for it to store dummy data and assoicated data policies
-func (m *Mux) loadNode(studyName, node string, md []byte, subjects []string) error {
+func (m *Mux) loadNode(objectName, node, policyFileName string, md []byte, subjects []string, policyText []byte) error {
 	if !m.cache.NodeExists(node) {
 		errMsg := fmt.Sprintf("Unknown node: %s", node)
 		return errors.New(errMsg)
@@ -51,49 +51,59 @@ func (m *Mux) loadNode(studyName, node string, md []byte, subjects []string) err
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_LOAD_NODE,
 		Load: &pb.Load{
-			Node: &pb.Node{
-				Name: node,
-				Address: "",
+			ObjectHeader: &pb.ObjectHeader{
+				Name: objectName,
+				Node: &pb.Node{
+					Name: node,
+					Address: "",
+				},
+				Metadata: &pb.Metadata{
+					Content: md,
+					Subjects: subjects,
+				},
+				Policy: &pb.Policy{
+					Issuer: "Mux",
+					ObjectName: objectName,
+					Filename: policyFileName,
+					   Content: policyText,
+				},
 			},
-			StudyName: studyName,
 			Minfiles: 2,
 			Maxfiles: 10,
-			Subjects: subjects,
-			Metadata: &pb.Metadata{
-				Content: md,
-				Subjects: subjects,
-			},
 		},
 	}
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Println(err.Error())
+		panic(err)
 		return err
 	}
 
-	m.cache.FetchRemoteStudyLists()
-	if m.cache.StudyInAnyNodeThan(node, studyName) {
-		errMsg := fmt.Sprintf("Study '%s' already exists in another node", studyName)
+	m.cache.FetchRemoteObjectHeaders()
+	if m.cache.ObjectInAnyNodeThan(node, objectName) {
+		errMsg := fmt.Sprintf("Study '%s' already exists in another node", objectName)
 		return errors.New(errMsg)
 	}
 
 	// Load the node
 	ch := m.ifritClient.SendTo(m.cache.NodeAddr(node).GetAddress(), data)
-	msgResp := &pb.Studies{}
-
 	select {
 		// TODO: timeout handling
 	case response := <-ch:
+		msgResp := &pb.Message{}
 		if err := proto.Unmarshal(response, msgResp); err != nil {
-			log.Fatalf(err.Error())
-			return err
+			panic(err)
 		}
-		log.Println("Response", string(response))
+
+		if string(msgResp.GetType()) != message.MSG_TYPE_OK {
+			panic(errors.New("Loading node failed"))
+		}
 	}
 
-	m.cache.UpdateStudies(node, msgResp.GetStudies())
-	fmt.Printf("Node '%s' now stores study '%s'\n", node, studyName)
+	log.Printf("Loading node OK")
+	/*for _, 
+	m.cache.UpdateObjectHeaders(node, msgResp.GetObjectHeaders())
+	fmt.Printf("Node '%s' now stores study '%s'\n", node, objectName)*/
 	return nil
 }
 

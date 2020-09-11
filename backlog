@@ -29,4 +29,5 @@ Instead, make it more seamless.
 - Got TLS handshake error in policy store!
 - Setup git repo in Go code
 - Enable subject-study relation in REC and ps store too.
-- Detatch policy store from underlying gossip stuff
+- Add adjustable LRU cache to mux
+- Client container should poll Lohpi network for latest policy

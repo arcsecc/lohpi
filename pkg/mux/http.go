@@ -7,11 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"context"
-	"time"
+_	"context"
+_	"time"
 
 	"github.com/tomcat-bit/lohpi/pkg/message"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+//	pb "github.com/tomcat-bit/lohpi/protobuf"
 
 	"github.com/gorilla/mux"
 	logging "github.com/inconshreveable/log15"
@@ -58,14 +58,14 @@ func (m *Mux) network(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Mux's gRPC server running on address %s\n", m.grpcs.Addr())
 	fmt.Fprintf(w, "Mux's Ifrit client's IP address: %s\n", m.ifritClient.Addr())
 	fmt.Fprintf(w, "Flireflies nodes in this network:\n")
-	m.cache.FetchRemoteStudyLists()
+	m.cache.FetchRemoteObjectHeaders()
 	for nodeID, node := range m.cache.Nodes() {
 		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", nodeID, node.GetAddress())
 	}
 
 	fmt.Fprintf(w, "Studies stored in the network:\n")
-	for study, node := range m.cache.Studies() {
-		fmt.Fprintf(w, "Study identifier: '%s'\tstorage node: '%s'\n", study, node)
+	for study, header := range m.cache.ObjectHeaders() {
+		fmt.Fprintf(w, "Study identifier: '%s'\tstorage node: '%s'\n", study, header.GetNode().GetName())
 	}
 }
 
@@ -76,6 +76,7 @@ func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
 
 	err := r.ParseMultipartForm(32 << 20)
 	if err != nil {
+		panic(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -92,14 +93,31 @@ func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
 	
 	mdFile, _, err := r.FormFile("metadata")
 	if err != nil {
+		panic(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer mdFile.Close()
 	
+	policyFile, policyFileHeader, err := r.FormFile("policy")
+	if err != nil {
+		panic(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer policyFile.Close()
+
 	// Read the multipart file from the client
 	buf := bytes.NewBuffer(nil)
 	if _, err := io.Copy(buf, mdFile); err != nil {
+		panic(err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
+
+	// Read the policy file
+	policyBuf := bytes.NewBuffer(nil)
+	if _, err := io.Copy(policyBuf, policyFile); err != nil {
+		panic(err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	}
 
@@ -112,17 +130,8 @@ func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send metadata and loading information to the node. It might fail
-	// (node doesn't exist) 
-	if err := m.loadNode(studyName, node, buf.Bytes(), r.MultipartForm.Value["subjects"]); err != nil {
-		panic(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	
-	// Send metadata to rec
-	if err := m.sendRecMetadata(studyName, node, buf.Bytes(), r.MultipartForm.Value["subjects"]); err != nil {
-		panic(err)
+	// Send metadata and loading information to the node. It might fail (ie. node doesn't exist) 
+	if err := m.loadNode(studyName, node, policyFileHeader.Filename, buf.Bytes(), r.MultipartForm.Value["subjects"], policyBuf.Bytes()); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -130,39 +139,7 @@ func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Loaded node '%s' with study name '%s'\n", node, studyName)
 }
 
-// Sends the given metadata content assoicated with the given node and study
-func (m *Mux) sendRecMetadata(studyName, node string, md []byte, subjects []string) error {
-	conn, err := m.recClient.Dial(m.config.RecIP)
-	if err != nil {
-		log.Println(err.Error())
-		return err
-	}
-	defer conn.CloseConn()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	// Metadata to be sent to REC
-	_, err = conn.SetStudy(ctx, &pb.Study{
-		Name: studyName,
-		Node: &pb.Node{
-			Name: node,
-			Address: m.cache.Nodes()[node].GetAddress(),
-		},
-		Metadata: &pb.Metadata{
-			Content: md,
-			Subjects: subjects,
-		},
-	})
-	if err != nil {
-		log.Println(err.Error())
-		return err
-	}
-
-	return nil 
-}
-
 // Sets a study's policy. The policy originates from a subject
-// TODO move to policy store
 func (m *Mux) SetSubjectStudyPolicy(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 

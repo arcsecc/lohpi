@@ -1,7 +1,7 @@
 FROM golang:alpine AS builder
 ENV GOBIN $GOPATH/bin
 RUN apk update
-RUN apk add git curl fuse-dev gcc libc-dev
+RUN apk add git curl fuse-dev gcc libc-dev xattr
 
 # Set necessary environmet variables needed for our image
 ENV GO111MODULE=auto \
