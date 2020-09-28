@@ -159,16 +159,6 @@ func (self *Ptfs) ObjectHeaders() map[string][]*pb.ObjectHeader {
 	return self.objectHeadersMap
 }
 
-func (self *Ptfs) InsertObjectHeader(objectId string, header *pb.ObjectHeader) {
-	self.objectHeadersMapLock.Lock()
-	defer self.objectHeadersMapLock.Unlock()
-	if self.objectHeadersMap[objectId] == nil {
-		self.objectHeadersMap[objectId] = make([]*pb.ObjectHeader, 0)
-	}
-
-	self.objectHeadersMap[objectId] = append(self.objectHeadersMap[objectId], header)
-}
-
 func (self *Ptfs) Subjects() map[string][]string {
 	self.subjectsMapLock.RLock()
 	defer self.subjectsMapLock.RUnlock()
@@ -233,8 +223,8 @@ func (self *Ptfs) ListExtendedAttributes(path string) ([]string, error) {
 	return []string{}, nil
 }
 
-func (self *Ptfs) GetExtendedAttribute(path, name string) ([]string, error) {
-	return []string{}, nil
+func (self *Ptfs) GetExtendedAttribute(path, name string) ([]byte, error) {
+	return xattr.Get(path, XATTR_PREFIX+name)
 }
 
 func (self *Ptfs) RemoveExtendedAttribute(path, name string) ([]string, error) {

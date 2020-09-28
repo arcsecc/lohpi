@@ -56,6 +56,7 @@ func (c *Cache) InsertObjectHeader(objectId string, objectHeader *pb.ObjectHeade
 // Returns the storage node that stores the given object header
 func (c *Cache) StorageNode(objectId string) (*pb.Node, error) {
 	if header, exists := c.ObjectHeaders()[objectId]; exists {
+		log.Println("Found:", header)
 		return header.GetNode(), nil
 	}
 	return nil, errors.New("No such node")
@@ -219,7 +220,6 @@ func (c *Cache) UpdateObjectHeader(objectId string, objectHeader *pb.ObjectHeade
 	c.objectHeaderMapMutex.Lock()
 	defer c.objectHeaderMapMutex.Unlock()
 	c.objectHeaderMap[objectId] = objectHeader
-	log.Println("Inserting", objectHeader, "into cache")
 }
 
 func (c *Cache) ipIsIgnored(ip string) bool {

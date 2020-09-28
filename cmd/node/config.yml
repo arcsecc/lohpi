@@ -3,5 +3,8 @@ nodeconfig:
     policystoreip: 127.0.1.1:8082
     lohpicaaddr: 127.0.1.1:8301
     recip: 127.0.1.1:8084
+    filedigesters: 3
+    fuseon: false
+    root: "/home/thomas/go/src/github.com/tomcat-bit/lohpi/fs_mount"
     fuseconfig:
         mountdirectory: "/home/thomas/go/src/github.com/tomcat-bit/lohpi/fs_mount"

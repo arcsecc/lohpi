@@ -1,6 +1,9 @@
 package node
 
 import (
+_	"bytes"
+	"os"
+	"path/filepath"
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509/pkix"
@@ -9,14 +12,17 @@ import (
 	"log"
 	"context"
 	"time"
+	"sync"
+	"io/ioutil"
 
 	"github.com/tomcat-bit/lohpi/pkg/comm"
+	"github.com/tomcat-bit/lohpi/pkg/session"
 //	"github.com/tomcat-bit/lohpi/pkg/core/mux"
 	"github.com/tomcat-bit/lohpi/pkg/message"
 	"github.com/tomcat-bit/lohpi/pkg/node/fuse"
 	"github.com/golang/protobuf/proto"
 	pb "github.com/tomcat-bit/lohpi/protobuf" 
-
+	"github.com/pkg/xattr"
 	"github.com/joonnna/ifrit"
 
 	logger "github.com/inconshreveable/log15"
@@ -40,14 +46,26 @@ type gossipMessage struct {
 	Addr	 	string
 }
 
+const XATTR_PREFIX = "user."
+
 type Config struct {
 	MuxIP					string		`default:"127.0.1.1:8081"`
 	PolicyStoreIP 			string		`default:"127.0.1.1:8082"`
 	LohpiCaAddr 			string		`default:"127.0.1.1:8301"`
 	RecIP 					string 		`default:"127.0.1.1:8084"`
+	FileDigesters			int 		`default:20`
+	Root					string		`required:true`
+	FuseOn					bool		`required:true`
 
 	// Fuse configuration
 	FuseConfig fuse.Config
+}
+
+type objectFile struct {
+	path string
+	attributes []byte
+	content []byte
+	err  error
 }
 
 type Node struct {
@@ -58,7 +76,7 @@ type Node struct {
 	ifritClient *ifrit.Client
 
 	// Stringy identifier of this node
-	nodeName string
+	name string
 
 	// The IP address of the Lohpi mux. Used when invoking ifrit.Client.SendTo()
 	MuxIP         string
@@ -88,9 +106,26 @@ type Node struct {
 	// Used for identifying data coming from policy store
 	MuxID []byte
 	policyStoreID []byte
+
+	// Used to set extended attribute
+	attrKey string
+
+	// Remote session handler
+	rsHandler *session.Manager
+
+	// Object id -> object header						
+	objectHeadersMap  		map[string]*pb.ObjectHeader
+	objectHeadersMapLock 	sync.RWMutex
+
+
+	subjectsMap   	map[string][]string
+	subjectsMapLock	sync.RWMutex
+
+	// Directory where data is stored
+	rootDir string
 }
 
-func NewNode(nodeName string, config *Config) (*Node, error) {
+func NewNode(name string, config *Config) (*Node, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		panic(err)
@@ -123,29 +158,40 @@ func NewNode(nodeName string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
-	return &Node{
-		nodeName:     	nodeName,
+	node := &Node{
+		name:     		name,
 		ifritClient:  	ifritClient,
 		muxClient: 		muxClient, 
 		recClient:		recClient,
 		config: 		config,
 		psClient: 		psClient,
-	}, nil
+		attrKey:		"XATTR",
+		
+		objectHeadersMap:		make(map[string]*pb.ObjectHeader),
+		objectHeadersMapLock: 	sync.RWMutex{},
+		
+		subjectsMap:			make(map[string][]string),
+		subjectsMapLock:		sync.RWMutex{},
+
+		rootDir: config.Root,
+		rsHandler:	session.NewManager(),
+	}
+
+	if config.FuseOn {
+		fs, err := fuse.NewFuseFS(name, &config.FuseConfig)
+		if err != nil {
+			return nil, err
+		}
+		node.fs = fs
+	}
+
+	return node, nil
 }
 
-func (n *Node) StartIfritClient() {
+func (n *Node) Start() {
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
 	go n.ifritClient.Start()
-}
-
-func (n *Node) MountFuse() error {
-	fs, err := fuse.NewFuseFS(n.nodeName, &n.config.FuseConfig)
-	if err != nil {
-		return err
-	}
-	n.fs = fs
-	return nil
 }
 
 func (n *Node) FireflyClient() *ifrit.Client {
@@ -165,7 +211,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	log.Printf("Node '%s' got message %s\n", n.nodeName, msg.GetType())
+	log.Printf("Node '%s' got message %s\n", n.name, msg.GetType())
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_LOAD_NODE:
@@ -174,7 +220,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// 'ln -s'. The operations performed by this call sets the finite state of the
 		// study. This means that any already existing files are deleted.
 		if err := n.generateData(msg.GetLoad()); err != nil {
-			log.Fatal(err)
+			panic(err)
 		//	return nil, err
 		}
 
@@ -187,9 +233,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// Notify the policy store about the newest changes
 		// TODO: avoid sending all updates - only send the newest data
 		// TODO: remove this because we send the list twice!
-		if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
+		/*if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
 			panic(err)
-		}
+		}*/
 
 		if err := n.sendObjectHeaderList(n.MuxIP); err != nil {
 			panic(err)
@@ -203,6 +249,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 
 	case message.MSG_TYPE_GET_META_DATA:
 		//return n.studyMetaData(msg)
+
+	case message.MSG_TYPE_GET_OBJECT:
+		return n.objectData(msg)
 
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		log.Println("Got new policy from policy store!")
@@ -267,7 +316,7 @@ func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 
 func (n *Node) nodeInfo() ([]byte, error) {
 	str := fmt.Sprintf("Info about node '%s':\n-> Ifrit IP: %s\n-> Stored studies: %s\n",
-		n.nodeName, n.address(), n.fs.ObjectHeaders())
+		n.name, n.address(), n.objectHeaders())
 	return []byte(str), nil
 }
 
@@ -276,7 +325,7 @@ func (n *Node) address() string {
 }
 
 func (n *Node) NodeName() string {
-	return n.nodeName
+	return n.name
 }
 
 func (n *Node) studyMetaData(msg message.NodeMessage) ([]byte, error) {
@@ -289,8 +338,7 @@ func (n *Node) setPolicy(msg *pb.Message) {
 		log.Println(err.Error())
 		return
 	}
-
-	/*
+/*
 	go func() {
 		data, err := proto.Marshal(msg)
 			if err != nil {
@@ -302,29 +350,15 @@ func (n *Node) setPolicy(msg *pb.Message) {
 	// Determine if the object is a subject or study
 	//gossipMessage := msg.GetGossipMessage()
 
-	// Apply the changes in fuse
-
-	/*fileName := msg.Filename
-	fileName = msg.Study + "_model.conf"
-	modelText := string(msg.Extras)*
-
 	// Fetch the gossip chunks and apply the segments that 
 	// concern this node
-	policyChunks := msg.GetGossipMessage().GetGossipMessageBody()
-	log.Println("Len of batch:", len(policyChunks))
+/*	policyChunks := msg.GetGossipMessage().GetGossipMessageBody()
 	for _, chunk := range policyChunks {
-		policy := chunk.GetPolicy()
-		//fileName := policy.GetFilename()
-		//policyText := policy.GetContent()
-		obectName := policy.GetObjectName()
-
-		if !n.fs.ObjectExists(obectName) {
+		if !n.objectHeaderExists(chunk.GetObjectId()) {
 			continue
 		}
 
-		/*if err := n.fs.SetStudyPolicy(studyName, fileName, string(policyText)); err != nil {
-			log.Println(err.Error())
-		}*
+		if err := n.set
 	}*/
 }
 
@@ -350,11 +384,139 @@ func (n *Node) sendRecUpdate(header *pb.ObjectHeader) error {
 	return nil 
 }
 
+func (n *Node) objectData(msg *pb.Message) ([]byte, error) {
+	// TODO: verify the policy attributes here..?!
+	log.Println("Client request:", msg.GetDataUserRequest())
 
-func (n *Node) StudyData(msg message.NodeMessage) ([]byte, error) {
-	//	requestPolicy := msg.Populator.MetaData.Meta_data_info.PolicyAttriuteStrings()
-	fmt.Printf("TODO: Implement StudyData()\n")
-	return []byte(""), nil
+	// Enter the 'studies' (objects) sub-tree. Walk every subject folder in the object file tree
+	dirPath := fmt.Sprintf("%s/%s/%s/subjects", n.rootDir, STUDIES_DIR, msg.GetDataUserRequest().GetObjectName())
+	log.Println("dirPath:", dirPath)
+
+	// TODO: check if object header exist
+	clientAttr := msg.GetDataUserRequest().GetClient().GetPolicyAttribute()
+	//log.Println("clientAttr:", clientAttr)
+
+	objectFiles, err := n.findObjectFiles(clientAttr, dirPath)
+	if err != nil {
+		panic(err)
+		return nil, err
+	}
+
+	// TODO: optimize checking out files to client. Simple solution for now
+	objectId := msg.GetDataUserRequest().GetObjectName()
+	e := &session.Entry{Client: msg.GetDataUserRequest().GetClient()}
+
+	if err := n.rsHandler.CheckoutObjct(objectId, e); err != nil {
+		panic(err)
+	}
+
+	// checkout files to the client. 
+	// The client subscribes on file policies.
+	// depending on the enforcement mode, 
+
+	return proto.Marshal(&pb.Message{ObjectFiles: objectFiles})
+}
+
+func (n *Node) findObjectFiles(clientAttr []byte, root string) (*pb.ObjectFiles, error) {
+	files := make([]*pb.ObjectFile, 0)
+	
+	done := make(chan struct{})
+	defer close(done)
+
+	paths, errc := n.walkDirectoryTree(done, root)
+	log.Println("ROOT:", root)
+
+	// Start a fixed number of goroutines to read and digest files.
+	c := make(chan objectFile) // HLc
+	var wg sync.WaitGroup
+	wg.Add(n.config.FileDigesters)
+	for i := 0; i < n.config.FileDigesters; i++ {
+		go func() {
+			n.digester(done, paths, c, clientAttr) // HLc
+			wg.Done()
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(c) // HLc
+	}()
+	// End of pipeline. OMIT
+
+	for r := range c {
+		if r.err != nil {
+			panic(r.err)
+			return nil, r.err
+		}
+		
+		f := &pb.ObjectFile{
+			Path: r.path,
+			Attributes: r.attributes,
+			Content: r.content,
+		}
+		files = append(files, f)
+	}
+	// Check whether the Walk failed.
+	if err := <-errc; err != nil { // HLerrc
+		panic(err)
+		return nil, err
+	}
+
+	log.Println("FILES:", files)
+	return &pb.ObjectFiles{ObjectFiles: files}, nil
+}
+
+// digester reads path names from paths and sends digests of the corresponding
+// files on c until either paths or done is closed.
+func (n *Node) digester(done <-chan struct{}, paths <-chan string, c chan<- objectFile, clientAttr []byte) {
+	for path := range paths { // HLpaths
+		filexAttr, _ := xattr.Get(path, n.attrKey)
+		
+		/*log.Println("filexAttr:", filexAttr)
+		log.Println("clientAttr:", clientAttr)
+		if bytes.Compare(filexAttr, clientAttr) != 0 {
+			continue
+		}*/
+
+		data, err := ioutil.ReadFile(path)
+		
+		select {
+		case c <- objectFile{path, filexAttr, data, err}:
+			log.Println("len(paths):", len(paths))
+		case <-done:
+			return
+		}
+	}
+}
+
+// Starts at 'root' and reads all filenames
+func (n *Node) walkDirectoryTree(done <-chan struct{}, root string) (<-chan string, <-chan error) {
+	paths := make(chan string)
+	errc := make(chan error, 1)
+	go func() { // HL
+		// Close the paths channel after Walk returns.
+		defer close(paths) // HL
+		// No select needed for this send, since errc is buffered.
+		errc <- filepath.Walk(root, func(path string, info os.FileInfo, err error) error { // HL
+			if err != nil {
+				panic(err)
+				return err
+			}
+
+			// Ensure that the path is a symlink
+			if info.Mode().IsDir() {
+				//panic(errors.New(path +  " is not a symlink file!"))
+				return nil
+			}
+
+			select {
+			case paths <- path: 		
+			case <-done: // HL
+				return errors.New("walk canceled")
+			}
+			return nil
+		})
+	}()
+	return paths, errc
 }
 
 // Sends the newest object header list to the Ifrit node at 'addr'
@@ -387,14 +549,14 @@ func (n *Node) marshalledObjectHeaderList() ([]byte, error) {
 		ObjectHeaders: make([]*pb.ObjectHeader, 0),
 	}
 
-	for _, header := range n.fs.ObjectHeaders() {
-		objectHeaders.ObjectHeaders = append(objectHeaders.ObjectHeaders, header...)
+	for _, header := range n.objectHeaders() {
+		objectHeaders.ObjectHeaders = append(objectHeaders.ObjectHeaders, header)
 	}	
 	
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_OBJECT_HEADER_LIST,
 		Sender: &pb.Node{
-			Name: n.nodeName, 
+			Name: n.name, 
 			Address: n.ifritClient.Addr(),
 			Role: "Storage node",
 			Id:	[]byte(n.ifritClient.Id()),
@@ -436,7 +598,7 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	resp := &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
 		Sender: &pb.Node{
-			Name: n.nodeName, 
+			Name: n.name, 
 			Address: n.ifritClient.Addr(),
 			Role: "Storage node",
 			Id:	[]byte(n.ifritClient.Id()),
@@ -459,7 +621,7 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	resp = &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
 		Sender: &pb.Node{
-			Name: n.nodeName, 
+			Name: n.name, 
 			Address: n.ifritClient.Addr(),
 			Role: "Storage node",
 			Id:	[]byte(n.ifritClient.Id()),
@@ -476,7 +638,7 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	log.Println(n.nodeName, "sending ack to Policy store")
+	log.Println(n.name, "sending ack to Policy store")
 	n.ifritClient.SendTo(n.PolicyStoreIP, data)
 	return nil, nil
 }
@@ -492,7 +654,7 @@ func (n *Node) PolicyStoreHandshake() error {
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
-		Name: n.nodeName, 
+		Name: n.name, 
 		Address: n.ifritClient.Addr(),
 		Role: "Storage node",
 		Id:	[]byte(n.ifritClient.Id()),
@@ -519,7 +681,7 @@ func (n *Node) MuxHandshake() error {
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
-		Name: n.nodeName, 
+		Name: n.name, 
 		Address: n.ifritClient.Addr(),
 		Role: "Storage node",
 		Id:	[]byte(n.ifritClient.Id()),
@@ -556,4 +718,40 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 	}
 
 	return nil
+}
+
+func (n *Node) insertObjectHeader(objectId string, header *pb.ObjectHeader) {
+	n.objectHeadersMapLock.Lock()
+	defer n.objectHeadersMapLock.Unlock()
+	n.objectHeadersMap[objectId] = header
+}
+
+func (n *Node) objectHeaders() map[string]*pb.ObjectHeader {
+	n.objectHeadersMapLock.RLock()
+	defer n.objectHeadersMapLock.RUnlock()
+	return n.objectHeadersMap
+}
+
+// Test functions below. Not to be used in production
+func (n *Node) eraseObjectsFromSubject(subjectId string) {
+	n.subjectsMapLock.RLock()
+	defer n.subjectsMapLock.RUnlock()
+	n.subjectsMap[subjectId] = make([]string, 0)
+}
+
+func (n *Node) insertSubject(subject string, objectId string) {
+	n.subjectsMapLock.RLock()
+	defer n.subjectsMapLock.RUnlock()
+	if n.subjectsMap[subject] == nil {
+		n.subjectsMap[subject] = make([]string, 0)
+	}
+
+	n.subjectsMap[subject] = append(n.subjectsMap[subject], objectId)
+}
+
+func (n *Node) objectHeaderExists(objectId string) bool {
+	n.objectHeadersMapLock.Lock()
+	defer n.objectHeadersMapLock.Unlock()
+	_, ok := n.objectHeadersMap[objectId] 
+	return ok
 }

@@ -5,10 +5,10 @@ package proto;
 
 service Mux {
     rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc ClientHandshake (Client) returns (HandshakeResponse) {}
     rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
-    rpc GetObjectMetadata (DataUserRequest) returns (Metadata) {}
     rpc GetSubjectNumber (DataUserRequest) returns (StudyCount) {}
-    rpc GetObjectData (DataUserRequest) returns (ObjectData) {}
+    rpc GetObjectData (DataUserRequest) returns (ObjectFiles) {}
     rpc IgnoreIP (Node) returns (Node) {}
 }
 
@@ -24,14 +24,18 @@ service Rec {
     rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
 }
 
+message Client {
+    string name = 1;
+    bytes policyAttribute = 2;
+}
+
 message StudyCount {
     uint32 count = 1;
 }
 
 message DataUserRequest {
-    string name = 1;
-    string policyAttributes = 2;
-    string study = 3;
+    Client client = 1;
+    string objectName = 2;
 }
 
 // Used in direct messaging
@@ -44,13 +48,15 @@ message Message {
     MsgSignature signature = 6;// Integrity check based on ECDSA
     GossipMessage gossipMessage = 7;
     Probe probe = 8;
+    ObjectFiles objectFiles = 9;
+    DataUserRequest dataUserRequest = 10;
 }
 
 // Message to load a node. Distributed to all entities that need it (hint hint REC)
 message Load {
     ObjectHeader objectHeader = 1;           
     uint32 Minfiles = 2;            
-    uint32 Maxfiles = 3;            
+    uint32 Maxfiles = 3;
 }
 
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
@@ -73,13 +79,14 @@ message ObjectHeaders {
     repeated ObjectHeader objectHeaders = 1;
 }
 
-message Object {
-    ObjectHeader objectHeader = 1;
-    ObjectData objectData = 2;
+message ObjectFile {
+    string path = 1;
+    bytes attributes = 2;
+    bytes content = 3;
 }
 
-message ObjectData {
-    bytes content = 1;
+message ObjectFiles {
+    repeated ObjectFile objectFiles = 2;
 }
 
 message Subject {
@@ -104,8 +111,8 @@ message MsgSignature {
 }
 
 message HandshakeResponse {
-    string ip = 1;      // IP of the key owner
-    bytes id = 2;
+    string ip = 1;  // IP of the node owner
+    bytes id = 2;   // From fireflies
 }
 
 message GossipMessage {
@@ -117,7 +124,7 @@ message GossipMessage {
 }
 
 message GossipMessageBody {
-    string object = 1;          // subject or study. Appliy the policy to the object
+    string objectId = 1;          // subject or study. Appliy the policy to the object
     uint64 version = 2;         // Version numbering 
     Policy policy = 3;
     google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival

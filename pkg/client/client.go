@@ -1,204 +1,332 @@
 package client
 
-/*
 import (
-	"bytes"
-	"crypto/tls"
+	"os"
+	"strings"
+	"sync"
 	"crypto/x509/pkix"
-	"encoding/gob"
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
 	"log"
-	"net/http"
 	"time"
+	"context"
 
-	"github.com/tomcat-bit/lohpi/internal/comm"
-	"github.com/tomcat-bit/lohpi/internal/core/message"
-	"github.com/tomcat-bit/lohpi/internal/netutil"
-
-	"github.com/spf13/viper"
+	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/golang/protobuf/ptypes/empty"
+	"github.com/tomcat-bit/lohpi/pkg/comm"
+	"github.com/tomcat-bit/lohpi/pkg/netutil"
+	"github.com/abiosoft/ishell"
 )
-*/
-type Client struct {
-	// TLS configuration used when interacting with the MUX over HTTPS
-/*	clientConfig *tls.Config
 
-	// A unique identifier of the client
-	clientName string
+// Configuration struct for the client. 
+type Config struct {
+	// The mount point of the file tree
+	LocalMountPoint string 		`required:"true"`
 
-	// Attributes of the client
-	attrMap map[string]string*/
+	// Mux's remote address
+	MuxIP string		`default:"127.0.1.1:8081"`
+
+	LohpiCaAddr string	`default:"127.0.1.1:8301"`
 }
-/*
-func NewClient(name string) (*Client, error) {
-	if err := readConfig(); err != nil {
-		panic(err)
-	}
 
-	localIpAddr, err := netutil.LocalIP()
+type Client struct {
+	name string
+
+	muxId []byte
+
+	config *Config
+	configLock sync.RWMutex
+
+	policyAttributes []byte
+	attrLock sync.RWMutex
+
+	muxClient *comm.MuxGRPCClient
+}
+
+// Returns a new client using the given name and configuration struct.
+func NewClient(name string, config *Config) (*Client, error) {
+	port := netutil.GetOpenPort()
+	listener, err := netutil.ListenOnPort(port)
 	if err != nil {
 		return nil, err
 	}
 
-	attrMap := initializeAttributes()
-	b := new(bytes.Buffer)
-	e := gob.NewEncoder(b)
-
-	// Encoding the map
-	err = e.Encode(attrMap)
-	if err != nil {
-		panic(err)
-	}
-
+	// Setup X509 certificate
 	pk := pkix.Name{
-		Locality:   []string{localIpAddr},
-		CommonName: name,
+		Locality: []string{listener.Addr().String()},
 	}
 
-	cu, err := comm.NewCu(pk, viper.GetString("lohpi_ca_addr"))
+	cu, err := comm.NewCu(pk, config.LohpiCaAddr)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
-	clientConfig := comm.ClientConfig(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	if err != nil {
+		return nil, err
+	}
+
+	// Create working directory for the client
+	if _, err := os.Stat(config.LocalMountPoint); os.IsNotExist(err) {
+		if err := os.Mkdir(config.LocalMountPoint, 0755); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := os.RemoveAll(config.LocalMountPoint); err != nil {
+			return nil, err
+		}
+		if err := os.Mkdir(config.LocalMountPoint, 0755); err != nil {
+			return nil, err
+		}
+	}
 
 	return &Client{
-		clientConfig: clientConfig,
-		clientName:   name,
-		attrMap:      attrMap,
+		name:		name, 
+		muxClient:  muxClient,
+		attrLock:	sync.RWMutex{},
+		config: 	config,
+		configLock: sync.RWMutex{},
 	}, nil
 }
 
-func (c *Client) Run() {
-	log.Printf("Client %s will test some basic features of Lohpi...\n", c.clientName)
+// Starts the client by connecting to the Lohpi network
+func (c *Client) Start() {
+	if err := c.joinNetwork(); err != nil {
+		panic(err)
+	}
 
-	// Test the /get_studies endpoint
-	//c.TestGetStudies()
+	log.Println("Starts shell")
+	shell := ishell.New()
 
-	// Test the /get_study_data endpoint
-	c.TestGetStudyData()
+	// Top-level command to fetch remote objects (here, by 'object' it refers to anything)
+	getCmd := &ishell.Cmd{
+		Name:    	"get",
+		Help:    	"Remote get",
+		LongHelp: 	`Fetches remote object by specifying a sub-command. The following sub-commands are available:
+					headers`,
+		Func: func(con *ishell.Context) {
+			log.Println("Usage: get headers|object <object id ...>|metadata <object id ...>")
+		},
+	}
+
+	// Fetch remote object headers
+	getCmd.AddCmd(&ishell.Cmd{
+		Name:    	"headers",
+		Help:    	"Fetch remote object header IDs",
+		LongHelp: 	`Fetch all remote object headers IDs and print them in the terminal`,
+		Func: func(con *ishell.Context) {
+			ids, err := c.fetchObjectIDs()
+			if err != nil {
+				panic(err)
+			}
+			
+			for _, id := range ids {
+				log.Println("Object ID:", id)
+			}
+		},
+	})
+
+	// Fetch metadata
+	// TODO: use id and don't fetch ALL object headers
+	getCmd.AddCmd(&ishell.Cmd{
+		Name:    	"metadata",
+		Help:    	"Fetch remote object header IDs",
+		LongHelp: 	`Fetch all remote object headers IDs and print them in the terminal`,
+		Func: func(con *ishell.Context) {
+			metadata, err := c.fetchObjectMetadata()
+			if err != nil {
+				panic(err)
+			}
+			
+			for _, md := range metadata {
+				log.Println("Metadata:", md)
+			}
+		},
+	})
+
+	// Fetch remote object data
+	getCmd.AddCmd(&ishell.Cmd{
+		Name:    	"object",
+		Help:    	"Fetch remote object header IDs",
+		LongHelp: 	`Fetch all remote object headers IDs and print them in the terminal`,
+		Func: func(con *ishell.Context) {
+			for _, s := range con.Args {
+				obj := strings.TrimLeft(strings.TrimRight(s, "\""),"\"")
+				if err := c.fetchObjectData(obj); err != nil {
+					panic(err)
+				}
+			}
+		},
+	})
+	
+	// Fetch remote object data
+	getCmd.AddCmd(&ishell.Cmd{
+		Name:    	"attributes",
+		Help:    	"Fetch remote object header IDs",
+		LongHelp: 	`Fetch all remote object headers IDs and print them in the terminal`,
+		Func: func(con *ishell.Context) {
+			log.Println(string(c.getPolicyAttributes()))
+		},
+	})
+
+	shell.AddCmd(getCmd)
+
+	// Set policy attribute. Only used for testing!!
+	setCmd := &ishell.Cmd{
+		Name:    	"set",
+		Help:    	"Sets the policy attributes of the client. ONLY MEANT FOR DEMONSTRATION",
+		Func: func(con *ishell.Context) {},
+	}
+
+	setCmd.AddCmd(&ishell.Cmd{
+		Name:    	"attributes",
+		Help:    	"",
+		LongHelp: 	`Fetches remote object by specifying a sub-command. The following sub-commands are available:
+					headers`,
+		Func: func(con *ishell.Context) {
+			for _, s := range con.Args {
+				a := strings.TrimLeft(strings.TrimRight(s, "\""),"\"")
+				c.setPolicyAttributes([]byte(a))
+			}
+		},
+	})
+
+	shell.AddCmd(setCmd)
+
+	// start shell
+	shell.Run()
+
+	// teardown
+	shell.Close()
 }
 
-func (c *Client) TestGetStudyData() {
-	log.Printf("Running /get_study_data a couple of times...\n")
-	muxURL := "https://127.0.1.1:8080/get_study_data"
-
-	var msg struct {
-		Str string
-	}
-
-	msg.Str = "hello"
-	jsonStr, err := json.Marshal(msg)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	req, err := http.NewRequest("GET", muxURL, bytes.NewBuffer(jsonStr))
-	req.Header.Set("Content-Type", "application/json")
-
-	transport := &http.Transport{
-		TLSClientConfig: c.clientConfig,
-	}
-	client := &http.Client{
-		Transport: transport,
-	}
-
-	response, err := client.Do(req)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	defer response.Body.Close()
-	if response.StatusCode != int(http.StatusOK) {
-		errMsg := fmt.Sprintf("%s", response.Body)
-		log.Print(errMsg)
-		return
-	}
-
-	bodyBytes, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("%s", bodyBytes)
-	response.Body.Close()
-	log.Printf("/get_studies seems to work :)\n")
-}
-
-func (c *Client) TestGetStudies() {
-	log.Printf("Running /get_studies a couple of times...\n")
-	muxURL := "https://127.0.1.1:8080/get_studies"
-	req, err := http.NewRequest("GET", muxURL, nil)
+func (c *Client) joinNetwork() error {
+	conn, err := c.muxClient.Dial(c.config.MuxIP)
 	if err != nil {
 		panic(err)
 	}
 
-	transport := &http.Transport{
-		TLSClientConfig: c.clientConfig,
-	}
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20)
+	defer cancel()
 
-	client := &http.Client{Transport: transport}
-	for i := 0; i < 5; i++ {
-		<-time.After(1 * time.Second)
-
-		response, err := client.Do(req)
-		if err != nil {
-			panic(err)
-		}
-
-		if response.StatusCode != int(http.StatusOK) {
-			errMsg := fmt.Sprintf("%s", response.Body)
-			fmt.Printf("Error from mux: %s\n", errMsg)
-			response.Body.Close()
-			return
-		}
-
-		bodyBytes, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		log.Printf("%s", bodyBytes)
-		response.Body.Close()
-	}
-	log.Printf("/get_studies seems to work :)\n")
-}
-
-// hacky af
-func initializeAttributes() map[string]string {
-	// TODO: move identifiers in message module to somewhere else!
-	attrMap := make(map[string]string)
-
-	// TODO: initialize the map in A LOT better way than this!!
-	attrMap[message.Country] = "norway"
-	attrMap[message.Study] = "study1"
-	attrMap[message.Research_network] = "UNN"
-	return attrMap
-}
-
-func readConfig() error {
-	viper.SetConfigName("firestore_config")
-	viper.AddConfigPath("/var/tmp")
-	viper.AddConfigPath(".")
-	viper.SetConfigType("yaml")
-
-	err := viper.ReadInConfig()
+	handshakeResp, err := conn.ClientHandshake(ctx, &pb.Client{Name: c.name, PolicyAttribute: c.getPolicyAttributes()})
 	if err != nil {
-		return err
+		panic(err)
 	}
 
-	// Behavior variables
-	//viper.SetDefault("num_subjects", 2)
-	//viper.SetDefault("num_studies", 10)
-	//viper.SetDefault("data_users", 1)
-	//viper.SetDefault("files_per_study", 2)
-	//viper.SetDefault("file_size", 256)
-	viper.SetDefault("fuse_mount", "/home/thomas/go/src/firestore")
-	//viper.SetDefault("set_files", true)
-	viper.SetDefault("lohpi_ca_addr", "127.0.1.1:8301")
-	viper.SafeWriteConfig()
-	return nil
+	c.muxId = handshakeResp.GetId()
+
+	return nil 
 }
-*/
+
+func (c *Client) fetchObjectData(objectId string) error {
+	conn, err := c.muxClient.Dial(c.config.MuxIP)
+	if err != nil {
+		panic(err)
+	}
+
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20) // Sane timeout value here!
+	defer cancel()
+
+	log.Println("c.getPolicyAttributes():", c.getPolicyAttributes())
+
+	objFiles, err := conn.GetObjectData(ctx, &pb.DataUserRequest{
+		Client: &pb.Client{
+			Name: c.name,
+			PolicyAttribute: c.getPolicyAttributes(),
+		},
+		ObjectName: objectId,
+	})
+
+	if err != nil {
+		log.Println(err.Error())
+	}
+
+
+	log.Println(objFiles)
+
+	return nil 
+}
+
+func (c *Client) fetchObjectIDs() ([]string, error) {
+	headers, err := c.fetchObjectHeaders()
+	if err != nil {
+		panic(err)
+	}
+
+	ids := make([]string, 0)
+	for _, h := range headers.GetObjectHeaders() {
+		ids = append(ids, h.GetName())
+	}
+
+	return ids, nil
+}
+
+func (c *Client) fetchObjectMetadata() ([]string, error) {
+	headers, err := c.fetchObjectHeaders()
+	if err != nil {
+		panic(err)
+	}
+
+	metadata := make([]string, 0)
+	for _, h := range headers.GetObjectHeaders() {
+		metadata = append(metadata, string(h.GetMetadata().GetContent()))
+	}
+
+	return metadata, nil
+}
+
+func (c *Client) fetchObjectHeaders() (*pb.ObjectHeaders, error) {
+	conn, err := c.muxClient.Dial(c.config.MuxIP)
+	if err != nil {
+		panic(err)
+	}
+
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20)
+	defer cancel()
+
+	return conn.GetObjectHeaders(ctx, &empty.Empty{})
+}
+
+// Stops the connection and 
+func (c *Client) Stop() {
+
+}
+
+func (c *Client) SetConfiguration(config *Config) {
+	c.configLock.Lock()
+	defer c.configLock.Unlock()
+	c.config = config
+}
+
+func (c *Client) Configuration() *Config {
+	c.configLock.RLock()
+	defer c.configLock.RUnlock()
+	return c.config
+}
+
+func (c *Client) Name() string {
+	return c.name
+}
+
+func (c *Client) setPolicyAttributes(p []byte) {
+	c.attrLock.RLock()
+	defer c.attrLock.RUnlock()
+	c.policyAttributes = p
+}
+
+// Returns the attributes of the client used to access remote files.
+func (c *Client) getPolicyAttributes() []byte {
+	c.attrLock.RLock()
+	defer c.attrLock.RUnlock()
+	return c.policyAttributes
+}
+
+func (c *Client) storeFiles(objects *pb.ObjectFiles) error {
+	for _, o := range objects.GetObjectFiles() {
+		// create file at file mount
+		// Track files being stored at Lohpi. Undo/remove files if the event 
+		// of a more restrictive policy
+	}
+}

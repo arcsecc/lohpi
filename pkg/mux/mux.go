@@ -9,6 +9,7 @@ import (
 	
 	"github.com/tomcat-bit/lohpi/pkg/cache"
 	"github.com/tomcat-bit/lohpi/pkg/netutil"
+	"github.com/tomcat-bit/lohpi/pkg/session"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
 	"github.com/tomcat-bit/lohpi/pkg/message"
@@ -81,6 +82,8 @@ type Mux struct {
 
 	// Ignored IP addresses for the Ifrit client
 	ignoredIP map[string]string
+
+	sManager *session.Manager
 }
 
 // Returns a new mux using the given configuration and HTTP port number. Returns a non-nil error, if any
@@ -132,8 +135,6 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 		return nil, err
 	}
 
-	cache := cache.NewCache(ifritClient)
-
 	m := &Mux{
 		config: config, 
 
@@ -141,7 +142,7 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 		exitChan:    make(chan bool, 1),
 
 		// In-memory caches used to describe the network data
-		cache: cache,
+		cache: cache.NewCache(ifritClient),
 
 		// HTTP
 		httpListener: httpListener,
@@ -154,10 +155,12 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 		grpcs: s,
 
 		// Rec grpc client
-		recClient:		recClient,
+		recClient: recClient,
 
 		// Collection if nodes that should be ignored in certain cases
-		ignoredIP: 		make(map[string]string),
+		ignoredIP: make(map[string]string),
+
+		sManager: session.NewManager(),
 	}
 
 	m.grpcs.Register(m)
@@ -216,22 +219,16 @@ func (m *Mux) updateObjectHeaders(objectHeaders *pb.ObjectHeaders) {
 
 // Returns a list of studies available to the network
 func (m *Mux) GetObjectHeaders(ctx context.Context, e *empty.Empty) (*pb.ObjectHeaders, error) {
-	/*m.cache.FetchRemoteObjectHeaders()
-	studies := &pb.ObjectHeaders{
+	m.cache.FetchRemoteObjectHeaders()
+	objectHeaders := &pb.ObjectHeaders{
 		ObjectHeaders: make([]*pb.ObjectHeader, 0),
 	}
 
-	for objectName, objectValue := range m.cache.ObjectHeaders() {
-		object := pb.ObjectHeader{
-			Name: 		objectName,
-			Node:		&pb.Node{
-				Address:	objectValue.GetAddress(),
-		}
-
-		studies.Studies = append(studies.Studies, &study)
-	}*/
-		return nil, nil
-	//return studies, nil
+	for _, objectValue := range m.cache.ObjectHeaders() {
+		objectHeaders.ObjectHeaders = append(objectHeaders.ObjectHeaders, objectValue)
+	}
+	
+	return objectHeaders, nil
 }
 
 func (m *Mux) GetObjectMetadata(ctx context.Context, req *pb.DataUserRequest) (*pb.Metadata, error) {
@@ -242,8 +239,20 @@ func (m *Mux) GetSubjectNumber(ctx context.Context, req *pb.DataUserRequest) (*p
 	return nil, nil
 }
 
-func (m *Mux) GetObjectData(ctx context.Context, req *pb.DataUserRequest) (*pb.ObjectData, error) {
-	return nil, nil
+func (m *Mux) GetObjectData(ctx context.Context, req *pb.DataUserRequest) (*pb.ObjectFiles, error) {
+	return m.getObjectData(ctx, req)
+}
+
+func (m *Mux) ClientHandshake(ctx context.Context, c *pb.Client) (*pb.HandshakeResponse, error) {
+	key := c.GetName()
+	if err := m.sManager.AddClient(key, c); err != nil {
+		log.Println(err.Error())
+		return nil, err
+	}
+
+	log.Println("Mux added", c.GetName(), "to its list of clients")
+
+	return &pb.HandshakeResponse{Id: []byte(m.ifritClient.Id())}, nil 
 }
 
 // Adds the given node to the network and returns the Mux's IP address

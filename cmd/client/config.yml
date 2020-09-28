@@ -1,0 +1,4 @@
+clientconfig:
+  localmountpoint: "client_mount"
+  muxip: "127.0.1.1:8081"
+  lohpicaaddr: 127.0.1.1:8301

@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"mime/multipart"
-	"net/http"
+	"context"
+
 
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
 	"github.com/tomcat-bit/lohpi/pkg/message"
+
 )
 
 // Returns human-readable info about a storage node
@@ -55,7 +56,7 @@ func (m *Mux) loadNode(objectName, node, policyFileName string, md []byte, subje
 				Name: objectName,
 				Node: &pb.Node{
 					Name: node,
-					Address: "",
+					Address: m.cache.NodeAddr(node).GetAddress(),
 				},
 				Metadata: &pb.Metadata{
 					Content: md,
@@ -107,141 +108,63 @@ func (m *Mux) loadNode(objectName, node, policyFileName string, md []byte, subje
 	return nil
 }
 
-// Given a node identifier and a study name, return the data at that node
-// TODO: finish me later
-func (m *Mux) _getStudyData(msg message.NodeMessage) (int, string, error) {
-	// Ensure that the node is known to the mux
-	if !m.cache.NodeExists(msg.Node) {
-		errMsg := fmt.Sprintf("Unknown node: %s", msg.Node)
-		return http.StatusNotFound, "", errors.New(errMsg)
-	}
-
-	/*
-		// Ensure that the node stores the study
-		if !m.nodeStoresStudy(msg.Node, msg.Study) {
-			errMsg := fmt.Sprintf("Study %s is not stored in %s", msg.Study, msg.Node)
-			return http.StatusNotFound, "", errors.New(errMsg)
-		}
-
-		// Set the proper message type and marshall it to json
-		msg.MessageType = message.MSG_TYPE_GET_DATA
-		serializedMsg, err := msg.Encode()
-		if err != nil {
-			return http.StatusInternalServerError, "", err
-		}
-
-		ch := m.ifritClient.SendTo(m.nodes[msg.Node], serializedMsg)
-		var result string
-		select {
-			case response := <- ch:
-				result = string(response)
-		}
-
-		return http.StatusOK, result, nil*/
-	return 200, "", nil
-}
-
-// Sets a new policy for the given study
-func (m *Mux) _setSubjectStudyPolicy(file multipart.File, fileHeader *multipart.FileHeader, study string) error {
-	/*
-		m.FetchStudyIDs()
-		node, ok := m.studyNode[study];
-		if !ok {
-			errMsg := fmt.Sprintf("Study '%s' does not exist in the network", study)
-			return errors.New(errMsg)
-		}
-
-		fileContents, err := ioutil.ReadAll(file)
-		if err != nil {
-			return err
-		}
-
-		msg := &message.NodeMessage {
-			MessageType: 	message.MSG_TYPE_SET_SUBJECT_POLICY,
-			Study: 			study,
-			Filename:	 	fileHeader.Filename,
-			Extras: 		fileContents,
-		}
-
-		fmt.Printf("Data to send: %s\n", msg)
-		serializedMsg, err := msg.Encode()
-		if err != nil {
-			return err
-		}
-
-		ch := m.ifritClient.SendTo(m.nodes[node], serializedMsg)
-		select {
-			case response := <- ch:
-				fmt.Printf("Response: %s\n", string(response))
-		}
-	*/
-	return nil
-}
-
-// Sets the REC policy at a study and a node
-/*func (m *Mux) _setRECPolicy(file multipart.File, fileHeader *multipart.FileHeader, study string) error {
-	m.FetchStudyIDs()
-	/*node, ok := m.studyNode[study];
-	if !ok {
-		errMsg := fmt.Sprintf("Study '%s' does not exist in the network", study)
-		return errors.New(errMsg)
-	}*
-
-	fileContents, err := ioutil.ReadAll(file)
-	if err != nil {
-		return err
-	}
-
-	msg := &message.PolicyMessage {
-		//Node: 		m.nodes[node],
-		Node: 		"node_0",
-		Study: 		study,
-		Filename: 	fileHeader.Filename,
-		Model: 		fileContents,
-	}
-
-	serializedMsg, err := msg.Encode()
-	if err != nil {
-		return err
-	}
-
-	/*ch := m.ifritClient.SendTo(m.nodes[node], serializedMsg)
-	select {
-		case response := <- ch:
-			fmt.Printf("Response: %s\n", string(response))
-	}*
-
-	return m.ps.MessageHandler(serializedMsg)
-
-	//return nil
-}*/
-
 // Given a node identifier and a study name, return the meta-data about a particular study at that node.
-func (m *Mux) _getMetaData(msg message.NodeMessage) /*(int, string, error)*/ {
-	// Ensure that the node is known to the mux
-	/*if !m.nodeExists(msg.Node) {
-	errMsg := fmt.Sprintf("Unknown node: %s", msg.Node)
-	return http.StatusNotFound, "", errors.New(errMsg)*/
-}
+func (m *Mux) getObjectData(ctx context.Context, req *pb.DataUserRequest) (*pb.ObjectFiles, error) {
+	// TODO: use streams
 
-/*
-	// Ensure that the node stores the study
-	if !m.nodeStoresStudy(msg.Node, msg.Study) {
-		errMsg := fmt.Sprintf("Study %s is not stored in %s", msg.Study, msg.Node)
-		return http.StatusNotFound, "", errors.New(errMsg)
+	if !m.sManager.ClientExists(req.GetClient().GetName()) {
+		log.Println("No such client is known to the mux:", req.GetClient().GetName())
 	}
+	
 
-	// Serialize the message and wait for a reply
-	serializedMsg, err := msg.Encode()
+	log.Println("req.GetObjectName()", req.GetObjectName())
+	node, err := m.cache.StorageNode(req.GetObjectName())
 	if err != nil {
-		return http.StatusInternalServerError, "", err
+		return nil, err
 	}
 
-	ch := m.ifritClient.SendTo(m.nodes[msg.Node], serializedMsg)*/
-//var result string
-/*select {
-	case response := <- ch:
-		result = string(response)
-}*/
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_GET_OBJECT,
+		DataUserRequest: req,
+	}
 
-//return http.StatusOK, result, nil
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sign the chunks
+	r, s, err := m.ifritClient.Sign(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// Message with signature
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+
+	// Marshalled message to be multicasted
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Println("Node addr:", node)
+	ch := m.ifritClient.SendTo(node.GetAddress(), data)
+	resp := &pb.ObjectFiles{ObjectFiles: make([]*pb.ObjectFile, 0)}
+
+	select {
+	case object := <-ch:
+		log.Println("object:", object)
+		respMsg := &pb.Message{}
+		if err := proto.Unmarshal(object, respMsg); err != nil {
+			panic(err)
+		}
+
+		// Verify message signature from node!
+		for _, o := range respMsg.GetObjectFiles().GetObjectFiles() {
+			resp.ObjectFiles = append(resp.ObjectFiles, o)
+		}
+	}
+
+	return resp, nil 
+}

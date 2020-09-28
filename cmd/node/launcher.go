@@ -73,11 +73,8 @@ func main() {
 		panic(err)
 	}
 
-	node.StartIfritClient()
-	if err := node.MountFuse(); err != nil {
-		panic(err)
-	}
-
+	node.Start()
+	
 	// Connect to the mux and policy store
 	if err := node.MuxHandshake(); err != nil {
 		panic(err)
