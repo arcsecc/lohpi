@@ -33,7 +33,7 @@ stages:
         version: '1.13.5'
     - task: Go@0
       inputs:
-        command: 'get'
+        command: 'custom'
         arguments: 'mod download'
         workingDirectory: '$(System.DefaultWorkingDirectory)'
     - task: Docker@2
