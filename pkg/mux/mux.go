@@ -218,6 +218,7 @@ func (m *Mux) updateObjectHeaders(objectHeaders *pb.ObjectHeaders) {
 }
 
 // Returns a list of studies available to the network
+// TODO: only update deltas
 func (m *Mux) GetObjectHeaders(ctx context.Context, e *empty.Empty) (*pb.ObjectHeaders, error) {
 	m.cache.FetchRemoteObjectHeaders()
 	objectHeaders := &pb.ObjectHeaders{

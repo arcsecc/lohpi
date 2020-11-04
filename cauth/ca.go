@@ -1,6 +1,7 @@
 package cauth
 
 import (
+	"fmt"
 	"bytes"
 	"crypto"
 	"crypto/rand"
@@ -137,6 +138,7 @@ func (c *Ca) Start() error {
 func (c *Ca) httpHandler() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/certificateRequest", c.certificateSigning)
+	mux.HandleFunc("/test", c.test)
 
 	c.httpServer = &http.Server{
 		Handler: mux,
@@ -149,6 +151,11 @@ func (c *Ca) httpHandler() error {
 	}
 
 	return nil
+}
+
+func (c *Ca) test(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	fmt.Fprintf(w, "hello from Lohpi ca")
 }
 
 func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {

@@ -6,5 +6,7 @@ nodeconfig:
     filedigesters: 3
     fuseon: false
     root: "/home/thomas/go/src/github.com/tomcat-bit/lohpi/fs_mount"
+    servehttp: true
+    httpport: 8090
     fuseconfig:
         mountdirectory: "/home/thomas/go/src/github.com/tomcat-bit/lohpi/fs_mount"

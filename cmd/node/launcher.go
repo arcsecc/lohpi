@@ -76,13 +76,14 @@ func main() {
 	node.Start()
 	
 	// Connect to the mux and policy store
-	if err := node.MuxHandshake(); err != nil {
+	/*if err := node.MuxHandshake(); err != nil {
 		panic(err)
-	}
+	}*/
 
+	/*
 	if err := node.PolicyStoreHandshake(); err != nil {
 		panic(err)
-	}
+	}*/
 
 	// Wait for SIGTERM signal from the environment
 	channel := make(chan os.Signal, 2)
