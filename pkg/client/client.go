@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"sync"
@@ -103,7 +104,7 @@ func (c *Client) Start() {
 		LongHelp: 	`Fetches remote object by specifying a sub-command. The following sub-commands are available:
 					headers`,
 		Func: func(con *ishell.Context) {
-			log.Println("Usage: get headers|object <object id ...>|metadata <object id ...>")
+			log.Println("Usage: get headers|object <object id ...>|metadata <object id ...>|attributes")
 		},
 	}
 
@@ -182,10 +183,17 @@ func (c *Client) Start() {
 		LongHelp: 	`Fetches remote object by specifying a sub-command. The following sub-commands are available:
 					headers`,
 		Func: func(con *ishell.Context) {
+			buf := &bytes.Buffer{}
 			for _, s := range con.Args {
-				a := strings.TrimLeft(strings.TrimRight(s, "\""),"\"")
-				c.setPolicyAttributes([]byte(a))
+				_, err := buf.WriteString(s + " ")
+				if err != nil {
+					panic(err)
+				}
 			}
+
+			// TODO: Refine policy implementations
+			buf.WriteByte(byte(10))
+			c.setPolicyAttributes(buf.Bytes())
 		},
 	})
 
@@ -228,20 +236,22 @@ func (c *Client) fetchObjectData(objectId string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20) // Sane timeout value here!
 	defer cancel()
 
-	log.Println("c.getPolicyAttributes():", c.getPolicyAttributes())
-
-	objFiles, err := conn.GetObjectData(ctx, &pb.DataUserRequest{
+	r := &pb.DataUserRequest{
 		Client: &pb.Client{
 			Name: c.name,
 			PolicyAttribute: c.getPolicyAttributes(),
 		},
 		ObjectName: objectId,
-	})
-
-	if err != nil {
-		log.Println(err.Error())
 	}
 
+	log.Println("REQ:", r)
+	log.Println("attr:", string(c.getPolicyAttributes()))
+
+	objFiles, err := conn.GetObjectData(ctx, r)
+
+	if err != nil {
+		panic(err)
+	}
 
 	log.Println(objFiles)
 
@@ -311,8 +321,8 @@ func (c *Client) Name() string {
 }
 
 func (c *Client) setPolicyAttributes(p []byte) {
-	c.attrLock.RLock()
-	defer c.attrLock.RUnlock()
+	c.attrLock.Lock()
+	defer c.attrLock.Unlock()
 	c.policyAttributes = p
 }
 
@@ -325,8 +335,10 @@ func (c *Client) getPolicyAttributes() []byte {
 
 func (c *Client) storeFiles(objects *pb.ObjectFiles) error {
 	for _, o := range objects.GetObjectFiles() {
+		_ = o
 		// create file at file mount
 		// Track files being stored at Lohpi. Undo/remove files if the event 
 		// of a more restrictive policy
 	}
+	return nil 
 }

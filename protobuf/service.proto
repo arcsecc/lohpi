@@ -70,9 +70,10 @@ message Node {
 
 message ObjectHeader {
     string name = 1;                // Name for this study
-    Node node = 2;                  // The node that stores this study
-    Metadata metadata = 4;          // Metadata! Move to 'load'
-    Policy policy = 5;              // Policy in effect
+    string directoryName = 2;            // Filename of the directory. Same for zip file
+    Node node = 3;                  // The node that stores this study
+    //Metadata metadata = 4;          // Metadata! Move to 'load'
+    Policy policy = 4;              // Policy in effect
 }
 
 message ObjectHeaders {
@@ -100,9 +101,9 @@ message Metadata {
 
 message Policy {
     string issuer = 1;
-    string objectName = 2;
-    string filename = 3;
-    bytes content = 4; // Policy details. See Casbin policy 
+    //string objectName = 2;
+    //string filename = 2;
+    bytes content = 2; // Policy details. See Casbin policy 
 }
 
 message MsgSignature {

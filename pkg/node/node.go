@@ -1,7 +1,7 @@
 package node
 
 import (
-_	"bytes"
+	"bytes"
 	"os"
 	"path/filepath"
 	"crypto/ecdsa"
@@ -14,6 +14,8 @@ _	"bytes"
 	"time"
 	"sync"
 	"io/ioutil"
+	"net"
+	"net/http"
 
 	"github.com/tomcat-bit/lohpi/pkg/comm"
 	"github.com/tomcat-bit/lohpi/pkg/session"
@@ -56,6 +58,8 @@ type Config struct {
 	FileDigesters			int 		`default:20`
 	Root					string		`required:true`
 	FuseOn					bool		`required:true`
+	ServeHttp				bool		`default:false`
+	HttpPort				int			`required:false`
 
 	// Fuse configuration
 	FuseConfig fuse.Config
@@ -117,12 +121,14 @@ type Node struct {
 	objectHeadersMap  		map[string]*pb.ObjectHeader
 	objectHeadersMapLock 	sync.RWMutex
 
-
 	subjectsMap   	map[string][]string
 	subjectsMapLock	sync.RWMutex
 
 	// Directory where data is stored
 	rootDir string
+
+	httpListener net.Listener
+	httpServer   *http.Server
 }
 
 func NewNode(name string, config *Config) (*Node, error) {
@@ -173,8 +179,8 @@ func NewNode(name string, config *Config) (*Node, error) {
 		subjectsMap:			make(map[string][]string),
 		subjectsMapLock:		sync.RWMutex{},
 
-		rootDir: config.Root,
-		rsHandler:	session.NewManager(),
+		rootDir: 			config.Root,
+		rsHandler:			session.NewManager(),
 	}
 
 	if config.FuseOn {
@@ -183,6 +189,14 @@ func NewNode(name string, config *Config) (*Node, error) {
 			return nil, err
 		}
 		node.fs = fs
+	}
+
+	if config.ServeHttp {
+		if err := node.setHttpListener(); err != nil {
+			return nil, err
+		}
+
+		go node.startHttpHandler()
 	}
 
 	return node, nil
@@ -219,10 +233,10 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// If the study exists, we still add the subject's at the node and link to them using
 		// 'ln -s'. The operations performed by this call sets the finite state of the
 		// study. This means that any already existing files are deleted.
-		if err := n.generateData(msg.GetLoad()); err != nil {
-			panic(err)
+/*		if err := n.generateData(msg.GetLoad()); err != nil {
+			panic(err)*/
 		//	return nil, err
-		}
+		//}
 
 		// Send REC the newest updates
 		// TODO MOVE ME
@@ -236,6 +250,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		/*if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
 			panic(err)
 		}*/
+
+		// TODO: send PS initial policy
 
 		if err := n.sendObjectHeaderList(n.MuxIP); err != nil {
 			panic(err)
@@ -386,7 +402,7 @@ func (n *Node) sendRecUpdate(header *pb.ObjectHeader) error {
 
 func (n *Node) objectData(msg *pb.Message) ([]byte, error) {
 	// TODO: verify the policy attributes here..?!
-	log.Println("Client request:", msg.GetDataUserRequest())
+	/*log.Println("Client request:", msg.GetDataUserRequest())
 
 	// Enter the 'studies' (objects) sub-tree. Walk every subject folder in the object file tree
 	dirPath := fmt.Sprintf("%s/%s/%s/subjects", n.rootDir, STUDIES_DIR, msg.GetDataUserRequest().GetObjectName())
@@ -403,18 +419,18 @@ func (n *Node) objectData(msg *pb.Message) ([]byte, error) {
 	}
 
 	// TODO: optimize checking out files to client. Simple solution for now
-	objectId := msg.GetDataUserRequest().GetObjectName()
-	e := &session.Entry{Client: msg.GetDataUserRequest().GetClient()}
+	/*objectId := msg.GetDataUserRequest().GetObjectName()
+	e := &session.Entry{Client: msg.GetDataUserRequest().GetClient()}*/
 
-	if err := n.rsHandler.CheckoutObjct(objectId, e); err != nil {
+/*	if err := n.rsHandler.CheckoutObjct(objectId, e); err != nil {
 		panic(err)
-	}
+	}*/
 
 	// checkout files to the client. 
 	// The client subscribes on file policies.
 	// depending on the enforcement mode, 
 
-	return proto.Marshal(&pb.Message{ObjectFiles: objectFiles})
+	return proto.Marshal(&pb.Message{})
 }
 
 func (n *Node) findObjectFiles(clientAttr []byte, root string) (*pb.ObjectFiles, error) {
@@ -461,7 +477,7 @@ func (n *Node) findObjectFiles(clientAttr []byte, root string) (*pb.ObjectFiles,
 		return nil, err
 	}
 
-	log.Println("FILES:", files)
+	//log.Println("FILES:", files)
 	return &pb.ObjectFiles{ObjectFiles: files}, nil
 }
 
@@ -469,14 +485,16 @@ func (n *Node) findObjectFiles(clientAttr []byte, root string) (*pb.ObjectFiles,
 // files on c until either paths or done is closed.
 func (n *Node) digester(done <-chan struct{}, paths <-chan string, c chan<- objectFile, clientAttr []byte) {
 	for path := range paths { // HLpaths
-		filexAttr, _ := xattr.Get(path, n.attrKey)
+		filexAttr, _ := xattr.Get(path, XATTR_PREFIX + n.attrKey)
 		
-		/*log.Println("filexAttr:", filexAttr)
-		log.Println("clientAttr:", clientAttr)
-		if bytes.Compare(filexAttr, clientAttr) != 0 {
-			continue
-		}*/
+		log.Println("filexAttr:", filexAttr, "clientAttr:", clientAttr)
 
+		if bytes.Compare(filexAttr, clientAttr) != 0 {
+			log.Println("Not equal. Continuing...")
+			continue
+		}
+
+		log.Println("Reading file", path)
 		data, err := ioutil.ReadFile(path)
 		
 		select {
@@ -750,8 +768,32 @@ func (n *Node) insertSubject(subject string, objectId string) {
 }
 
 func (n *Node) objectHeaderExists(objectId string) bool {
+	n.objectHeadersMapLock.RLock()
+	defer n.objectHeadersMapLock.RUnlock()
+	_, ok := n.objectHeadersMap[objectId] 
+	return ok
+}
+
+func (n *Node) deleteObjectHeader(objectId string) {
 	n.objectHeadersMapLock.Lock()
 	defer n.objectHeadersMapLock.Unlock()
 	_, ok := n.objectHeadersMap[objectId] 
-	return ok
+	if ok {
+		delete(n.objectHeadersMap, objectId);
+	}
+}
+
+func (n *Node) setInitialPolicy(h *pb.ObjectHeader) error {
+	// TOOD: verify signature of mux's message
+	return nil 
+}
+
+func (n *Node) pbNode() *pb.Node {
+	return &pb.Node{
+		Name: n.NodeName(), 
+		Address: n.ifritClient.Addr(),
+		Role: "storage node", 
+		//ContactEmail
+		Id: []byte(n.ifritClient.Id()),
+	}
 }

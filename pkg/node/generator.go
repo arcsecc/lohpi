@@ -3,7 +3,7 @@ package node
 /* This file contains utilities only meant for generating 
  * dummy data. Not to be used in production.
  */
-
+/*
 import (
 	"encoding/json"
 	"bufio"
@@ -34,6 +34,7 @@ const METADATA_FILE = "metadata.json"
 // Based on the contents in 'msg', tell the FUSE daemon to create dummy files and assoicated
 // meta-data. The operation is ddempotent; the file that is effected is deleted and rewritten over again
 // per each invocation.
+/*
 func (n *Node) generateData(load *pb.Load) error {
 	objectHeader := load.GetObjectHeader()
 	minFiles := load.GetMinfiles()
@@ -94,14 +95,9 @@ func (n *Node) generateObjectData(objectHeader *pb.ObjectHeader, minFiles, maxFi
 			return err
 		}
 		
-		// Set policies
-		/*if err := n.setExtentedAttributes(s, objectHeader, numFiles); err != nil {
-			return err
-		}*/
-		if err := n.setSimpleExtentedAttributes(s, objectHeader, numFiles); err != nil {
+		if err := n.setAccessAttributes(s, objectHeader, numFiles); err != nil {
 			return err
 		}
-
 
 		// Create the directories in the "studies" part of the file tree
 		if err := n.addSubjectStudyFilesToStudy(s, objectHeader.GetName(), numFiles); err != nil {
@@ -112,7 +108,7 @@ func (n *Node) generateObjectData(objectHeader *pb.ObjectHeader, minFiles, maxFi
 	return nil
 }
 
-func (n *Node) setSimpleExtentedAttributes(subject string, objectHeader *pb.ObjectHeader, numFiles int) error {
+func (n *Node) setAccessAttributes(subject string, objectHeader *pb.ObjectHeader, numFiles int) error {
 	dirPath := fmt.Sprintf("%s/%s/%s/%s/%s", n.rootDir, SUBJECTS_DIR, subject, STUDIES_DIR, objectHeader.GetName())
 
 	for i := 1; i <= numFiles; i++ {
@@ -126,7 +122,7 @@ func (n *Node) setSimpleExtentedAttributes(subject string, objectHeader *pb.Obje
 			panic(errors.New("File does not exist"))
 		}
 
-		if err := xattr.Set(filePath, XATTR_PREFIX+n.attrKey, []byte("1")); err != nil {
+		if err := xattr.Set(filePath, XATTR_PREFIX + n.attrKey, objectHeader.GetPolicy().GetContent()); err != nil {
 			panic(err)
 		}
 	}

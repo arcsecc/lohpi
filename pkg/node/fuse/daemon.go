@@ -204,11 +204,12 @@ func (self *Ptfs) SubjectExistsInObject(subjectId, objectId string) bool {
 	}
 
 	for _, header := range headers {
-		for _, s := range header.GetMetadata().GetSubjects() {
+		_ = header
+/*		for _, s := range header.GetMetadata().GetSubjects() {
 			if subjectId == s {
 				return true
 			}
-		}
+		}*/
 	}
 	
 	return false
