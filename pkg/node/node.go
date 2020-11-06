@@ -247,9 +247,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// Notify the policy store about the newest changes
 		// TODO: avoid sending all updates - only send the newest data
 		// TODO: remove this because we send the list twice!
-		/*if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
+		if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
 			panic(err)
-		}*/
+		}
 
 		// TODO: send PS initial policy
 
@@ -538,6 +538,7 @@ func (n *Node) walkDirectoryTree(done <-chan struct{}, root string) (<-chan stri
 }
 
 // Sends the newest object header list to the Ifrit node at 'addr'
+// TODO: only send deltas
 func (n *Node) sendObjectHeaderList(addr string) error {
 	data, err := n.marshalledObjectHeaderList()
 	if err != nil {

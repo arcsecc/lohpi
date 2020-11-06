@@ -101,9 +101,9 @@ message Metadata {
 
 message Policy {
     string issuer = 1;
-    //string objectName = 2;
+    string objectName = 2;
     //string filename = 2;
-    bytes content = 2; // Policy details. See Casbin policy 
+    bytes content = 3; // Policy details. See Casbin policy 
 }
 
 message MsgSignature {

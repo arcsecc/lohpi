@@ -101,15 +101,14 @@ func (n *Node) getSubjects(w http.ResponseWriter, r *http.Request) {
 // Returns the list of nodes 
 func (n *Node) getObjectHeaders(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+	w.WriteHeader(http.StatusOK)
 	headers := n.objectHeaders()
 
 	if len(headers) == 0 { 
-		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "No project are stored")
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
 	for _, h := range headers {
 		fmt.Fprintln(w, h.GetName())
 	}
@@ -332,7 +331,14 @@ func (n *Node) indexProject(objectKey, dir string) error {
 			Content: policyContent,
 		},
 	})
+
+	// Update the policy store with the newest project list
+	if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
+		return err
+	}
 		
+	// MUX TOO
+	
 	return nil 
 }
 

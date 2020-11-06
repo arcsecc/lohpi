@@ -3,7 +3,7 @@ package policy
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
+_	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -31,9 +31,8 @@ _	"google.golang.org/grpc/peer"
 	"github.com/joonnna/workerpool"
 	"github.com/golang/protobuf/proto"
 	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
+_	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/joonnna/ifrit"
-	"github.com/gorilla/mux"
 	"github.com/golang/protobuf/ptypes/empty"
 )
 
@@ -146,22 +145,15 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	/*muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	// In-memory cache
 	cache := cache.NewCache(c)
 
-	// Listener used for interactions
-	httpListener, err := netutil.ListenOnPort(config.HttpPort)
-	if err != nil {
-		return nil, err
-	}
-
 	t := time.Duration(config.GossipInterval) * time.Second
-
 	multicastManager, err := multicast.NewMulticastManager(c, config.MulticastAcceptanceLevel, t)
 	if err != nil {
 		return nil, err
@@ -176,10 +168,9 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		cu:           		cu,
 		grpcs:		  		s,
 		dispatcher: 		workerpool.NewDispatcher(50),
-		muxClient:			muxClient,
+		//muxClient:			muxClient,
 		config: 			config,
 		configLock:			sync.RWMutex{},
-		httpListener:		httpListener,
 		multicastManager:	multicastManager,
 	}
 
@@ -191,7 +182,8 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 func (ps *PolicyStore) Start() {
 	go ps.grpcs.Start()
 	go ps.ifritClient.Start()
-	go ps.httpHandler()
+	go ps.startHttpListener(ps.config.HttpPort)
+	
 	
 	// Set Ifrit callbacks
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
@@ -234,28 +226,6 @@ func (ps *PolicyStore) Start() {
 			})
 		}
 	}
-}
-
-func (ps *PolicyStore) httpHandler() error {
-	r := mux.NewRouter()
-	log.Printf("Policy store: started HTTP server on port %d\n", ps.config.HttpPort)
-
-	// Public methods exposed to data users (usually through cURL)
-	r.HandleFunc("/probe", ps.probeHandler)
-	r.HandleFunc("/probe/stop", ps.stopProbe)
-
-	ps.httpServer = &http.Server{
-		Handler: r,
-		ReadTimeout:    10 * time.Minute,
-		WriteTimeout:   10 * time.Minute,
-	}
-
-	err := ps.httpServer.Serve(ps.httpListener)
-	if err != nil {
-		log.Fatalf(err.Error())
-		return err
-	}
-	return nil
 }
 
 // Invoked by ifrit message handler
@@ -354,6 +324,7 @@ func (ps *PolicyStore) Stop() {
 // Contacts the given remote address and adds the remote's Ifrit IP address to the list of ignored IP addresses.
 // The local name and local address is the local identifiers of the Ifrit client.
 func (ps *PolicyStore) ignoreMuxIfritIPAddress() (string, string, error) {
+	return "", "", nil 
 	conn, err := ps.muxClient.Dial(ps.config.MuxIP)
 	if err != nil {
 		return "", "", err
@@ -543,14 +514,15 @@ func (ps *PolicyStore) storePolicy(p *pb.Policy) error {
 		}
 	}
 
-	fullPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetObjectName(), p.GetFilename())
-	return ioutil.WriteFile(fullPath, p.GetContent(), 0644)
+/*	fullPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetObjectName(), p.GetFilename())
+	return ioutil.WriteFile(fullPath, p.GetContent(), 0644)*/
+	return nil
 }
 
 // Commit the policy model to the Git repository
 func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 	// Get the current worktree
-	worktree, err := ps.repository.Worktree()
+	/*worktree, err := ps.repository.Worktree()
 	if err != nil {
 		panic(err)
 	}
@@ -601,7 +573,7 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 	}
 
 	//fmt.Println(obj)
-	_ = obj
+	_ = obj*/
 	return nil
 }
 
@@ -618,6 +590,7 @@ func (ps *PolicyStore) Shutdown() {
 }
 
 // Updates the internal cache by assigning the object headers' ids to the object headers themselves
+// TODO: update only deltas. Sync with node'S implementation
 func (ps *PolicyStore) updateObjectHeaders(objectHeaders *pb.ObjectHeaders) {
 	for _, header := range objectHeaders.GetObjectHeaders() {
 		objectID := header.GetName()

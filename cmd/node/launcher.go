@@ -80,10 +80,9 @@ func main() {
 		panic(err)
 	}*/
 
-	/*
 	if err := node.PolicyStoreHandshake(); err != nil {
 		panic(err)
-	}*/
+	}
 
 	// Wait for SIGTERM signal from the environment
 	channel := make(chan os.Signal, 2)
