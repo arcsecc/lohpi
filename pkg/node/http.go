@@ -195,28 +195,26 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 	err = n.inflateZipDirectory(uploadedZipFilePath, targetZipDirectory)
 	if err != nil {
 		log.Println(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
     	return
 	} 
 
 	// 
 	inflatedDirectoryName := strings.TrimSuffix(filepath.Base(h.Filename), ".zip")
 	inflatedDir := filepath.Join(PROJECTS_DIRECTORY, objectKey, inflatedDirectoryName, inflatedDirectoryName)
+	
 	// Index the project files in the project directory. Detele everything if it fails.
 	if err := n.indexProject(objectKey, inflatedDir); err != nil {
-		// Clean-up files when things went wrong
-		e := os.Remove(uploadedZipFilePath) 
+		// Remove everything, starting from the "object key" directory
+		e := os.RemoveAll(filepath.Join(PROJECTS_DIRECTORY, objectKey))
     	if e != nil { 
 			log.Println(err.Error())
-		}
-
-		e = os.RemoveAll(targetZipDirectory) 
-    	if e != nil { 
-			log.Println(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + e.Error(), http.StatusInternalServerError)
+			return
 		}
 		
 		log.Println(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
     	return
 	}
 
@@ -225,6 +223,7 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
     if e != nil { 
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
 	} 
 	
 	w.WriteHeader(http.StatusOK)
