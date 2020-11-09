@@ -36,6 +36,11 @@ func (n *Node) setHttpListener() error {
 }
 
 func (n *Node) startHttpHandler() error {
+	// Before serving files, remove previous states from disk
+	if err := os.RemoveAll(PROJECTS_DIRECTORY); err != nil {
+		return err
+	}
+
 	router := mux.NewRouter()
 	log.Printf("%s: Started HTTP server on port %d\n", n.name, n.config.HttpPort)
 
@@ -62,6 +67,9 @@ func (n *Node) startHttpHandler() error {
 func (n *Node) removeProject(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
+	w.Header().Set("Access-Control-Request-Method", "DELETE")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	// Require GET parameters (object key)
 	query := r.URL.Query()
 	objectKey := query.Get("object_id")
@@ -78,7 +86,6 @@ func (n *Node) removeProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if the files are checked out... return error if some files are
-
 	if err := n.deleteProjectFiles(objectKey); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
@@ -103,11 +110,10 @@ func (n *Node) getObjectHeaders(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	headers := n.objectHeaders()
 
-	if len(headers) == 0 { 
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "No project are stored")
-		return
-	}
+	// TODO: move header values to somewhere else
+	// REMOVE when in production
+	w.Header().Set("Access-Control-Request-Method", "GET")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	w.WriteHeader(http.StatusOK)
 	for _, h := range headers {
@@ -118,7 +124,9 @@ func (n *Node) getObjectHeaders(w http.ResponseWriter, r *http.Request) {
 // HTTP handler for uploading a zip file to the server
 func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	
+	w.Header().Set("Access-Control-Request-Method", "POST")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	// Create directory into which we store the zip files
 	if s, err := os.Stat(PROJECTS_DIRECTORY); err != nil {
         if os.IsNotExist(err) {
@@ -143,15 +151,15 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	objectKey := query.Get("object_id")
 	if objectKey == "" {
-		errMsg := errors.New("Missing project/object ID.")
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": " + errMsg.Error(), http.StatusInternalServerError)
+		errMsg := fmt.Errorf("Missing project identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
         return
 	}
 	
 	// If project is already stored on the node, return error
 	if n.objectHeaderExists(objectKey) {
-		errMsg := fmt.Errorf("Project with id '%s' already exists", objectKey)
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+		errMsg := fmt.Errorf("Project with ID '%s' already exists", objectKey)
+		http.Error(w, http.StatusText(http.StatusConflict)+": " + errMsg.Error(), http.StatusConflict)
         return
 	}
 
@@ -176,16 +184,18 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 	uploadedZipFilePath := filepath.Join(PROJECTS_DIRECTORY, objectKey, filepath.Base(h.Filename))
     t, err := os.OpenFile(uploadedZipFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
     if err != nil {
-    	log.Printf("Opening output file: %s", err)
-        http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		log.Printf("Opening output file: %s", err)
+		errMsg := fmt.Errorf("Error uploading zip file to storage node.")
+        http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + errMsg.Error(), http.StatusInternalServerError)
         return
     }
     defer t.Close()
 
     // Copy the zip file
     if _, err = io.Copy(t, f); err != nil {
-    	log.Printf("Copying to output file: %s", err)
-        http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		log.Printf("Copying to output file: %s", err)
+		errMsg := fmt.Errorf("Error processing uploaded zip file to storage node.")
+        http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + errMsg.Error(), http.StatusInternalServerError)
     	return
 	}
 
@@ -195,7 +205,8 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 	err = n.inflateZipDirectory(uploadedZipFilePath, targetZipDirectory)
 	if err != nil {
 		log.Println(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		errMsg := fmt.Errorf("Error processing uploaded zip file to storage node.")
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+errMsg.Error(), http.StatusInternalServerError)
     	return
 	} 
 
@@ -209,12 +220,14 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 		e := os.RemoveAll(filepath.Join(PROJECTS_DIRECTORY, objectKey))
     	if e != nil { 
 			log.Println(err.Error())
-			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + e.Error(), http.StatusInternalServerError)
+			errMsg := fmt.Errorf("Error processing uploaded zip file to storage node.")
+			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + errMsg.Error(), http.StatusInternalServerError)
 			return
 		}
 		
 		log.Println(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		errMsg := fmt.Errorf("Error indexing project in storage node.")
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + errMsg.Error(), http.StatusBadRequest)
     	return
 	}
 
@@ -226,7 +239,7 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 		return
 	} 
 	
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
     w.Write([]byte("Successfully uploaded project directory to the storage server\n"))
 }
 
