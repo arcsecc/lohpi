@@ -184,7 +184,6 @@ func (ps *PolicyStore) Start() {
 	go ps.ifritClient.Start()
 	go ps.startHttpListener(ps.config.HttpPort)
 	
-	
 	// Set Ifrit callbacks
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
 	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
@@ -495,6 +494,18 @@ func (ps *PolicyStore) StoreObjectHeader(ctx context.Context, objectHeader *pb.O
 
 	// Gossip the policy update to the network
 	return &empty.Empty{}, nil
+}
+
+func (ps *PolicyStore) GetObjectHeaders(ctx context.Context, e *empty.Empty) (*pb.ObjectHeaders, error) {
+	objectHeaders := &pb.ObjectHeaders{
+		ObjectHeaders: make([]*pb.ObjectHeader, 0),
+	}
+
+	for _, objectValue := range ps.cache.ObjectHeaders() {
+		objectHeaders.ObjectHeaders = append(objectHeaders.ObjectHeaders, objectValue)
+	}
+	
+	return objectHeaders, nil
 }
 
 // Stores the given policy on disk

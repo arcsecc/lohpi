@@ -108,13 +108,13 @@ func (n *Node) getSubjects(w http.ResponseWriter, r *http.Request) {
 // Returns the list of nodes 
 func (n *Node) getObjectHeaders(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	w.WriteHeader(http.StatusOK)
-	headers := n.objectHeaders()
-
 	// TODO: move header values to somewhere else
 	// REMOVE when in production
 	w.Header().Set("Access-Control-Request-Method", "GET")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	
+	w.WriteHeader(http.StatusOK)
+	headers := n.objectHeaders()
 
 	for _, h := range headers {
 		fmt.Fprintln(w, h.GetName())

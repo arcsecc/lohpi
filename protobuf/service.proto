@@ -14,14 +14,9 @@ service Mux {
 
 service PolicyStore {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    //rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
-    //rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
-    rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
-}
-
-service Rec {
-    rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
     rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
+    rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
 }
 
 message Client {

@@ -3,74 +3,44 @@ package rec
 // Common operations in REC are implemented here
 
 import (
+	"fmt"
+
 	pb "github.com/tomcat-bit/lohpi/protobuf" 
 )
 
 // Adds the given study to the internal maps. The embedded subjects are added as well
-func (r *Rec) createObject(objectHeader *pb.ObjectHeader) {
+func (r *Rec) insertObjectHeader(objectHeader *pb.ObjectHeader) {
 	// Add study to internal memory map. Assign the subjects to that study.
 	// Performs a complete overwrite of the data structures
-	r.objectSubjectsLock.Lock()
-	if r.objectSubjects[objectHeader.GetName()] == nil {
-		r.objectSubjects[objectHeader.GetName()] = make([]string, 0)
-		r.objectSubjects[objectHeader.GetName()] = append(r.objectSubjects[objectHeader.GetName()], objectHeader.GetMetadata().GetSubjects()...)
-	} else {
-		for _, sub := range objectHeader.GetMetadata().GetSubjects() {
-			if !r.subjectInObject(sub, objectHeader.GetName()) {
-				r.objectSubjects[objectHeader.GetName()] = append(r.objectSubjects[objectHeader.GetName()], sub)
-			}
-		}
+	r.objectHeadersLock.Lock()
+	defer r.objectHeadersLock.Unlock()
+	r.objectHeadersMap[objectHeader.GetName()] = objectHeader
+}
+
+func (r *Rec) setObjectPolicy(objectId string, p *pb.Policy) error {
+	// Fetch object header
+	r.objectHeadersLock.RLock()
+	h, exists := r.objectHeadersMap[objectId]
+	if !exists {
+		r.objectHeadersLock.RUnlock()
+		return fmt.Errorf("Project with ID '%s' does not exist")
 	}
-	r.objectSubjectsLock.Unlock()
+	r.objectHeadersLock.RUnlock()
+	
+	h.Policy = p
+	r.insertObjectHeader(h)
+	return nil 
 }
 
-func (r *Rec) enrollSubjects(objectHeader *pb.ObjectHeader) {
-	r.subjectObjectsLock.Lock()
-	defer r.subjectObjectsLock.Unlock()
-	for _, o := range objectHeader.GetMetadata().GetSubjects() {
-		if _, ok := r.subjectObjects[o]; !ok {
-			r.subjectObjects[o] = make([]string, 0)
-		}
-		r.subjectObjects[o] = append(r.subjectObjects[o], objectHeader.GetName())
-	}
+func (r *Rec) objectHeaders() map[string]*pb.ObjectHeader {
+	r.objectHeadersLock.RLock()
+	defer r.objectHeadersLock.RUnlock()
+	return r.objectHeadersMap
 }
 
-func (r *Rec) setObjectPolicy(objectName string, p *pb.Policy) {
-	r.objectPoliciesLock.Lock()
-	defer r.objectPoliciesLock.Unlock()
-	r.objectPolicies[objectName] = p
-}
-
-func (r *Rec) objectSubjectsMap() map[string][]string {
-	r.objectSubjectsLock.RLock()
-	defer r.objectSubjectsLock.RUnlock()
-	return r.objectSubjects
-}
-
-func (r *Rec) objectPoliciesMap() map[string]*pb.Policy {
-	r.objectPoliciesLock.RLock()
-	defer r.objectPoliciesLock.RUnlock()
-	return r.objectPolicies
-}
-
-func (r *Rec) subjectStudiesMap() map[string][]string {
-	r.subjectObjectsLock.RLock()
-	defer r.subjectObjectsLock.RUnlock()
-	return r.subjectObjects
-}
-
-func (r *Rec) objectExists(study string) bool {
-	m := r.objectPoliciesMap()
-	_, exists := m[study]
+func (r *Rec) objectHeaderExists(id string) bool {
+	r.objectHeadersLock.RLock()
+	defer r.objectHeadersLock.RUnlock()
+	_, exists := r.objectHeadersMap[id]
 	return exists
-}
-
-func (r *Rec) subjectInObject(subject, objectName string) bool {
-	subjects := r.objectSubjectsMap()[objectName]
-	for _, s := range subjects {
-		if s == subject {
-			return true
-		}
-	}
-	return false
 }

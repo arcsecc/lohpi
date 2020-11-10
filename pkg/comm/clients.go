@@ -32,15 +32,15 @@ type PolicyStoreConn struct {
 	cc *grpc.ClientConn
 }
 
-type RecGRPCClient struct {
+/*type RecGRPCClient struct {
 	dialOptions []grpc.DialOption
 	pb.RecClient
-}
+}*/
 
-type RecConn struct {
+/*type RecConn struct {
 	pb.RecClient
 	cc *grpc.ClientConn
-}
+}*/
 
 func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*MuxGRPCClient, error) {
 	var dialOptions []grpc.DialOption
@@ -106,7 +106,7 @@ func (c *PolicyStoreConn) CloseConn() {
 	c.cc.Close()
 }
 
-func NewRecClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*RecGRPCClient, error) {
+/*func NewRecClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*RecGRPCClient, error) {
 	var dialOptions []grpc.DialOption
 	// check paramters here
 	config := ClientConfig(cert, caCert, priv)
@@ -136,4 +136,4 @@ func (c *RecGRPCClient) Dial(addr string) (*RecConn, error) {
 
 func (c *RecConn) CloseConn() {
 	c.cc.Close()
-}
+}*/

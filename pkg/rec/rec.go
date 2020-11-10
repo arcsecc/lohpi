@@ -1,11 +1,8 @@
 package rec
 
 import (
-	"io"
-	"bytes"
 	"fmt"
-	"math/rand"
-	"reflect"
+	"io/ioutil"
 	"log"
 	"crypto/x509/pkix"
 	"net"
@@ -55,24 +52,12 @@ type Rec struct {
 	// Tickers
 	durationPolicyUpdates time.Duration
 
-	// gRPC server
-	recServer *gRPCServer
-
 	// gRPC clients
 	muxClient *comm.MuxGRPCClient
 	psClient *comm.PolicyStoreGRPCClient
 
-	// In-memory map. study -> list of subjects in this study
-	objectSubjects map[string][]string
-	objectSubjectsLock sync.RWMutex
-
-	// Study identifier -> policy object
-	objectPolicies map[string]*pb.Policy
-	objectPoliciesLock sync.RWMutex
-
-	// Subject -> list of objects it participates in
-	subjectObjects map[string][]string
-	subjectObjectsLock sync.RWMutex
+	objectHeadersMap map[string]*pb.ObjectHeader
+	objectHeadersLock sync.RWMutex
 
 	httpListener net.Listener
 	httpServer   *http.Server
@@ -98,16 +83,6 @@ func NewRec(config *RecConfig) (*Rec, error) {
 		return nil, err
 	}
 
-	server, err := newRecGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.Priv(), listener)
-	if err != nil {
-		return nil, err
-	}
-
-	muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
-	if err != nil {
-		return nil, err
-	}
-
 	psClient, err := comm.NewPolicyStoreClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
 		return nil, err
@@ -122,18 +97,9 @@ func NewRec(config *RecConfig) (*Rec, error) {
 	rec := &Rec{
 		name:					"Regional ethics committee",
 		config: 				config,
-		durationPolicyUpdates: 	time.Minute / time.Duration(config.UpdatePoliciesPerMinute),
-		recServer: 				server,
-		muxClient: 				muxClient, 
-		
-		objectSubjects:			make(map[string][]string),
-		objectSubjectsLock:		sync.RWMutex{},
-		
-		objectPolicies:			make(map[string]*pb.Policy),
-		objectPoliciesLock:		sync.RWMutex{},
-		
-		subjectObjects:			make(map[string][]string),
-		subjectObjectsLock:		sync.RWMutex{},
+				
+		objectHeadersMap:		make(map[string]*pb.ObjectHeader),
+		objectHeadersLock:		sync.RWMutex{},
 		
 		psClient: 				psClient,
 		httpListener: 			httpListener,
@@ -141,42 +107,21 @@ func NewRec(config *RecConfig) (*Rec, error) {
 		broadcastPoliciesChan: 	make(chan bool),
 		stopBroadcastingChan:	make(chan bool),
 	}
-
-	rec.recServer.Register(rec)
 		
 	return rec, nil
 }
 
 func (r *Rec) Start() {
-	log.Println("REC running at", r.recServer.Addr())
-	go r.recServer.Start()
 	go r.HttpHandler()
 	go r.broadcastPolicies()
-	
-	//policyUpdatesTicker := time.Tick(r.durationPolicyUpdates)
-
-	// Setup directories containing the studies and the metadata
-	r.setupDirectoryTree(r.config.RecDirectory + "/" + "metadata")
-	r.setupDirectoryTree(r.config.RecDirectory + "/" + "policies")
-
-	//for i := 0; i < 100; i++ {
-	/*for {
-		select {
-		case <-policyUpdatesTicker:
-			r.pushStudyPolicy()
-		}
-	}*/
-
 }
 
 func (r *Rec) HttpHandler() error {
 	router := mux.NewRouter()
 	log.Printf("REC: Started HTTP server on port %d\n", r.config.HttpPort)
 
-	router.HandleFunc("/studies", r.studiesHandler).Methods("GET")
-	router.HandleFunc("/study/set_policy", r.setPolicyHandler).Methods("POST")
-	router.HandleFunc("/study/broadcast_policies/start", r.startBroadcastPoliciesHandler)
-	router.HandleFunc("/study/broadcast_policies/stop", r.stopBroadcastPoliciesHandler)
+	router.HandleFunc("/objects", r.getObjectHeaders).Methods("GET")
+	router.HandleFunc("/set_policy", r.setPolicyHandler).Methods("POST")
 	router.HandleFunc("/help", r.httpHelp)
 
 	r.httpServer = &http.Server{
@@ -192,19 +137,31 @@ func (r *Rec) HttpHandler() error {
 }
 
 // Invoked each time a HTTP client requests information about the studies
-func (r *Rec) studiesHandler(w http.ResponseWriter, req *http.Request) {
+func (r *Rec) getObjectHeaders(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-	if req.Method != http.MethodGet {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
-		return
+	// TODO: move header values to somewhere else
+	// REMOVE when in production
+	w.Header().Set("Access-Control-Request-Method", "GET")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Connect to policy store
+	conn, err := r.psClient.Dial(r.config.PolicyStoreIP)
+	if err != nil {
+		panic(err)
 	}
+	
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 20)
+	defer cancel()
 
-	m := r.objectPoliciesMap()
+	headers, err := conn.GetObjectHeaders(ctx, &empty.Empty{})
+	if err != nil {
+		panic(err)
+	}
+	
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Studies and their assoicated policies:\n")
-
-	for o, p := range m {
-		fmt.Fprintf(w, "Study: %s\tPolicy text: \n%s\n\n", o, p.GetContent())
+	for _, h := range headers.GetObjectHeaders() {
+		fmt.Fprintln(w, h.GetName())
 	}
 }
 
@@ -212,6 +169,19 @@ func (r *Rec) studiesHandler(w http.ResponseWriter, req *http.Request) {
 func (r *Rec) setPolicyHandler(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
+	w.Header().Set("Access-Control-Request-Method", "POST")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Fetch the project identifier
+	query := req.URL.Query()
+	objectKey := query.Get("object_id")
+	if objectKey == "" {
+		errMsg := fmt.Errorf("Missing project identifier from request")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+        return
+	}
+
+	// Fetch the policy content
 	err := req.ParseMultipartForm(32 << 20)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -219,15 +189,43 @@ func (r *Rec) setPolicyHandler(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if req.MultipartForm == nil || req.MultipartForm.File == nil {
-		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
+		err := fmt.Errorf("Expected policy file in POST request")
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if req.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
+	// Fetch the policy file from the request
+	f, _, err := req.FormFile("file")
+	if err != nil {
+		log.Printf("Error accessing file: %s", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
-	
+	defer f.Close()
+
+	pFileContents, err := ioutil.ReadAll(f)
+	if err != nil {
+		panic(err)
+	}
+
+	conn, err := r.psClient.Dial(r.config.PolicyStoreIP)
+	if err != nil {
+		log.Fatalf(err.Error())
+	}
+
+	defer conn.CloseConn()
+	ctx, cancel := context.WithTimeout(context.Background(), 2 * time.Minute)
+	defer cancel()
+
+	_, err = conn.SetPolicy(ctx, &pb.Policy{
+		Issuer: "REC",
+    	ObjectName: objectKey,
+    	Content: pFileContents,
+	})
+	if err != nil {
+		log.Fatalf(err.Error())
+	}
+/*	
 	// Evaluate the study
 	objectName := req.PostFormValue("object")
 	if !r.objectExists(objectName) {
@@ -266,7 +264,7 @@ func (r *Rec) setPolicyHandler(w http.ResponseWriter, req *http.Request) {
 
 	if err := r.storeObjectHeader(p); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	}*/
 }
 
 func (r *Rec) startBroadcastPoliciesHandler(w http.ResponseWriter, req *http.Request) {
@@ -322,15 +320,7 @@ func (r *Rec) httpHelp(w http.ResponseWriter, req *http.Request) {
 // Stores the given study in REC, along with the metadata and the policy
 func (r *Rec) StoreObjectHeader(ctx context.Context, objectHeader *pb.ObjectHeader) (*empty.Empty, error) {
 	// Creates the given study 
-	r.createObject(objectHeader)
-
-	// Enrolls subjects into the study. Each subject can participate in several studies
-	r.enrollSubjects(objectHeader)
-
-	// Store the metadata on stable storage
-	if err := r.storeMetadata(objectHeader.GetName(), objectHeader.GetMetadata().GetContent()); err != nil {
-		panic(err)	// use more descriptive error
-	}
+	r.insertObjectHeader(objectHeader)
 
 	r.setObjectPolicy(objectHeader.GetName(), objectHeader.GetPolicy())
 	
@@ -343,6 +333,7 @@ func (r *Rec) StoreObjectHeader(ctx context.Context, objectHeader *pb.ObjectHead
 }
 
 // Stores the given metadata on disk
+// Not used
 func (r *Rec) storeMetadata(study string, metadata []byte) error {
 	filePath := r.config.RecDirectory + "/" + "metadata" + "/" + study + ".json"
 	mdFile, err := os.Create(filePath)
@@ -411,21 +402,6 @@ func (r *Rec) setupDirectoryTree(path string) error {
 		}
 	}
 	return nil 
-}
-
-// Returns a random study
-func (r *Rec) getRandomStudy() string {
-	objects := r.objectSubjectsMap()
-	objIdx := rand.Int() % len(objects) 
-	objList := reflect.ValueOf(objects).MapKeys()
-	return objList[objIdx].String()
-}
-
-func (r *Rec) getRandomSubject() string {
-	studies := r.subjectStudiesMap()
-	studyIdx := rand.Int() % len(studies) 
-	subjects := reflect.ValueOf(studies).MapKeys()
-	return subjects[studyIdx].String()
 }
 
 func (r *Rec) Stop() {

@@ -105,7 +105,7 @@ type Node struct {
 	psClient *comm.PolicyStoreGRPCClient
 
 	// REC client
-	recClient *comm.RecGRPCClient
+//	recClient *comm.RecGRPCClient
 
 	// Used for identifying data coming from policy store
 	MuxID []byte
@@ -159,16 +159,16 @@ func NewNode(name string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
-	recClient, err := comm.NewRecClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+/*	recClient, err := comm.NewRecClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	node := &Node{
 		name:     		name,
 		ifritClient:  	ifritClient,
 		muxClient: 		muxClient, 
-		recClient:		recClient,
+		//recClient:		recClient,
 		config: 		config,
 		psClient: 		psClient,
 		attrKey:		"XATTR",
@@ -253,9 +253,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 
 		// TODO: send PS initial policy
 
-		if err := n.sendObjectHeaderList(n.MuxIP); err != nil {
+		/*if err := n.sendObjectHeaderList(n.MuxIP); err != nil {
 			panic(err)
-		}
+		}*/
 
 	case message.MSG_TYPE_GET_OBJECT_HEADER_LIST:
 		return n.marshalledObjectHeaderList()
@@ -379,7 +379,7 @@ func (n *Node) setPolicy(msg *pb.Message) {
 }
 
 // Move to bootstrap module?
-func (n *Node) sendRecUpdate(header *pb.ObjectHeader) error {
+/*func (n *Node) sendRecUpdate(header *pb.ObjectHeader) error {
 	conn, err := n.recClient.Dial(n.config.RecIP)
 	if err != nil {
 		log.Println(err.Error())
@@ -398,7 +398,7 @@ func (n *Node) sendRecUpdate(header *pb.ObjectHeader) error {
 	}
 	
 	return nil 
-}
+}*/
 
 func (n *Node) objectData(msg *pb.Message) ([]byte, error) {
 	// TODO: verify the policy attributes here..?!
