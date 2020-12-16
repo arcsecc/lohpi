@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"github.com/tomcat-bit/lohpi/pkg/netutil"
-	"github.com/spf13/viper"
 	"io"
 	"math/big"
 	"net"
@@ -25,9 +24,10 @@ import (
 )
 
 var (
-	errNoPort         = errors.New("No port number specified in config.")
-	errNoCertFilepath = errors.New("Tried to save public group certificates with no filepath set in config")
-	errNoKeyFilepath  = errors.New("Tried to save private key with no filepath set in config")
+	errNoPort         = errors.New("No Port number specified in config.")
+	errNoCertFilePath = errors.New("Tried to save public group certificates with no filepath set in config")
+	errNoKeyFilePath  = errors.New("Tried to save private key with no filepath set in config")
+	errNoConfig 	  = errors.New("Configuration is null.")
 )
 
 type Ca struct {
@@ -35,17 +35,21 @@ type Ca struct {
 	pubKey  crypto.PublicKey
 	caCert  *x509.Certificate
 
-	keyFilePath  string
-	certFilePath string
-
 	listener   net.Listener
 	httpServer *http.Server
+
+	config *CaConfig
 }
 
-func NewCa() (*Ca, error) {
-	err := readConfig()
-	if err != nil {
-		return nil, err
+type CaConfig struct {
+	KeyFilePath  string
+	CertFilePath string
+	Port int		
+}
+
+func NewCa(c *CaConfig) (*Ca, error) {
+	if c == nil {
+		return nil, errNoConfig
 	}
 
 	privKey, err := genKeys()
@@ -53,11 +57,7 @@ func NewCa() (*Ca, error) {
 		return nil, err
 	}
 
-	if exists := viper.IsSet("port"); !exists {
-		return nil, errNoPort
-	}
-
-	listener, err := netutil.ListenOnPort(viper.GetInt("port"))
+	listener, err := netutil.ListenOnPort(c.Port)
 	if err != nil {
 		return nil, err
 	}
@@ -67,31 +67,30 @@ func NewCa() (*Ca, error) {
 		return nil, err
 	}
 
-	c := &Ca{
+	ca := &Ca{
 		privKey:      privKey,
 		pubKey:       privKey.Public(),
 		caCert:       caCert,
 		listener:     listener,
-		keyFilePath:  viper.GetString("key_filepath"),
-		certFilePath: viper.GetString("certificate_filepath"),
+		config:		  c, 
 	}
 
-	return c, nil
+	return ca, nil
 }
 
 // SavePrivateKey writes the CA private key to the given io object.
 func (c *Ca) SavePrivateKey() error {
-	if c.keyFilePath == "" {
-		return errNoKeyFilepath
+	if c.config.KeyFilePath == "" {
+		return errNoKeyFilePath
 	}
 
-	f, err := os.Create(c.keyFilePath)
+	f, err := os.Create(c.config.KeyFilePath)
 	if err != nil {
 		log.Error(err.Error())
 		return err
 	}
 
-	log.Info("Save Lohpi CA private key.", "file", c.keyFilePath)
+	log.Info("Save Lohpi CA private key.", "file", c.config.KeyFilePath)
 
 	b := x509.MarshalPKCS1PrivateKey(c.privKey)
 
@@ -105,17 +104,17 @@ func (c *Ca) SavePrivateKey() error {
 
 // SaveCertificate Public key / certifiace to the given io object.
 func (c *Ca) SaveCertificate() error {
-	if c.certFilePath == "" {
-		return errNoCertFilepath
+	if c.config.CertFilePath == "" {
+		return errNoCertFilePath
 	}
 
-	f, err := os.Create(c.certFilePath)
+	f, err := os.Create(c.config.CertFilePath)
 	if err != nil {
 		log.Error(err.Error())
 		return err
 	}
 
-	log.Info("Save Lohpi CA certificate.", "file", c.certFilePath)
+	log.Info("Save Lohpi CA certificate.", "file", c.config.CertFilePath)
 
 	b := c.caCert.Raw
 	block := &pem.Block{
@@ -138,7 +137,7 @@ func (c *Ca) Start() error {
 func (c *Ca) httpHandler() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/certificateRequest", c.certificateSigning)
-	mux.HandleFunc("/test", c.test)
+	mux.HandleFunc("/clientCertificateRequest", c.clientCertificateSigning)
 
 	c.httpServer = &http.Server{
 		Handler: mux,
@@ -153,7 +152,7 @@ func (c *Ca) httpHandler() error {
 	return nil
 }
 
-func (c *Ca) test(w http.ResponseWriter, r *http.Request) {
+func (c *Ca) clientCertificateSigning(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	fmt.Fprintf(w, "hello from Lohpi ca")
 }
@@ -190,7 +189,6 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 
 	newCert := &x509.Certificate{
 		SerialNumber: serialNumber,
-		//		SubjectKeyId:    id,
 		Subject:         reqCert.Subject,
 		NotBefore:       time.Now().AddDate(-10, 0, 0),
 		NotAfter:        time.Now().AddDate(10, 0, 0),
@@ -283,19 +281,4 @@ func genSerialNumber() (*big.Int, error) {
 	}
 
 	return s, nil
-}
-
-func readConfig() error {
-	viper.SetConfigName("lohpi_ca_config")
-	viper.AddConfigPath("/var/tmp")
-	viper.AddConfigPath(".")
-
-	viper.SetConfigType("yaml")
-
-	err := viper.ReadInConfig()
-	if err != nil {
-		log.Error(err.Error())
-		return err
-	}
-	return nil
 }

@@ -1,0 +1,4 @@
+caconfig:
+    keyfilepath: "/var/tmp/lohpi_ca_key"
+    certfilepath: "/var/tmp/lohpi_cert"
+    port: 8301
