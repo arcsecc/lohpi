@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"github.com/tomcat-bit/lohpi/pkg/netutil"
+	_"github.com/tomcat-bit/lohpi/pkg/netutil"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"strings"
+	"path/filepath"
+	"io/ioutil"
 	"time"
 	"os"
 
@@ -38,26 +40,13 @@ type Ca struct {
 	listener   net.Listener
 	httpServer *http.Server
 
-	config *CaConfig
+	dirPath string
+	keyFilePath string
+	certFilePath string
 }
 
-type CaConfig struct {
-	KeyFilePath  string
-	CertFilePath string
-	Port int		
-}
-
-func NewCa(c *CaConfig) (*Ca, error) {
-	if c == nil {
-		return nil, errNoConfig
-	}
-
+func NewCa(path string) (*Ca, error) {
 	privKey, err := genKeys()
-	if err != nil {
-		return nil, err
-	}
-
-	listener, err := netutil.ListenOnPort(c.Port)
 	if err != nil {
 		return nil, err
 	}
@@ -67,30 +56,72 @@ func NewCa(c *CaConfig) (*Ca, error) {
 		return nil, err
 	}
 
-	ca := &Ca{
-		privKey:      privKey,
-		pubKey:       privKey.Public(),
-		caCert:       caCert,
-		listener:     listener,
-		config:		  c, 
+	c := &Ca{
+		privKey:     privKey,
+		pubKey:      privKey.Public(),
+		caCert:		 caCert,
+		dirPath:        path,
+		keyFilePath: "key.pem",
+		certFilePath: "cert.pem",
 	}
 
-	return ca, nil
+	return c, nil
+}
+
+// LoadCa initializes a CA from a file path
+func LoadCa(path string) (*Ca, error) {
+	keyPath := filepath.Join(path, "key.pem")
+
+	fp, err := ioutil.ReadFile(keyPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load private key
+	keyBlock, _ := pem.Decode(fp)
+	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load certificate
+	certPath :=  filepath.Join(path, "cert.pem")
+	fp, err = ioutil.ReadFile(certPath)
+	if err != nil {
+		return nil, err
+	}
+
+	certBlock, _ := pem.Decode(fp)
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	
+	c := &Ca{
+		privKey:     key,
+		pubKey:      key.Public(),
+		caCert:		cert,
+		dirPath:        path,
+		keyFilePath: "key.pem",
+		certFilePath: "cert.pem",
+	}
+
+	return c, nil
 }
 
 // SavePrivateKey writes the CA private key to the given io object.
 func (c *Ca) SavePrivateKey() error {
-	if c.config.KeyFilePath == "" {
+	if c.keyFilePath == "" {
 		return errNoKeyFilePath
 	}
 
-	f, err := os.Create(c.config.KeyFilePath)
+	p := filepath.Join(c.dirPath, c.keyFilePath)
+
+	f, err := os.Create(p)
 	if err != nil {
 		log.Error(err.Error())
 		return err
 	}
-
-	log.Info("Save Lohpi CA private key.", "file", c.config.KeyFilePath)
 
 	b := x509.MarshalPKCS1PrivateKey(c.privKey)
 
@@ -104,17 +135,18 @@ func (c *Ca) SavePrivateKey() error {
 
 // SaveCertificate Public key / certifiace to the given io object.
 func (c *Ca) SaveCertificate() error {
-	if c.config.CertFilePath == "" {
+	if c.certFilePath == "" {
 		return errNoCertFilePath
 	}
 
-	f, err := os.Create(c.config.CertFilePath)
+	p := filepath.Join(c.dirPath, c.certFilePath)
+	f, err := os.Create(p)
 	if err != nil {
 		log.Error(err.Error())
 		return err
 	}
 
-	log.Info("Save Lohpi CA certificate.", "file", c.config.CertFilePath)
+	log.Info("Save Lohpi CA certificate.", "file", c.certFilePath)
 
 	b := c.caCert.Raw
 	block := &pem.Block{
@@ -129,9 +161,21 @@ func (c *Ca) SaveCertificate() error {
 	return nil
 }
 
-func (c *Ca) Start() error {
-	log.Info("Started Lohpi certificate authority", "addr", c.listener.Addr().String())
+func (c *Ca) Start(host string, port int) error {
+	l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		return err
+	}
+	c.listener = l
+
+	log.Info("Started certificate authority", "addr", c.listener.Addr().String())
+
 	return c.httpHandler()
+}
+
+func (c *Ca) Shutdown() {
+	log.Info("Shuting down certificate authority")
+	c.listener.Close()
 }
 
 func (c *Ca) httpHandler() error {
@@ -170,10 +214,10 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("Got a Lohpi certificate request", "addr", reqCert.Subject.Locality)
 
-	ext := pkix.Extension{
+/*	ext := pkix.Extension{
 		Id:       []int{2, 5, 13, 37},
 		Critical: false,
-	}
+	}*/
 
 	serialNumber, err := genSerialNumber()
 	if err != nil {
@@ -188,11 +232,11 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newCert := &x509.Certificate{
-		SerialNumber: serialNumber,
+		SerialNumber: 	serialNumber,
 		Subject:         reqCert.Subject,
 		NotBefore:       time.Now().AddDate(-10, 0, 0),
 		NotAfter:        time.Now().AddDate(10, 0, 0),
-		ExtraExtensions: []pkix.Extension{ext},
+		//ExtraExtensions: []pkix.Extension{ext},
 		PublicKey:       reqCert.PublicKey,
 		IPAddresses:     []net.IP{ipAddr.IP},
 		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},

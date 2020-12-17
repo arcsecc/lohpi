@@ -40,7 +40,7 @@
 
 # End of https://www.gitignore.io/api/go
 
-#**/*
+**/*
 !**/*.go
 !**/
 notes
@@ -51,3 +51,5 @@ resources/
 bin/
 fs_mount/
 projects/
+ifrit-cad
+lohpi-cad
