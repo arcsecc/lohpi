@@ -1,24 +1,22 @@
 package cache
 
-import (
+/*import (
 	"errors"
 	"sync"
 	"log"
 
 	"github.com/joonnna/ifrit"
-	"github.com/tomcat-bit/lohpi/pkg/message"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
-	"github.com/golang/protobuf/proto"
-)
+)*/
 
 // Cache is the internal overview of objects and nodes
 type Cache struct {
 	// Node's identifier maps to its IP address
-	nodeMap    map[string]*pb.Node
+	/*nodeMap    map[string]*pb.Node
 	nodesMutex sync.RWMutex
 
 	// Objects's identifier maps to the object header itself
-	objectHeaderMap   map[string]*pb.ObjectHeader
+	objectHeaderMap   map[string]*pb.ObjectMetadata
 	objectHeaderMapMutex sync.RWMutex
 
 	ifritClient *ifrit.Client
@@ -26,28 +24,28 @@ type Cache struct {
 	// IP addresses that should be ignored
 	ignoredIP []string
 
-	cacheSize int
+	cacheSize int*/
 }
 
 // Returns a new Cache. The Ifrit client needs to be in a running state.
 // The cacheSize denotes how many study entries that can be in present at any time.
 // If the cache size is exceeded, LRU study is evicted.
-func NewCache(client *ifrit.Client) *Cache {
+/*func NewCache(client *ifrit.Client) *Cache {
 	return &Cache{
 		nodeMap:     			make(map[string]*pb.Node),
-		objectHeaderMap:    	make(map[string]*pb.ObjectHeader),
+		objectHeaderMap:    	make(map[string]*pb.ObjectMetadata),
 		objectHeaderMapMutex:	sync.RWMutex{},
 		ifritClient: 	client,
 	}
 }
 
 // Update the cache's map of studies from all nodes in the network
-func (c *Cache) FetchRemoteObjectHeaders() {
-	c.fetchObjectHeaders()
+func (c *Cache) FetchRemoteObjectMetadatas() {
+	//c.fetchObjectMetadatas()
 }
 
 // Updates the cache with the object'd id and the object header itself
-func (c *Cache) InsertObjectHeader(objectId string, objectHeader *pb.ObjectHeader) {
+func (c *Cache) InsertObjectMetadata(objectId string, objectHeader *pb.ObjectMetadata) {
 	c.objectHeaderMapMutex.Lock()
 	defer c.objectHeaderMapMutex.Unlock()
 	c.objectHeaderMap[objectId] = objectHeader
@@ -55,10 +53,10 @@ func (c *Cache) InsertObjectHeader(objectId string, objectHeader *pb.ObjectHeade
 
 // Returns the storage node that stores the given object header
 func (c *Cache) StorageNode(objectId string) (*pb.Node, error) {
-	if header, exists := c.ObjectHeaders()[objectId]; exists {
+/*	if header, exists := c.ObjectMetadatas()[objectId]; exists {
 		log.Println("Found:", header)
 		return header.GetNode(), nil
-	}
+	}*
 	return nil, errors.New("No such node")
 }
 
@@ -77,7 +75,7 @@ func (c *Cache) Nodes() map[string]*pb.Node {
 }
 
 // Returns the map of the object id-to-object map
-func (c *Cache) ObjectHeaders() map[string]*pb.ObjectHeader {
+func (c *Cache) ObjectMetadatas() map[string]*pb.ObjectMetadata {
 	c.objectHeaderMapMutex.RLock()
 	defer c.objectHeaderMapMutex.RUnlock()
 	return c.objectHeaderMap
@@ -131,19 +129,19 @@ func (c *Cache) NodeAddr(nodeName string) *pb.Node {
 // Ignores if study is contained in the given node
 // FIX ME
 func (c *Cache) ObjectInAnyNodeThan(node, object string) bool {
-	c.objectHeaderMapMutex.RLock()
+/*	c.objectHeaderMapMutex.RLock()
 	defer c.objectHeaderMapMutex.RUnlock()
 	for objectId, objectValue := range c.objectHeaderMap {
 		// If the object exists in another node than 'node', return true
 		if objectId == object && objectValue.GetNode().GetName() != node {
 			return true
 		}
-	}
+	}*
 	return false
 }
 
 // Fetches all lists in the network and add them to the internal cache
-func (c *Cache) fetchObjectHeaders() {
+/*func (c *Cache) fetchObjectMetadatas() {
 	//c.updateNodeMembershipList()
 	wg := sync.WaitGroup{}
 	c.nodesMutex.RLock()
@@ -174,16 +172,16 @@ func (c *Cache) fetchObjectHeaders() {
 				}
 				
 				// Verify signature too
-				for _, header := range msgResp.GetObjectHeaders().GetObjectHeaders() {
+				for _, header := range msgResp.GetObjectMetadatas().GetObjectMetadatas() {
 					objectID := header.GetName()
-					c.UpdateObjectHeader(objectID, header)
+					c.UpdateObjectMetadata(objectID, header)
 				}
 			}
 		}()
 	}
 
 	wg.Wait()
-}
+}*
 
 // Updates the node map based on the underlying list of members as seen by 
 // the Ifrit client. Should be invoked regulrarily to maintain a consistent view 
@@ -216,7 +214,7 @@ func (c *Cache) nodeIsAlive(addr string) bool {
 }
 
 // Updates the given node with a list of new studies
-func (c *Cache) UpdateObjectHeader(objectId string, objectHeader *pb.ObjectHeader) {
+func (c *Cache) UpdateObjectMetadata(objectId string, objectHeader *pb.ObjectMetadata) {
 	c.objectHeaderMapMutex.Lock()
 	defer c.objectHeaderMapMutex.Unlock()
 	c.objectHeaderMap[objectId] = objectHeader
@@ -230,4 +228,4 @@ func (c *Cache) ipIsIgnored(ip string) bool {
 		}
 	}
 	return false
-}
+}*/

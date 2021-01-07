@@ -4,16 +4,15 @@
  * passthrough.go
  *
  * Copyright 2017-2018 Bill Zissimopoulos
- */
+ 
 /*
  * This file is part of Cgofuse.
  *
  * It is licensed under the MIT license. The full license text can be found
- * in the License.txt file at the root of this project.
- */
-
-package fuse
-
+ * in the License.txt file at the root of this project.*/
+ 
+ package fuse
+/*
 import (
 	"errors"
 	"fmt"
@@ -209,7 +208,7 @@ func (self *Ptfs) SubjectExistsInObject(subjectId, objectId string) bool {
 			if subjectId == s {
 				return true
 			}
-		}*/
+		}
 	}
 	
 	return false
@@ -234,7 +233,7 @@ func (self *Ptfs) RemoveExtendedAttribute(path, name string) ([]string, error) {
 
 /*func (self *Ptfs) SetExtendedAttributeWithFlags(path, name string, data []byte, flags int) error {
 	return nil
-}*/
+}
 
 // Searches the fuse mounting point recursively three levels down to restore
 // the state of the daemon. As a feature later in time, we might ask the rest of the network
@@ -269,9 +268,9 @@ func (self *Ptfs) setXattrFlag(path, permission string) error {
 	/*if err := xattr.Set(path, XATTR_PREFIX + "PERMISSION", []byte(permission)); err != nil {
 		fmt.Println(err.Error())
 		return err
-	}*/
+	}
 	/*self.xattrFlag = false
-	self.xattrMux.Unlock()*/
+	self.xattrMux.Unlock()
 	return nil
 }
 
@@ -292,7 +291,7 @@ func (self *Ptfs) isAllowedAccess(path string) bool {
 			if ok && perm == "disallow" {
 				return false
 			}
-		}*/
+		}
 	return true
 }
 
@@ -548,7 +547,7 @@ func Shutdown() {
 	fmt.Printf("Unmounting file system\n")
 	/*if _host.Unmount() != true {
 		fmt.Errorf("Unmount failed\n")
-	}*/
+	}
 }
 
 // Creates a directory tree from the root to 'dirPath' if it does not exist
@@ -559,4 +558,4 @@ func createDirectory(dirPath string) error {
 		}
 	}
 	return nil
-}
+}*/

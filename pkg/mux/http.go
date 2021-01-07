@@ -1,36 +1,51 @@
 package mux
 
 import (
-	"bytes"
+	"archive/zip"
+	"errors"
+_	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 _	"context"
-_	"time"
+	"sync"
+	"time"
+	"os"
+	"io"
 
 	"github.com/tomcat-bit/lohpi/pkg/message"
-//	pb "github.com/tomcat-bit/lohpi/protobuf"
-
+	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/mux"
 	logging "github.com/inconshreveable/log15"
 )
+
+// TODO: need more fields here (number of files, etc...)
+type datasetResponse struct {
+	Name string
+}
 
 func (m *Mux) HttpHandler() error {
 	r := mux.NewRouter()
 	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
 
 	// Public methods exposed to data users (usually through cURL)
-	r.HandleFunc("/network", m.network)
+	r.HandleFunc("/network", m.network).Methods("GET")
 
-	// Node API
-	r.HandleFunc("/node/info", m.GetNodeInfo).Methods("GET")
-	r.HandleFunc("/node/load", m.LoadNode).Methods("POST")
+	// List all datasets
+	r.HandleFunc("/datasets", m.getNetworkDatasetIdentifiers).Methods("GET")
+
+	// List metadata of a particular dataset
+	r.HandleFunc("/dataset_info/{id}", m.getDatasetMetadata).Methods("GET")
+
+	// Fetch 
+	r.HandleFunc("/datasets/{id}", m.getDataset).Methods("GET")
 
 	m.httpServer = &http.Server{
 		Handler: r,
-		// use timeouts?
+		ReadTimeout: time.Duration(5 * time.Minute),
+		// graceful shutdown too...
 	}
 
 	err := m.httpServer.Serve(m.httpListener)
@@ -41,123 +56,326 @@ func (m *Mux) HttpHandler() error {
 	return nil
 }
 
-// Returns human-readable network information and studies known to the network
-func (m *Mux) network(w http.ResponseWriter, r *http.Request) {
+// Lazily fetch objects from all the nodes
+func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	if r.Method != http.MethodGet {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
+
+	jsonOutput := struct {
+		Sets []string
+	}{
+		Sets: make([]string, 0),
+	}
+
+	var l sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, v := range m.StorageNodes() {
+		value := v
+		wg.Add(1)
+
+		go func() {
+			msg := &pb.Message{
+				Type: message.MSG_TYPE_GET_DATASET_IDENTIFIERS,
+				Sender: m.pbNode(),
+			}
+
+			data, err := proto.Marshal(msg)
+			if err != nil {
+				panic(err)
+			}
+
+			r, s, err := m.ifritClient.Sign(data)
+			if err != nil {
+				panic(err)
+			}
+	
+			msg.Signature = &pb.MsgSignature{R: r, S: s}
+			data, err = proto.Marshal(msg)
+			if err != nil {
+				panic(err)
+			}
+
+			ch := m.ifritClient.SendTo(value.GetAddress(), data)
+			select {
+			case resp := <-ch: 
+				respMsg := &pb.Message{}
+				if err := proto.Unmarshal(resp, respMsg); err != nil {
+					panic(err)
+				}
+
+				if err := m.verifyMessageSignature(respMsg); err != nil {
+					panic(err)
+				}
+
+				l.Lock()
+				ids := respMsg.GetStringSlice()
+				jsonOutput.Sets = append(jsonOutput.Sets, ids...)
+				l.Unlock()
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+	j, err := json.Marshal(jsonOutput)
+	if err != nil {
+		// TODO: log error to files
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Mux's HTTP server running on port %d\n", m.config.MuxHttpPort)
-	fmt.Fprintf(w, "Mux's gRPC server running on address %s\n", m.grpcs.Addr())
-	fmt.Fprintf(w, "Mux's Ifrit client's IP address: %s\n", m.ifritClient.Addr())
-	fmt.Fprintf(w, "Flireflies nodes in this network:\n")
-	m.cache.FetchRemoteObjectHeaders()
-	for nodeID, node := range m.cache.Nodes() {
-		fmt.Fprintf(w, "String identifier: %s\tIP address: %s\n", nodeID, node.GetAddress())
-	}
-
-	fmt.Fprintf(w, "Studies stored in the network:\n")
-	for study, header := range m.cache.ObjectHeaders() {
-		fmt.Fprintf(w, "Study identifier: '%s'\tstorage node: '%s'\n", study, header.GetNode().GetName())
-	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }
 
-// End-point used to load the node dummy-data. The target node stores the meta-data
-// and generates random data from the POST payload
-func (m *Mux) LoadNode(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
+// Fetches the information about a dataset
+func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
+	dataset := mux.Vars(req)["id"]
+	if dataset == "" {
+		errMsg := fmt.Errorf("Missing project identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+        return
+	}
 
-	err := r.ParseMultipartForm(32 << 20)
+	// Ask all nodes if dataset exists
+
+	node, ok := m.datasetMap()[dataset]
+	if !ok {
+		errMsg := fmt.Errorf("No such dataset '%s' in network", dataset)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+        return
+	}
+
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_GET_DATASET_INFO,
+		StringValue: dataset,
+	}
+
+	data, err := proto.Marshal(msg)
 	if err != nil {
 		panic(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
 	}
 
-	if r.MultipartForm == nil || r.MultipartForm.File == nil {
-		http.Error(w, "expecting multipart form file", http.StatusBadRequest)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Expected POST method", http.StatusMethodNotAllowed)
-		return
+	r, s, err := m.ifritClient.Sign(data)
+	if err != nil {
+		panic(err)
 	}
 	
-	mdFile, _, err := r.FormFile("metadata")
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	ch := m.ifritClient.SendTo(node.GetAddress(), data)
+
+	jsonOutput := struct{
+		Name string
+		Metadata map[string]string
+	}{
+		Name: dataset,
+		Metadata: make(map[string]string),
+	}
+
+	select {
+	case response := <-ch:
+		msgResp := &pb.Metadata{}
+		if err := proto.Unmarshal(response, msgResp); err != nil {
+			panic(err)
+		}
+		
+		if err := m.verifyMessageSignature(msg); err != nil {
+			panic(err)
+		}
+
+		for k, v := range msgResp.GetMapField() {
+			jsonOutput.Metadata[k] = v
+		}
+	}
+
+	j, err := json.Marshal(jsonOutput)
 	if err != nil {
-		panic(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer mdFile.Close()
-	
-	policyFile, policyFileHeader, err := r.FormFile("policy")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer policyFile.Close()
-
-	// Read the multipart file from the client
-	buf := bytes.NewBuffer(nil)
-	if _, err := io.Copy(buf, mdFile); err != nil {
-		panic(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-	}
-
-	// Read the policy file
-	policyBuf := bytes.NewBuffer(nil)
-	if _, err := io.Copy(policyBuf, policyFile); err != nil {
-		panic(err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
-	}
-
-	studyName := r.PostFormValue("study")
-	subjects := r.MultipartForm.Value["subjects"]
-	node := r.PostFormValue("node")
-
-	if studyName == "" || subjects == nil || node == "" {
-		http.Error(w, "Missing fields when loading node.", http.StatusMethodNotAllowed)
+		// TODO: log error to files
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Send metadata and loading information to the node. It might fail (ie. node doesn't exist) 
-	if err := m.loadNode(studyName, node, policyFileHeader.Filename, buf.Bytes(), r.MultipartForm.Value["subjects"], policyBuf.Bytes()); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	fmt.Fprintf(w, "Loaded node '%s' with study name '%s'\n", node, studyName)
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(j)
 }
 
-// Returns human-readable information about a particular node
-func (m *Mux) GetNodeInfo(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	if r.Method != http.MethodGet {
-		http.Error(w, "Expected GET method", http.StatusMethodNotAllowed)
-		return
+// Returns the address of the Lohpi node that stores the given dataset
+func (m *Mux) probeNetworkForDataset(dataset string) string {
+	var nodeAddr string
+
+	var wg sync.WaitGroup
+	for _, v := range m.StorageNodes() {
+		value := v
+		wg.Add(1)
+
+		go func() {
+			msg := &pb.Message{
+				Type: message.MSG_TYPE_DATASET_EXISTS,
+				Sender: m.pbNode(),
+				StringValue: dataset,
+			}
+
+			data, err := proto.Marshal(msg)
+			if err != nil {
+				panic(err)
+			}
+
+			r, s, err := m.ifritClient.Sign(data)
+			if err != nil {
+				panic(err)
+			}
+	
+			msg.Signature = &pb.MsgSignature{R: r, S: s}
+			data, err = proto.Marshal(msg)
+			if err != nil {
+				panic(err)
+			}
+
+			ch := m.ifritClient.SendTo(value.GetAddress(), data)
+			select {
+			case resp := <-ch: 
+				respMsg := &pb.Message{}
+				if err := proto.Unmarshal(resp, respMsg); err != nil {
+					panic(err)
+				}
+
+				if err := m.verifyMessageSignature(respMsg); err != nil {
+					panic(err)
+				}
+
+				if respMsg.GetBoolValue() {
+					nodeAddr = value.GetAddress()
+				}
+			}
+			wg.Done()
+		}()
 	}
 
-	var msg message.NodeMessage
-	decoder := json.NewDecoder(r.Body)
-	err := decoder.Decode(&msg)
-	if err != nil {
-		errMsg := fmt.Sprintf("Error: %s\n", err)
-		log.Printf("%s", errMsg)
-		http.Error(w, errMsg, http.StatusBadRequest)
-		return
+	wg.Wait()
+
+	return nodeAddr
+}
+
+// Handler used to fetch an entire dataset. Writes a zip file to the client
+func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+
+	dataset := mux.Vars(req)["id"]
+	if dataset == "" {
+		errMsg := fmt.Errorf("Missing project identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+        return
 	}
 
-	nodeInfo, err := m.getNodeInfo(msg.Node)
-	if err != nil {
-		errMsg := fmt.Sprintf("Error: %s\n", err)
-		log.Printf("%s", errMsg)
-		http.Error(w, errMsg, http.StatusBadRequest)
-		return
+	nodeAddr := m.probeNetworkForDataset(dataset)
+	if nodeAddr == "" {
+		panic(errors.New("Dataset is not in network!"))
 	}
-	fmt.Fprintf(w, nodeInfo)
+
+	// Open stream to node in order to fetch an entire dataset
+	in, replyChan := m.ifritClient.OpenStream(nodeAddr, 100, 100)
+
+	// Create dataset request
+	dsRequest := &pb.StreamRequest{
+		Type: message.STREAM_DATASET,
+		Dataset: dataset,
+	} 
+
+	// TODO: sign it 
+	data, err := proto.Marshal(dsRequest)
+	if err != nil {
+		panic(err)
+	}
+
+	in <- data
+	close(in)
+
+	file := &pb.File{}
+	
+	var wg sync.WaitGroup
+	wg.Add(1)
+	fileChan := make(chan *pb.File, 10)
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"dataset.zip\""))
+	w.Header().Set("Content-Type", "application/zip")
+	// set content length?
+	
+	zipWriter := zip.NewWriter(w)
+    defer zipWriter.Close()
+
+	go func() {
+		defer close(fileChan)
+
+		defer wg.Done()
+		for {
+			select {
+				case resp := <-replyChan:
+					if err := proto.Unmarshal(resp, file); err != nil {
+						panic(err)
+					}
+
+					if file.GetTrailing() {
+						return
+					}
+
+					if err = defalteZip(zipWriter, file); err != nil {
+						panic(err)
+					}
+				}
+			}
+	}()
+
+	wg.Wait()
+
+	log.Println("Done")
+}
+
+func defalteZip(zipWriter *zip.Writer, file *pb.File) error {
+	f, err := os.OpenFile(file.GetFilename(), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+    if err != nil {
+        log.Fatal(err)
+	}
+	
+	_, err = f.Write(file.GetContent())
+	if err != nil {
+		panic(err)
+	}
+
+    if err := f.Close(); err != nil {
+        log.Fatal(err)
+	}
+
+    fileToZip, err := os.Open(file.GetFilename())
+    if err != nil {
+        return err
+    }
+    defer fileToZip.Close()
+
+    // Get the file information
+    info, err := fileToZip.Stat()
+    if err != nil {
+        return err
+    }
+
+    header, err := zip.FileInfoHeader(info)
+    if err != nil {
+        return err
+    }
+
+    // Using FileInfoHeader() above only uses the basename of the file. If we want
+    // to preserve the folder structure we can overwrite this with the full path.
+    header.Name = file.GetFilename()
+
+    // Change to deflate to gain better compression
+    // see http://golang.org/pkg/archive/zip/#pkg-constants
+    header.Method = zip.Deflate
+
+    writer, err := zipWriter.CreateHeader(header)
+    if err != nil {
+        return err
+    }
+    _, err = io.Copy(writer, fileToZip)
+    return err
 }

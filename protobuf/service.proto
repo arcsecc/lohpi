@@ -5,17 +5,11 @@ package proto;
 
 service Mux {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc ClientHandshake (Client) returns (HandshakeResponse) {}
-    rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
-    rpc GetSubjectNumber (DataUserRequest) returns (StudyCount) {}
-    rpc GetObjectData (DataUserRequest) returns (ObjectFiles) {}
     rpc IgnoreIP (Node) returns (Node) {}
 }
 
 service PolicyStore {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc GetObjectHeaders (google.protobuf.Empty) returns (ObjectHeaders) {}
-    rpc StoreObjectHeader (ObjectHeader) returns (google.protobuf.Empty) {}
     rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
 }
 
@@ -24,34 +18,47 @@ message Client {
     bytes policyAttribute = 2;
 }
 
-message StudyCount {
-    uint32 count = 1;
-}
-
-message DataUserRequest {
-    Client client = 1;
-    string objectName = 2;
-}
-
 // Used in direct messaging
 message Message {
     string Type = 1;        // What kind of message is it?
-    Load load = 2;          // Used to load node with data
-    Node sender = 3;        //
-    ObjectHeaders objectHeaders = 4;    //    
-    Policy policy = 5;      //
-    MsgSignature signature = 6;// Integrity check based on ECDSA
-    GossipMessage gossipMessage = 7;
-    Probe probe = 8;
-    ObjectFiles objectFiles = 9;
-    DataUserRequest dataUserRequest = 10;
+    Node sender = 2;        //
+    Policy policy = 3;      //
+    MsgSignature signature = 5; // Integrity check based on ECDSA
+    GossipMessage gossipMessage = 6;
+    Probe probe = 7;
+    Dataset dataset = 8;
+
+    // Other fields
+    string stringValue = 9;
+    repeated string stringSlice = 10;  // Arbitrary use
+    bytes Bytes = 11;
+    repeated bytes BytesSlice = 12;
+    bool boolValue = 13;
 }
 
-// Message to load a node. Distributed to all entities that need it (hint hint REC)
-message Load {
-    ObjectHeader objectHeader = 1;           
-    uint32 Minfiles = 2;            
-    uint32 Maxfiles = 3;
+message Response {
+    MsgSignature signature = 1;// Integrity check based on ECDSA
+    string stringValue = 2;
+    repeated string stringSlice = 3;  // Arbitrary use
+    bytes bytesValue = 4;
+    repeated bytes bytesSlice = 5;
+}
+
+message StreamRequest {
+    string type = 1;
+    string Dataset = 2;
+}
+
+message StreamResponse {
+    string type = 1;
+    bytes body = 2;
+}
+
+// TODO: Deduplicate files larger than 4 MB
+message File {
+    string Filename = 1;
+    bytes Content = 2;
+    bool trailing = 3;
 }
 
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
@@ -63,42 +70,41 @@ message Node {
     bytes id = 5;              // Ifrit id
 }
 
-message ObjectHeader {
-    string name = 1;                // Name for this study
-    string directoryName = 2;            // Filename of the directory. Same for zip file
-    Node node = 3;                  // The node that stores this study
-    //Metadata metadata = 4;          // Metadata! Move to 'load'
-    Policy policy = 4;              // Policy in effect
+message Datasets {
+    repeated Dataset datasets = 1;
+    MsgSignature signature = 2;
 }
 
-message ObjectHeaders {
-    repeated ObjectHeader objectHeaders = 1;
-}
-
-message ObjectFile {
-    string path = 1;
-    bytes attributes = 2;
-    bytes content = 3;
-}
-
-message ObjectFiles {
-    repeated ObjectFile objectFiles = 2;
-}
-
-message Subject {
+message Dataset {
     string name = 1;
+    Metadata metadata = 2;
+    MsgSignature signature = 3;
+    repeated StorageObject storageObjects = 4;
+	//string owner = 2;
+    //DatasetMetadata datasetMetadata = 3;
 }
 
 message Metadata {
-    bytes content = 1;     // Metadata file contents 
-    repeated string subjects = 2;  // Participating subjects
+    map<string, string> mapField = 1;
+    MsgSignature signature = 2;
+}
+
+message StorageObject {
+    string identifier = 1;                  // Name for this study
+    Policy policy = 2;                      // Policy in effect
+    string owner = 3;                       // more fields here... 
+    StorageObjectContent content = 4;
+    MsgSignature signature = 5;
+}
+
+message StorageObjectContent {
+    bytes content = 1;
 }
 
 message Policy {
     string issuer = 1;
-    string objectName = 2;
-    //string filename = 2;
-    bytes content = 3; // Policy details. See Casbin policy 
+    string objectIdentifier = 2;
+    string content = 3; // Policy details. See Casbin policy 
 }
 
 message MsgSignature {
@@ -111,6 +117,7 @@ message HandshakeResponse {
     bytes id = 2;   // From fireflies
 }
 
+// Fix later
 message GossipMessage {
     string Sender = 1;              // Who sent it?
     string MessageType = 2;         // Gossip or probing?

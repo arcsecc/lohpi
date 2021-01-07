@@ -68,7 +68,6 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	}
 
 	if caAddr != "" {
-		fmt.Println("ca addr", caAddr)
 		addr := fmt.Sprintf("http://%s/certificateRequest", caAddr)
 		certs, err = sendCertRequest(priv, addr, identity)
 		if err != nil {

@@ -8,8 +8,8 @@ import (
 	"syscall"
 
 	logger "github.com/inconshreveable/log15"
-	"github.com/tomcat-bit/lohpi/pkg/mux"
 	"github.com/jinzhu/configor"
+	"github.com/tomcat-bit/lohpi/pkg/mux"
 )
 
 type Launcher struct {
@@ -37,7 +37,7 @@ func main() {
 		h = logger.StreamHandler(os.Stdout, logger.LogfmtFormat())
 	}
 	r.SetHandler(h)
-	
+
 	if err := loadConfiguration(configFile); err != nil {
 		panic(err)
 	}
@@ -59,8 +59,8 @@ func main() {
 func loadConfiguration(configFile string) error {
 	conf := configor.New(&configor.Config{
 		ErrorOnUnmatchedKeys: true,
-		Verbose: true,
-		Debug: true,
+		Verbose:              true,
+		Debug:                true,
 	})
 
 	return conf.Load(&config, configFile)

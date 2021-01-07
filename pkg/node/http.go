@@ -1,5 +1,6 @@
 package node
 
+/*
 import (
 	"errors"
 	"strings"
@@ -7,12 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"io"
-	"io/ioutil"
+_	"io/ioutil"
 	"log"
 	"net/http"
 	"fmt"
 
-	pb "github.com/tomcat-bit/lohpi/protobuf" 
+//	pb "github.com/tomcat-bit/lohpi/protobuf"
 	"github.com/tomcat-bit/lohpi/pkg/netutil"
 	"github.com/gorilla/mux"
 )
@@ -21,8 +22,8 @@ const PROJECTS_DIRECTORY = "projects"
 
 func (n *Node) setHttpListener() error {
 	if n.config.HttpPort == 0 {
-		log.Println("Port number is 0. Will not spawn a new HTTP server.")		
-		return nil 
+		log.Println("Port number is 0. Will not spawn a new HTTP server.")
+		return nil
 	}
 
 	// Initiate HTTP connection without TLS.
@@ -46,8 +47,8 @@ func (n *Node) startHttpHandler() error {
 
 	router.HandleFunc("/help", n.httpHelp)
 	router.HandleFunc("/objects", n.getObjectHeaders).Methods("GET")
-	router.HandleFunc("/upload", n.uploadProject).Methods("POST")
-	router.HandleFunc("/remove", n.removeProject).Methods("DELETE")
+//	router.HandleFunc("/upload", n.uploadProject).Methods("POST")
+	//router.HandleFunc("/remove", n.removeProject).Methods("DELETE")
 	router.HandleFunc("/checked-out", n.checkedOutFiles).Methods("GET")
 
 	router.HandleFunc("/subjects", n.getSubjects).Methods("GET") //???
@@ -64,7 +65,7 @@ func (n *Node) startHttpHandler() error {
 	return nil
 }
 
-func (n *Node) removeProject(w http.ResponseWriter, r *http.Request) {
+/*func (n *Node) removeProject(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	w.Header().Set("Access-Control-Request-Method", "DELETE")
@@ -78,7 +79,7 @@ func (n *Node) removeProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
         return
 	}
-	
+
 	if !n.objectHeaderExists(objectKey) {
 		errMsg := fmt.Errorf("No such project '%s'", objectKey)
 		http.Error(w, http.StatusText(http.StatusNotFound)+": " + errMsg.Error(), http.StatusNotFound)
@@ -91,13 +92,13 @@ func (n *Node) removeProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n.deleteObjectHeader(objectKey)	
+	n.deleteObjectHeader(objectKey)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Successfully removed project '" + objectKey + "' from the storage server\n"))
-}
+}*
 
 func (n *Node) checkedOutFiles(w http.ResponseWriter, r *http.Request) {
-	
+
 }
 
 // TODO: delete me?
@@ -105,14 +106,15 @@ func (n *Node) getSubjects(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// Returns the list of nodes 
+// Returns the list of nodes
 func (n *Node) getObjectHeaders(w http.ResponseWriter, r *http.Request) {
+	/*
 	defer r.Body.Close()
 	// TODO: move header values to somewhere else
 	// REMOVE when in production
 	w.Header().Set("Access-Control-Request-Method", "GET")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	w.WriteHeader(http.StatusOK)
 	headers := n.objectHeaders()
 
@@ -146,7 +148,7 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Parsing multipart form: %s", err)
 		return
     }
-	
+
 	// Require GET parameters (object key)
 	query := r.URL.Query()
 	objectKey := query.Get("object_id")
@@ -155,7 +157,7 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
         return
 	}
-	
+
 	// If project is already stored on the node, return error
 	if n.objectHeaderExists(objectKey) {
 		errMsg := fmt.Errorf("Project with ID '%s' already exists", objectKey)
@@ -180,7 +182,7 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Open the output file 
+	// Open the output file
 	uploadedZipFilePath := filepath.Join(PROJECTS_DIRECTORY, objectKey, filepath.Base(h.Filename))
     t, err := os.OpenFile(uploadedZipFilePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
     if err != nil {
@@ -208,23 +210,23 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 		errMsg := fmt.Errorf("Error processing uploaded zip file to storage node.")
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+errMsg.Error(), http.StatusInternalServerError)
     	return
-	} 
+	}
 
-	// 
+	//
 	inflatedDirectoryName := strings.TrimSuffix(filepath.Base(h.Filename), ".zip")
 	inflatedDir := filepath.Join(PROJECTS_DIRECTORY, objectKey, inflatedDirectoryName, inflatedDirectoryName)
-	
+
 	// Index the project files in the project directory. Detele everything if it fails.
 	if err := n.indexProject(objectKey, inflatedDir); err != nil {
 		// Remove everything, starting from the "object key" directory
 		e := os.RemoveAll(filepath.Join(PROJECTS_DIRECTORY, objectKey))
-    	if e != nil { 
+    	if e != nil {
 			log.Println(err.Error())
 			errMsg := fmt.Errorf("Error processing uploaded zip file to storage node.")
 			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + errMsg.Error(), http.StatusInternalServerError)
 			return
 		}
-		
+
 		log.Println(err.Error())
 		errMsg := fmt.Errorf("Error indexing project in storage node.")
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + errMsg.Error(), http.StatusBadRequest)
@@ -232,15 +234,16 @@ func (n *Node) uploadProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove .zip file
-	e := os.Remove(uploadedZipFilePath) 
-    if e != nil { 
+	e := os.Remove(uploadedZipFilePath)
+    if e != nil {
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
-	} 
-	
+	}
+
 	w.WriteHeader(http.StatusCreated)
-    w.Write([]byte("Successfully uploaded project directory to the storage server\n"))
+	w.Write([]byte("Successfully uploaded project directory to the storage server\n"))
+	*
 }
 
 // Inflates src into dest
@@ -310,9 +313,9 @@ func (n *Node) inflateZipDirectory(src, dest string) error {
 
 // Indexes the project into the node. It reads the dir directory and performs sanity checks
 // before adding it to the note. Returns error if anything went wrong
-func (n *Node) indexProject(objectKey, dir string) error {
+/*func (n *Node) indexProject(objectKey, dir string) error {
 	log.Println("Looking for 'policy.json' file...")
-	
+
 	// Relative path of inflated zip directory
 	//relativeDirPath := strings.Split(dir, "/")[1]
 	policyFilePath := dir + "/" + "policy.json"
@@ -334,9 +337,9 @@ func (n *Node) indexProject(objectKey, dir string) error {
 		log.Println("Overwriting existing project " + objectKey)
 	}
 
-	// Store project data in the node. Use project data name as key 
+	// Store project data in the node. Use project data name as key
 	n.insertObjectHeader(objectKey, &pb.ObjectHeader{
-		Name: 			objectKey, 
+		Name: 			objectKey,
 		DirectoryName: 	dir, //relativeDirPath,
     	Node: 			n.pbNode(),
 		Policy: &pb.Policy{
@@ -349,11 +352,11 @@ func (n *Node) indexProject(objectKey, dir string) error {
 	if err := n.sendObjectHeaderList(n.PolicyStoreIP); err != nil {
 		return err
 	}
-		
+
 	// MUX TOO
-	
-	return nil 
-}
+
+	return nil
+}*
 
 func (n *Node) httpHelp(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Node help here\n")
@@ -361,7 +364,7 @@ func (n *Node) httpHelp(w http.ResponseWriter, r *http.Request) {
 }
 
 // Deletes the project files assoicated with objectKey
-func (n *Node) deleteProjectFiles(objectKey string) error {
+/*func (n *Node) deleteProjectFiles(objectKey string) error {
 	// Create directory into which we store the zip files
 	if _, err := os.Stat(PROJECTS_DIRECTORY); err != nil {
 		if os.IsNotExist(err) {
@@ -403,4 +406,4 @@ func (n *Node) pathExists(path string) (bool, error) {
 		return true, nil
 	}
 	return true, nil
-}
+}*/

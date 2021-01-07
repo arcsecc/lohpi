@@ -4,6 +4,9 @@ package main
  * from the environment. This should be used when we want to use a process-granularity run.
  */
 import (
+	"archive/zip"
+	"io/ioutil"
+_	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"runtime"
 	"syscall"
 	"log"
+	
 
 	logger "github.com/inconshreveable/log15"
 	"github.com/tomcat-bit/lohpi/pkg/node"
@@ -73,16 +77,11 @@ func main() {
 		panic(err)
 	}
 
-	node.Start()
-	
-	// Connect to the mux and policy store
-	/*if err := node.MuxHandshake(); err != nil {
-		panic(err)
-	}*/
-
-	if err := node.PolicyStoreHandshake(); err != nil {
+	if err := node.JoinNetwork(); err != nil {
 		panic(err)
 	}
+	
+	testNode(node)
 
 	// Wait for SIGTERM signal from the environment
 	channel := make(chan os.Signal, 2)
@@ -91,6 +90,33 @@ func main() {
 
 	// Clean-up
 	node.Shutdown()
+}
+
+func testNode(n *node.Node) {
+	n.RegisterDatasetIdentifiersHandler(identifiersHandler)
+	n.RegisterArchiveHandler(archiveHandler)
+	n.RegisterIdentifierExistsHandler(identifierExistsHandler)
+}
+
+func identifierExistsHandler(id string) bool {
+	return true
+}
+
+func identifiersHandler(id string) ([]string, error) {	
+	return []string{"kake"}, nil 
+}
+
+func archiveHandler(id string) (*node.ExternalArchive, error) {
+	log.Println("ID", id)
+	
+	zipFile := "kake.zip"
+
+	zf, err := zip.OpenReader(zipFile)
+	check(err)
+
+	return &node.ExternalArchive{
+		Files: zf.File,
+	}, nil 
 }
 
 func setConfigurations(configFile string) error {
@@ -110,4 +136,34 @@ func exists(name string) bool {
 		}
 	}
 	return true
+}
+
+func check(e error) {
+	if e != nil {
+		panic(e)
+	}
+}
+
+type myCloser interface {
+	Close() error
+}
+
+// closeFile is a helper function which streamlines closing
+// with error checking on different file types.
+func closeFile(f myCloser) {
+	err := f.Close()
+	check(err)
+}
+
+// readAll is a wrapper function for ioutil.ReadAll. It accepts a zip.File as
+// its parameter, opens it, reads its content and returns it as a byte slice.
+func readAll(file *zip.File) []byte {
+	fc, err := file.Open()
+	check(err)
+	defer closeFile(fc)
+
+	content, err := ioutil.ReadAll(fc)
+	check(err)
+
+	return content
 }

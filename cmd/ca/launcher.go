@@ -20,7 +20,7 @@ var DefaultPermission = os.FileMode(0750)
 var IfritCaConfig = struct {
 	Name         string `default:"Ifrit Certificate Authority"`
 	Version      string `default:"1.0.0"`
-	Host         string `default:"127.0.0.1"`
+	Host         string `default:"127.0.1.1"`
 	Port         int    `default:"8300"`
 	Path         string `default:"./ifrit-cad"`
 	NumRings     uint32 `default:"3"`
@@ -32,7 +32,7 @@ var IfritCaConfig = struct {
 var LohpiCaConfig = struct {
 	Name         string `default:"Lohpi Certificate Authority"`
 	Version      string `default:"1.0.0"`
-	Host         string `default:"127.0.0.1"`
+	Host         string `default:"127.0.1.1"`
 	Port         int    `default:"8301"`
 	Path         string `default:"./lohpi-cad"`
 	LogFile      string `default:""`
