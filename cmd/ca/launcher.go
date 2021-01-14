@@ -9,7 +9,7 @@ import (
 	"syscall"
 	lohpi_ca "github.com/tomcat-bit/lohpi/cauth"
 
-	log "github.com/inconshreveable/log15"
+	log "github.com/sirupsen/logrus"
 	ifrit_ca "github.com/joonnna/ifrit/cauth"
 	"github.com/jinzhu/configor"
 )
@@ -24,7 +24,7 @@ var IfritCaConfig = struct {
 	Port         int    `default:"8300"`
 	Path         string `default:"./ifrit-cad"`
 	NumRings     uint32 `default:"3"`
-	NumBootNodes uint32 `default:"0"`
+	NumBootNodes uint32 `default:"1"`
 	LogFile      string `default:""`
 }{}
 
@@ -35,20 +35,17 @@ var LohpiCaConfig = struct {
 	Host         string `default:"127.0.1.1"`
 	Port         int    `default:"8301"`
 	Path         string `default:"./lohpi-cad"`
-	LogFile      string `default:""`
+	LogFile      string `default:"ca.log"`
 }{}
 
 func main() {
 	var createNew bool
-	var logfile string
 	var lohpiConfigFile string
 	var ifritConfigFile string
-	var h log.Handler
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&logfile, "logfile", "", "Log to file.")
 	args.StringVar(&ifritConfigFile, "ifritconfig", "", "Ifrit CA configuration file.")
 	args.StringVar(&lohpiConfigFile, "lohpiconfig", "", "Lohpi CA configuration file.")
 	args.BoolVar(&createNew, "new", false, "Initialize new Ca structures")
@@ -56,16 +53,6 @@ func main() {
 
 	configor.New(&configor.Config{Debug: false, ENVPrefix: "IFRIT"}).Load(&IfritCaConfig, ifritConfigFile, "/etc/ifrit/config.yaml")
 	configor.New(&configor.Config{Debug: false, ENVPrefix: "IFRIT"}).Load(&LohpiCaConfig, lohpiConfigFile, "/etc/lohpi/config.yaml")
-	
-	r := log.Root()
-
-	if logfile != "" {
-		h = log.CallerFileHandler(log.Must.FileHandler(logfile, log.LogfmtFormat()))
-	} else {
-		h = log.StreamHandler(os.Stdout, log.LogfmtFormat())
-	}
-
-	r.SetHandler(h)
 
 	var ifritCa *ifrit_ca.Ca
 	var lohpiCa *lohpi_ca.Ca
@@ -75,14 +62,15 @@ func main() {
 	if !createNew {
 		ifritCa, err = ifrit_ca.LoadCa(IfritCaConfig.Path, IfritCaConfig.NumBootNodes, IfritCaConfig.NumRings)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error loading CA. Run with --new option if CA does not exit.")
+			panic(err)
+			fmt.Fprintln(os.Stderr, "Error loading Ifrit CA. Run with --new option if Ifrit CA does not exit.")
 			os.Exit(1)
 		}
 
 		lohpiCa, err = lohpi_ca.LoadCa(LohpiCaConfig.Path)
 		if err != nil {
-			fmt.Println(err)
-			fmt.Fprintln(os.Stderr, "Error loading CA. Run with --new option if CA does not exit.")
+			panic(err)
+			fmt.Fprintln(os.Stderr, "Error loading Lohpi CA. Run with --new option if Lohpi CA does not exit.")
 			os.Exit(1)
 		}
 		
@@ -180,4 +168,16 @@ func exists(name string) bool {
 		}
 	}
 	return true
+}
+
+func initializeLogfile(logfile string) error {
+	file, err := os.OpenFile(logfile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.SetOutput(os.Stdout)
+		return fmt.Errorf("Could not open logfile %s. Error: %s", logfile, err.Error())
+	}
+
+	log.SetOutput(file)
+	log.SetFormatter(&log.TextFormatter{})
+	return nil
 }
