@@ -23,6 +23,7 @@ import (
 	"os"
 
 	log "github.com/inconshreveable/log15"
+	"github.com/gorilla/mux"
 )
 
 var (
@@ -179,12 +180,13 @@ func (c *Ca) Shutdown() {
 }
 
 func (c *Ca) httpHandler() error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/certificateRequest", c.certificateSigning)
-	mux.HandleFunc("/clientCertificateRequest", c.clientCertificateSigning)
+	r := mux.NewRouter()
+	r.HandleFunc("/certificateRequest", c.certificateSigning).Methods("POST")
+	r.HandleFunc("/clientCertificateRequest", c.clientCertificateSigning).Methods("POST")
 
 	c.httpServer = &http.Server{
-		Handler: mux,
+		Handler: r,
+		ReadTimeout: time.Second * 10,
 	}
 
 	err := c.httpServer.Serve(c.listener)
@@ -197,8 +199,59 @@ func (c *Ca) httpHandler() error {
 }
 
 func (c *Ca) clientCertificateSigning(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	fmt.Fprintf(w, "hello from Lohpi ca")
+	var body bytes.Buffer
+	io.Copy(&body, r.Body)
+	r.Body.Close()
+
+	reqCert, err := x509.ParseCertificateRequest(body.Bytes())
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ":" + err.Error() , http.StatusInternalServerError)
+		log.Error(err.Error())
+		return
+	}
+
+	serialNumber, err := genSerialNumber()
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	newCert := &x509.Certificate{
+		SerialNumber: 	serialNumber,
+		Subject:         reqCert.Subject,
+		NotBefore:       time.Now().AddDate(-10, 0, 0),
+		NotAfter:        time.Now().AddDate(10, 0, 0),
+		//ExtraExtensions: []pkix.Extension{ext},
+		PublicKey:       reqCert.PublicKey,
+		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:        x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+	}
+
+	signedCert, err := x509.CreateCertificate(rand.Reader, newCert, c.caCert, reqCert.PublicKey, c.privKey)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		log.Error(err.Error())
+		return
+	}
+
+	respStruct := struct {
+		OwnCert []byte
+		CaCert  []byte
+	}{
+		OwnCert: signedCert,
+		CaCert:  c.caCert.Raw,
+	}
+
+	b := new(bytes.Buffer)
+	json.NewEncoder(b).Encode(respStruct)
+
+	_, err = w.Write(b.Bytes())
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		log.Error(err.Error())
+		return
+	}
 }
 
 func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
