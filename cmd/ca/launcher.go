@@ -73,7 +73,7 @@ func main() {
 
 	// Attempt to load existing CAs
 	if !createNew {
-		ifritCa, err = ifrit_ca.LoadCa(IfritCaConfig.Path)
+		ifritCa, err = ifrit_ca.LoadCa(IfritCaConfig.Path, IfritCaConfig.NumBootNodes, IfritCaConfig.NumRings)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error loading CA. Run with --new option if CA does not exit.")
 			os.Exit(1)

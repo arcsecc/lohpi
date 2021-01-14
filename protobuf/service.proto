@@ -64,10 +64,16 @@ message File {
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
 message Node {
     string name = 1;            // String identifier
-    string address = 2;         // IP address
+    string ifritAddress = 2;         // IP address
     string role = 3;            // What type of node is it? storage node, compliance engine etc
     string contactEmail = 4;   // Contact of person/entity responsible for the node, preferably an email alias, for non-compliance reports. 
     bytes id = 5;              // Ifrit id
+    string httpAddress = 6; //
+}
+
+message ArchiveRequest {
+    string identifier = 1; // String identifier
+    MsgSignature signature = 2;
 }
 
 message Datasets {

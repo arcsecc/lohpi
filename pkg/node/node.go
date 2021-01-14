@@ -1,13 +1,10 @@
 package node
 
 import (
-	"archive/zip"
 	"context"
 	"crypto/x509/pkix"
 	_ "errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -19,6 +16,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/tomcat-bit/lohpi/pkg/comm"
 	"github.com/tomcat-bit/lohpi/pkg/message"
+	"github.com/tomcat-bit/lohpi/pkg/netutil"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 
 	logger "github.com/inconshreveable/log15"
@@ -38,6 +36,7 @@ type Config struct {
 	Root           string `required:true`
 	HttpPort       int    `required:false`
 	OverridePolicy bool   `default:false`
+	RemoteURL 	   string `default:"https://catbox.td.org.uit.no"`
 	// Fuse configuration
 	//	FuseConfig fuse.Config
 }
@@ -63,7 +62,7 @@ type ExternalMetadata struct {
 
 // Used to describe an external archive
 type ExternalArchive struct {
-	Files []*zip.File
+	URL string
 }
 
 type Dataset struct {
@@ -163,9 +162,14 @@ func NewNode(name string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
+	httpListener, err := netutil.GetListener()
+	if err != nil {
+		return nil, err
+	}
+
 	pk := pkix.Name{
 		CommonName: name,
-		Locality:   []string{ifritClient.Addr()},
+		Locality:   []string{httpListener.Addr().String()},
 	}
 
 	cu, err := comm.NewCu(pk, config.LohpiCaAddr)
@@ -189,6 +193,8 @@ func NewNode(name string, config *Config) (*Node, error) {
 		muxClient:   muxClient,
 		config:      config,
 		psClient:    psClient,
+		httpListener:      httpListener,
+		cu: cu,
 
 		datasetMap:     make(map[string]*Dataset),
 		datasetMapLock: sync.RWMutex{},
@@ -219,11 +225,14 @@ func (n *Node) JoinNetwork() error {
 		return err
 	}
 
+	go n.startHttpServer()
+	
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
-	n.ifritClient.RegisterStreamHandler(n.streamHandler)
+//	n.ifritClient.RegisterStreamHandler(n.streamHandler)
 	go n.ifritClient.Start()
 
+	log.Println("Ifrit addr:", n.ifritClient.Addr())
 	return nil
 }
 
@@ -233,17 +242,6 @@ func (n *Node) Address() string {
 
 func (n *Node) NodeName() string {
 	return n.name
-}
-
-func (n *Node) ServeHttp() error {
-	log.Println("TODO: implement ServeHttp()")
-	/*		if err := node.setHttpListener(); err != nil {
-				return nil, err
-			}
-
-			go node.startHttpHandler()*/
-
-	return nil
 }
 
 // Function type used for callbacks to fetch datasets on-demand.
@@ -258,34 +256,6 @@ type ExternalIdentifierExistsHandler = func(id string) bool
 // Function type to fetch metadata from the external data source
 type ExternalMetadataHandler = func(id string) (ExternalMetadata, error)
 
-// Registers the given callback whenever a new dataset from an external source is requested.
-func (n *Node) RegisterDatasetIdentifiersHandler(f ExernalDatasetIdentifiersHandler) {
-	n.datasetIdentifiersHandlerLock.Lock()
-	defer n.datasetIdentifiersHandlerLock.Unlock()
-	n.datasetIdentifiersHandler = f
-}
-
-// Registers the given handler when a compressed archive is fetched from a remote source.
-func (n *Node) RegisterArchiveHandler(f ExternalArchiveHandler) {
-	n.archiveCallbackLock.Lock()
-	defer n.archiveCallbackLock.Unlock()
-	n.archiveCallback = f
-}
-
-// Registers the given handler when an identifier is to be checked that it exists or not
-func (n *Node) RegisterIdentifierExistsHandler(f ExternalIdentifierExistsHandler) {
-	n.identifierExistsHandlerLock.Lock()
-	defer n.identifierExistsHandlerLock.Unlock()
-	n.identifierExistsHandler = f
-}
-
-// Registers the given handler when external metadata is requested.
-func (n *Node) RegsiterMetadataHandler(f ExternalMetadataHandler) {
-	n.externalMetadataHandlerLock.Lock()
-	defer n.externalMetadataHandlerLock.Unlock()
-	n.externalMetadataHandler = f
-}
-
 // PRIVATE METHODS BELOW
 func (n *Node) muxHandshake() error {
 	conn, err := n.muxClient.Dial(n.config.MuxIP)
@@ -299,7 +269,7 @@ func (n *Node) muxHandshake() error {
 
 	r, err := conn.Handshake(ctx, &pb.Node{
 		Name:    n.name,
-		Address: n.ifritClient.Addr(),
+		IfritAddress: n.ifritClient.Addr(),
 		Role:    "Storage node",
 		Id:      []byte(n.ifritClient.Id()),
 	})
@@ -325,7 +295,7 @@ func (n *Node) policyStoreHandshake() error {
 
 	r, err := conn.Handshake(ctx, &pb.Node{
 		Name:    n.name,
-		Address: n.ifritClient.Addr(),
+		IfritAddress: n.ifritClient.Addr(),
 		Role:    "Storage node",
 		Id:      []byte(n.ifritClient.Id()),
 	})
@@ -356,7 +326,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
 		return n.fetchDatasetIdentifiers(msg)
 
-	case message.MSG_TYPE_GET_DATA:
+	case message.MSG_TYPE_GET_DATASET_URL:
+		return n.fetchDatasetURL(msg)
 
 	case message.MSG_TYPE_GET_DATASET:
 	//	return n.marshalledStorageObjectContent(msg)
@@ -378,40 +349,36 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	return n.acknowledgeMessage()
 }
 
-func (n *Node) streamHandler(input chan []byte, respChan chan []byte) {
-	log.Println("In stream handler")
-	// TODO: verify ECDSA signature
-
-	for r := range input {
-		req := &pb.StreamRequest{}
-		if err := proto.Unmarshal(r, req); err != nil {
+func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
+	id := msg.GetStringValue()
+	if handler := n.getArchiveCallback(); handler != nil {
+		externalArchive, err := handler(id)
+		if err != nil {
 			panic(err)
 		}
 
-		switch t := req.GetType(); t {
-		case message.STREAM_DATASET:
-			if n.archiveCallback != nil {
-				datasetId := req.GetDataset()
-				ExternalArchive, err := n.archiveCallback(datasetId)
-				if err != nil {
-					panic(err)
-				}
+		// Build the URL
+		url := fmt.Sprintf("%s/archive/%s", n.httpListener.Addr(), externalArchive.URL)
 
-				n.streamFiles(ExternalArchive, respChan)
-				close(respChan)
-
-			} else {
-				panic(errors.New("Dataset stream not defined"))
-			}
-
-		case message.STREAM_STORAGE_OBJECT:
-			panic(errors.New("Storage object stream not defined"))
-		case "":
-		default:
-			log.Println("Unknown type")
-			// cleanup...
+		respMsg := &pb.Message{
+			StringValue: url,
 		}
+
+		data, err := proto.Marshal(respMsg)
+		if err != nil {
+			panic(err)
+		}
+
+		r, s, err := n.ifritClient.Sign(data)
+		if err != nil {
+			panic(err)
+		}
+
+		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
+		return proto.Marshal(respMsg)
 	}
+
+	return nil, nil 
 }
 
 func (n *Node) datasetExists(msg *pb.Message) ([]byte, error) {
@@ -465,67 +432,6 @@ func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 
 	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 	return proto.Marshal(respMsg)
-}
-
-// Streams archive files into chunks
-// TODO: implement large-scale streaming
-func (n *Node) streamFiles(externalData *ExternalArchive, respChan chan []byte) {
-	maxSize := (uint64(1 << 22))
-
-	for _, f := range externalData.Files {
-		if f.CompressedSize64 >= maxSize {
-			log.Println("File too large. Skipping")
-			continue
-		}
-
-		file, err := f.Open()
-		if err != nil {
-			log.Println(err.Error())
-		}
-
-		contents, err := ioutil.ReadAll(file)
-		if err != nil {
-			if err == io.EOF {
-				err = nil
-				continue
-			}
-
-			err = errors.Wrapf(err, "errored while copying from file to buf")
-			return
-		}
-
-		marshalled, err := proto.Marshal(&pb.File{
-			Filename: f.Name,
-			Content:  contents,
-		})
-		if err != nil {
-			log.Println(err.Error())
-		}
-
-		respChan <- marshalled
-	}
-
-	// Send message indicating end-of-stream
-	marshalled, err := proto.Marshal(&pb.File{Trailing: true})
-	if err != nil {
-		log.Println(err.Error())
-	}
-
-	respChan <- marshalled
-
-	/*for maxSize < len(data) {
-		data, chunks = data[maxSize:], append(chunks, data[0:maxSize:maxSize])
-	}
-
-	chunks = append(chunks, data)
-
-	respSlice := make([]*pb.StreamResponse, 0)
-	for _, c := range chunks {
-		streamResp := &pb.StreamResponse{
-			Body: c,
-		}
-		respSlice = append(respSlice, streamResp)
-	}*/
 }
 
 func (n *Node) acknowledgeMessage() ([]byte, error) {
@@ -599,7 +505,7 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 		Type: message.MSG_TYPE_PROBE_ACK,
 		Sender: &pb.Node{
 			Name:    n.name,
-			Address: n.ifritClient.Addr(),
+			IfritAddress: n.ifritClient.Addr(),
 			Role:    "Storage node",
 			Id:      []byte(n.ifritClient.Id()),
 		},
@@ -622,7 +528,7 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 		Type: message.MSG_TYPE_PROBE_ACK,
 		Sender: &pb.Node{
 			Name:    n.name,
-			Address: n.ifritClient.Addr(),
+			IfritAddress: n.ifritClient.Addr(),
 			Role:    "Storage node",
 			Id:      []byte(n.ifritClient.Id()),
 		},
@@ -671,7 +577,7 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 func (n *Node) pbNode() *pb.Node {
 	return &pb.Node{
 		Name:    n.NodeName(),
-		Address: n.ifritClient.Addr(),
+		IfritAddress: n.ifritClient.Addr(),
 		Role:    "storage node",
 		//ContactEmail
 		Id: []byte(n.ifritClient.Id()),
