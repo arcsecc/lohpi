@@ -1,7 +1,6 @@
 package cauth
 
 import (
-	"fmt"
 	"bytes"
 	"crypto"
 	"crypto/rand"
@@ -11,26 +10,26 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	_"github.com/tomcat-bit/lohpi/pkg/netutil"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"math/big"
 	"net"
 	"net/http"
-	"strings"
-	"path/filepath"
-	"io/ioutil"
-	"time"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
-	log "github.com/inconshreveable/log15"
 	"github.com/gorilla/mux"
+	log "github.com/inconshreveable/log15"
 )
 
 var (
 	errNoPort         = errors.New("No Port number specified in config.")
 	errNoCertFilePath = errors.New("Tried to save public group certificates with no filepath set in config")
 	errNoKeyFilePath  = errors.New("Tried to save private key with no filepath set in config")
-	errNoConfig 	  = errors.New("Configuration is null.")
+	errNoConfig       = errors.New("Configuration is null.")
 )
 
 type Ca struct {
@@ -41,8 +40,8 @@ type Ca struct {
 	listener   net.Listener
 	httpServer *http.Server
 
-	dirPath string
-	keyFilePath string
+	dirPath      string
+	keyFilePath  string
 	certFilePath string
 }
 
@@ -58,11 +57,11 @@ func NewCa(path string) (*Ca, error) {
 	}
 
 	c := &Ca{
-		privKey:     privKey,
-		pubKey:      privKey.Public(),
-		caCert:		 caCert,
-		dirPath:        path,
-		keyFilePath: "key.pem",
+		privKey:      privKey,
+		pubKey:       privKey.Public(),
+		caCert:       caCert,
+		dirPath:      path,
+		keyFilePath:  "key.pem",
 		certFilePath: "cert.pem",
 	}
 
@@ -86,7 +85,7 @@ func LoadCa(path string) (*Ca, error) {
 	}
 
 	// Load certificate
-	certPath :=  filepath.Join(path, "cert.pem")
+	certPath := filepath.Join(path, "cert.pem")
 	fp, err = ioutil.ReadFile(certPath)
 	if err != nil {
 		return nil, err
@@ -97,13 +96,13 @@ func LoadCa(path string) (*Ca, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	c := &Ca{
-		privKey:     key,
-		pubKey:      key.Public(),
-		caCert:		cert,
-		dirPath:        path,
-		keyFilePath: "key.pem",
+		privKey:      key,
+		pubKey:       key.Public(),
+		caCert:       cert,
+		dirPath:      path,
+		keyFilePath:  "key.pem",
 		certFilePath: "cert.pem",
 	}
 
@@ -185,7 +184,7 @@ func (c *Ca) httpHandler() error {
 	r.HandleFunc("/clientCertificateRequest", c.clientCertificateSigning).Methods("POST")
 
 	c.httpServer = &http.Server{
-		Handler: r,
+		Handler:     r,
 		ReadTimeout: time.Second * 10,
 	}
 
@@ -205,7 +204,7 @@ func (c *Ca) clientCertificateSigning(w http.ResponseWriter, r *http.Request) {
 
 	reqCert, err := x509.ParseCertificateRequest(body.Bytes())
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ":" + err.Error() , http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+":"+err.Error(), http.StatusInternalServerError)
 		log.Error(err.Error())
 		return
 	}
@@ -218,14 +217,14 @@ func (c *Ca) clientCertificateSigning(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newCert := &x509.Certificate{
-		SerialNumber: 	serialNumber,
-		Subject:         reqCert.Subject,
-		NotBefore:       time.Now().AddDate(-10, 0, 0),
-		NotAfter:        time.Now().AddDate(10, 0, 0),
+		SerialNumber: serialNumber,
+		Subject:      reqCert.Subject,
+		NotBefore:    time.Now().AddDate(-10, 0, 0),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
 		//ExtraExtensions: []pkix.Extension{ext},
-		PublicKey:       reqCert.PublicKey,
-		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:        x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		PublicKey:   reqCert.PublicKey,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 	}
 
 	signedCert, err := x509.CreateCertificate(rand.Reader, newCert, c.caCert, reqCert.PublicKey, c.privKey)
@@ -267,7 +266,7 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("Got a Lohpi certificate request", "addr", reqCert.Subject.Locality)
 
-/*	ext := pkix.Extension{
+	/*	ext := pkix.Extension{
 		Id:       []int{2, 5, 13, 37},
 		Critical: false,
 	}*/
@@ -285,15 +284,15 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newCert := &x509.Certificate{
-		SerialNumber: 	serialNumber,
-		Subject:         reqCert.Subject,
-		NotBefore:       time.Now().AddDate(-10, 0, 0),
-		NotAfter:        time.Now().AddDate(10, 0, 0),
+		SerialNumber: serialNumber,
+		Subject:      reqCert.Subject,
+		NotBefore:    time.Now().AddDate(-10, 0, 0),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
 		//ExtraExtensions: []pkix.Extension{ext},
-		PublicKey:       reqCert.PublicKey,
-		IPAddresses:     []net.IP{ipAddr.IP},
-		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:        x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		PublicKey:   reqCert.PublicKey,
+		IPAddresses: []net.IP{ipAddr.IP},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 	}
 
 	signedCert, err := x509.CreateCertificate(rand.Reader, newCert, c.caCert, reqCert.PublicKey, c.privKey)
