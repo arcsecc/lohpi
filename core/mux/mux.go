@@ -194,17 +194,22 @@ func (m *Mux) StorageNodes() map[string]*pb.Node {
 	return m.nodeMap
 }
 
-func (m *Mux) InitializeLogfile() error {
+func (m *Mux) InitializeLogfile(logToFile bool) error {
 	logfilePath := "mux.log"
 
-	file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
+	if logToFile {
+		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.SetOutput(os.Stdout)
+			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
+		}
+		log.SetOutput(file)
+		log.SetFormatter(&log.TextFormatter{})
+	} else {
+		log.Infoln("Setting logs to standard output")
 		log.SetOutput(os.Stdout)
-		return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
 	}
-
-	log.SetOutput(file)
-	log.SetFormatter(&log.TextFormatter{})
+	
 	return nil
 }
 
@@ -253,7 +258,7 @@ func (m *Mux) insertDataset(msg *pb.Message) {
 	m.datasetNodesMap[id] = msg.GetSender()
 }
 
-func (m *Mux) datasetMap() map[string]*pb.Node {
+func (m *Mux) datasetNodes() map[string]*pb.Node {
 	m.datasetNodesMapLock.RLock()
 	defer m.datasetNodesMapLock.RUnlock()
 	return m.datasetNodesMap

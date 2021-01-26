@@ -3,9 +3,9 @@ package node
 import (
 	"context"
 	"crypto/x509/pkix"
-	_ "errors"
+	"os"
+_	"net/url"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -14,17 +14,15 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
 	"github.com/pkg/errors"
-	"github.com/tomcat-bit/lohpi/pkg/comm"
-	"github.com/tomcat-bit/lohpi/pkg/message"
-	"github.com/tomcat-bit/lohpi/pkg/netutil"
+	"github.com/tomcat-bit/lohpi/core/comm"
+	"github.com/tomcat-bit/lohpi/core/message"
+	"github.com/tomcat-bit/lohpi/core/netutil"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
-
-	logger "github.com/inconshreveable/log15"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
 	errNoAddr = errors.New("No certificate authority address provided, can't continue")
-	logging   = logger.New("module", "node/main")
 )
 
 type Config struct {
@@ -36,7 +34,7 @@ type Config struct {
 	Root           string `required:true`
 	HttpPort       int    `required:false`
 	OverridePolicy bool   `default:false`
-	RemoteURL 	   string `default:"https://catbox.td.org.uit.no"`
+	UseRemoteURL	bool	`default:false`
 	// Fuse configuration
 	//	FuseConfig fuse.Config
 }
@@ -57,7 +55,7 @@ const (
 
 // Normally used to transfer metadata from external sources
 type ExternalMetadata struct {
-	Values map[string][]string
+	URL string
 }
 
 // Used to describe an external archive
@@ -154,6 +152,14 @@ type Node struct {
 	// Callback to fetch external metadata
 	externalMetadataHandler     ExternalMetadataHandler
 	externalMetadataHandlerLock sync.RWMutex
+
+	// If true, callbaks used for remote resources are invoked.
+	// If false, only in-memory maps are used for query processing.
+	useRemoteURL bool
+
+	// If true, use in-memory maps. Only use remote URL when absolutely 
+	// nescessary (ie. missing results)
+	useCache bool
 }
 
 func NewNode(name string, config *Config) (*Node, error) {
@@ -188,12 +194,12 @@ func NewNode(name string, config *Config) (*Node, error) {
 	}
 
 	node := &Node{
-		name:        name,
-		ifritClient: ifritClient,
-		muxClient:   muxClient,
-		config:      config,
-		psClient:    psClient,
-		httpListener:      httpListener,
+		name:        		name,
+		ifritClient: 		ifritClient,
+		muxClient:   		muxClient,
+		config:      		config,
+		psClient:    		psClient,
+		httpListener:      	httpListener,
 		cu: cu,
 
 		datasetMap:     make(map[string]*Dataset),
@@ -205,6 +211,25 @@ func NewNode(name string, config *Config) (*Node, error) {
 
 func (n *Node) IfritClient() *ifrit.Client {
 	return n.ifritClient
+}
+
+func (n *Node) InitializeLogfile(logToFile bool) error {
+	logfilePath := "nice.log"
+
+	if logToFile {
+		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.SetOutput(os.Stdout)
+			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
+		}
+		log.SetOutput(file)
+		log.SetFormatter(&log.TextFormatter{})
+	} else {
+		log.Infoln("Setting logs to standard output")
+		log.SetOutput(os.Stdout)
+	}
+	
+	return nil
 }
 
 // Shuts down the node
@@ -232,7 +257,6 @@ func (n *Node) JoinNetwork() error {
 //	n.ifritClient.RegisterStreamHandler(n.streamHandler)
 	go n.ifritClient.Start()
 
-	log.Println("Ifrit addr:", n.ifritClient.Addr())
 	return nil
 }
 
@@ -244,8 +268,13 @@ func (n *Node) NodeName() string {
 	return n.name
 }
 
-// Function type used for callbacks to fetch datasets on-demand.
-type ExernalDatasetIdentifiersHandler = func(d string) ([]string, error)
+// If set to true, the node will use the in-memory caches before performing lookups in external sources.
+func (n *Node) UseCache(use bool) {
+	n.useCache = use
+}
+
+// Function type used for callbacks to fetch datasets on-demand. 
+type ExernalDatasetIdentifiersHandler = func(id string) ([]string, error)
 
 // Function type used to fetch compressed archives from external sources.
 type ExternalArchiveHandler = func(id string) (*ExternalArchive, error)
@@ -254,7 +283,7 @@ type ExternalArchiveHandler = func(id string) (*ExternalArchive, error)
 type ExternalIdentifierExistsHandler = func(id string) bool
 
 // Function type to fetch metadata from the external data source
-type ExternalMetadataHandler = func(id string) (ExternalMetadata, error)
+type ExternalMetadataHandler = func(id string) (*ExternalMetadata, error)
 
 // PRIVATE METHODS BELOW
 func (n *Node) muxHandshake() error {
@@ -335,6 +364,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_DATASET_EXISTS:
 		return n.datasetExists(msg)
 
+	case message.MSG_TYPE_GET_DATASET_METADATA_URL:
+		return n.fetchDatasetMetadataURL(msg)
 		// TODO finish me
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		log.Println("Got new policy from policy store!")
@@ -357,11 +388,9 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 			panic(err)
 		}
 
-		// Build the URL
-		url := fmt.Sprintf("%s/archive/%s", n.httpListener.Addr(), externalArchive.URL)
-
 		respMsg := &pb.Message{
-			StringValue: url,
+			StringValue: externalArchive.URL,
+			Sender: n.pbNode(),
 		}
 
 		data, err := proto.Marshal(respMsg)
@@ -376,6 +405,40 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 		return proto.Marshal(respMsg)
+	} else {
+		log.Println("Dataset archive handler not registered")
+	}
+
+	return nil, nil 
+}
+
+func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
+	id := msg.GetStringValue()
+	if handler := n.getExternalMetadataHandler(); handler != nil {
+		metadataUrl, err := handler(id)
+		if err != nil {
+			panic(err)
+		}
+
+		respMsg := &pb.Message{
+			StringValue: metadataUrl.URL,
+			Sender: n.pbNode(),
+		}
+
+		data, err := proto.Marshal(respMsg)
+		if err != nil {
+			panic(err)
+		}
+
+		r, s, err := n.ifritClient.Sign(data)
+		if err != nil {
+			panic(err)
+		}
+
+		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
+		return proto.Marshal(respMsg)
+	} else {
+		log.Println("Dataset archive handler not registered")
 	}
 
 	return nil, nil 
@@ -383,7 +446,7 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 
 func (n *Node) datasetExists(msg *pb.Message) ([]byte, error) {
 	if n.identifierExistsHandler == nil {
-		return []byte{}, errors.New("Callback not set!")
+		return []byte{}, nil
 	}
 
 	datasetId := msg.GetStringValue()
@@ -406,7 +469,7 @@ func (n *Node) datasetExists(msg *pb.Message) ([]byte, error) {
 
 func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	if n.datasetIdentifiersHandler == nil {
-		panic(errors.New("Callback not set!"))
+		return []byte{}, nil
 	}
 
 	datasetId := msg.GetStringValue()
@@ -578,6 +641,7 @@ func (n *Node) pbNode() *pb.Node {
 	return &pb.Node{
 		Name:    n.NodeName(),
 		IfritAddress: n.ifritClient.Addr(),
+		HttpAddress: n.httpListener.Addr().String(),
 		Role:    "storage node",
 		//ContactEmail
 		Id: []byte(n.ifritClient.Id()),

@@ -3,6 +3,7 @@ package mux
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"net/http"
 	"time"
 
@@ -15,11 +16,10 @@ func (m *Mux) startHttpServer() error {
 	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
 
 	// Main dataset router
-	dRouter := r.PathPrefix("/dataset").Subrouter()
-
+	dRouter := r.PathPrefix("/dataset").Subrouter().SkipClean(true)
 	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
-	dRouter.HandleFunc("/metadata/{id}", m.getDatasetMetadata).Methods("GET")
-	dRouter.HandleFunc("/{id}", m.getDataset).Methods("GET")
+	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
+	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
 
 	m.httpServer = &http.Server{
 		Handler:      r,
@@ -57,20 +57,39 @@ func (m *Mux) shutdownHttpServer() {
 func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 20))
+	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
 	defer cancel()
-	r = r.WithContext(ctx)
 
-	sets, err := m.datasetIdentifiers(ctx)
-	if err != nil {
+	errChan := make(chan error)
+	setsChan := make(chan []byte)
+	defer close(setsChan)
+
+	go func() {
+		defer close(errChan)
+		r = r.WithContext(ctx)
+		sets, err := m.datasetIdentifiers(ctx)
+		if err != nil {
+			errChan <-err
+			return
+		}
+
+		setsChan <-sets
+	}()
+
+	select {
+	case <-ctx.Done():
+		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
+		return
+	case err := <-errChan:
 		log.Errorln(err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
+	case sets := <-setsChan:
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(sets)
+		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(sets)
 }
 
 // Fetches the information about a dataset
@@ -78,7 +97,7 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
 		errMsg := fmt.Errorf("Missing project identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
 		return
 	}
 	
@@ -86,7 +105,7 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	defer cancel()
 	req = req.WithContext(ctx)*/
 
-	md, err := m.datasetMetadata(dataset, nil)
+	md, err := m.datasetMetadata(w, req, dataset, nil)
 	if err != nil {
 		log.Errorln(err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -100,11 +119,11 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 // Handler used to fetch an entire dataset. Writes a zip file to the client
 func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
-
+	
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
 		errMsg := fmt.Errorf("Missing storage identifier.")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -112,10 +131,14 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 	/*defer cancel()
 	req = req.WithContext(ctx)*/
 
-	w.Header().Set("Content-Type", "application/gzip")
-	// set content length?
-
-	if err := m.dataset(dataset, w, nil); err != nil {
+	archiveBytes, err := m.dataset(w, req, dataset, nil)
+	if err != nil {
 		log.Println(err.Error())
 	}
+
+	w.WriteHeader(http.StatusOK)
+	req.Header.Add("Content-Length", strconv.Itoa(len(archiveBytes)))
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zip\"", dataset))
+	w.Write(archiveBytes)
 }
