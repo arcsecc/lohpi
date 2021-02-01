@@ -9,7 +9,7 @@ import (
 	"github.com/joonnna/ifrit"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/proto"
-	"github.com/tomcat-bit/lohpi/pkg/message"
+	"github.com/tomcat-bit/lohpi/core/message"
 	pb "github.com/tomcat-bit/lohpi/protobuf"
 )
 

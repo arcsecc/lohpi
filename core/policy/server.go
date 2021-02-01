@@ -9,7 +9,7 @@ import (
 	"time"
 
 
-	"github.com/tomcat-bit/lohpi/pkg/comm"
+	"github.com/tomcat-bit/lohpi/core/comm"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/credentials"
