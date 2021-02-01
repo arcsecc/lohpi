@@ -62,6 +62,7 @@ type Mux struct {
 	nodeMap     map[string]*pb.Node
 	//cache        *cache.Cache
 
+	cu *comm.CryptoUnit
 	// Dataset nodes
 	datasetNodesMap     map[string]*pb.Node // Dataset identifier mapped to storage node
 	datasetNodesMapLock sync.RWMutex
@@ -137,6 +138,7 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 
 		// HTTP
 		httpListener: httpListener,
+		cu: cu,
 
 		// Network nodes
 		nodeMap:     make(map[string]*pb.Node),
@@ -233,7 +235,7 @@ func (m *Mux) messageHandler(data []byte) ([]byte, error) {
 
 	switch msgType := msg.Type; string(msgType) {
 	case string(message.MSG_TYPE_INSERT_DATASET):
-		m.insertDataset(msg)
+		//m.insertDataset(msg)
 	default:
 		log.Warnln("Unknown message type at mux handler: %s\n", msg.GetType())
 	}
@@ -251,7 +253,7 @@ func (m *Mux) streamHandler(input chan []byte, output chan []byte) {
 
 }
 
-func (m *Mux) insertDataset(msg *pb.Message) {
+/*func (m *Mux) insertDataset(msg *pb.Message) {
 	m.datasetNodesMapLock.Lock()
 	defer m.datasetNodesMapLock.Unlock()
 	id := msg.GetDataset().GetName()
@@ -262,7 +264,7 @@ func (m *Mux) datasetNodes() map[string]*pb.Node {
 	m.datasetNodesMapLock.RLock()
 	defer m.datasetNodesMapLock.RUnlock()
 	return m.datasetNodesMap
-}
+}*/
 
 // Adds the given node to the network and returns the Mux's IP address
 func (m *Mux) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {

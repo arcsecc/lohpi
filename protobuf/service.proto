@@ -26,7 +26,7 @@ message Message {
     MsgSignature signature = 5; // Integrity check based on ECDSA
     GossipMessage gossipMessage = 6;
     Probe probe = 7;
-    Dataset dataset = 8;
+    DatasetRequest datasetRequest = 8;
 
     // Other fields
     string stringValue = 9;
@@ -44,23 +44,6 @@ message Response {
     repeated bytes bytesSlice = 5;
 }
 
-message StreamRequest {
-    string type = 1;
-    string Dataset = 2;
-}
-
-message StreamResponse {
-    string type = 1;
-    bytes body = 2;
-}
-
-// TODO: Deduplicate files larger than 4 MB
-message File {
-    string Filename = 1;
-    bytes Content = 2;
-    bool trailing = 3;
-}
-
 // Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
 message Node {
     string name = 1;            // String identifier
@@ -71,23 +54,14 @@ message Node {
     string httpAddress = 6; //
 }
 
-message ArchiveRequest {
+message DatasetRequest {
     string identifier = 1; // String identifier
-    MsgSignature signature = 2;
 }
 
-message Datasets {
-    repeated Dataset datasets = 1;
-    MsgSignature signature = 2;
-}
-
-message Dataset {
-    string name = 1;
-    Metadata metadata = 2;
+message DatasetResponse {
+    string Type = 1;        // zip/gzip/binary...
+    string URL = 2;
     MsgSignature signature = 3;
-    repeated StorageObject storageObjects = 4;
-	//string owner = 2;
-    //DatasetMetadata datasetMetadata = 3;
 }
 
 message Metadata {

@@ -380,8 +380,9 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	return n.acknowledgeMessage()
 }
 
+// TODO: separate internal and external data sources
 func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
-	id := msg.GetStringValue()
+	id := msg.GetDatasetRequest().GetIdentifier()
 	if handler := n.getArchiveCallback(); handler != nil {
 		externalArchive, err := handler(id)
 		if err != nil {
@@ -403,6 +404,7 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 			panic(err)
 		}
 
+		log.Println("Url:", externalArchive)
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 		return proto.Marshal(respMsg)
 	} else {
@@ -467,6 +469,7 @@ func (n *Node) datasetExists(msg *pb.Message) ([]byte, error) {
 	return proto.Marshal(respMsg)
 }
 
+// BUG: timeout when issuing identifier requests to multiple nodes
 func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	if n.datasetIdentifiersHandler == nil {
 		return []byte{}, nil

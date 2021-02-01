@@ -3,11 +3,11 @@ package mux
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/tomcat-bit/lohpi/core/comm"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -15,8 +15,8 @@ func (m *Mux) startHttpServer() error {
 	r := mux.NewRouter()
 	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
 
-	// Main dataset router
-	dRouter := r.PathPrefix("/dataset").Subrouter().SkipClean(true)
+	// Main dataset router exposed to the clients
+	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
 	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
@@ -26,6 +26,7 @@ func (m *Mux) startHttpServer() error {
 		WriteTimeout: time.Second * 30,
 		ReadTimeout:  time.Second * 30,
 		IdleTimeout:  time.Second * 60,
+		TLSConfig: comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
 	}
 
 	err := m.httpServer.Serve(m.httpListener)
@@ -49,7 +50,6 @@ func (m *Mux) shutdownHttpServer() {
 	// Optionally, you could run srv.Shutdown in a goroutine and block on
 	// <-ctx.Done() if your application should wait for other services
 	// to finalize based on context cancellation.
-
 	log.Println("Gracefully shutting down HTTP server")
 }
 
@@ -62,10 +62,11 @@ func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Reques
 
 	errChan := make(chan error)
 	setsChan := make(chan []byte)
-	defer close(setsChan)
 
 	go func() {
 		defer close(errChan)
+		defer close(setsChan)
+		
 		r = r.WithContext(ctx)
 		sets, err := m.datasetIdentifiers(ctx)
 		if err != nil {
@@ -101,19 +102,39 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	
-/*	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 5))
+	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 5))
 	defer cancel()
-	req = req.WithContext(ctx)*/
 
-	md, err := m.datasetMetadata(w, req, dataset, nil)
-	if err != nil {
+	errChan := make(chan error)
+	doneChan := make(chan bool)
+	
+	go func() {
+		defer close(doneChan)
+		defer close(errChan)
+
+		md, err := m.datasetMetadata(w, req, dataset, ctx)
+		if err != nil {
+			errChan <-err
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(md)
+		doneChan <-true
+	}()
+
+	select {
+	case <-ctx.Done():
+		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
+		return
+	case err := <-errChan:
 		log.Errorln(err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + err.Error(), http.StatusBadRequest)
+		return
+	case <-doneChan:
+		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(md)
 }
 
 // Handler used to fetch an entire dataset. Writes a zip file to the client
@@ -127,18 +148,10 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	//ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 5))
-	/*defer cancel()
-	req = req.WithContext(ctx)*/
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second * 2))
+	defer cancel()
 
-	archiveBytes, err := m.dataset(w, req, dataset, nil)
-	if err != nil {
+	if err := m.dataset(w, req, dataset, ctx); err != nil {
 		log.Println(err.Error())
 	}
-
-	w.WriteHeader(http.StatusOK)
-	req.Header.Add("Content-Length", strconv.Itoa(len(archiveBytes)))
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.zip\"", dataset))
-	w.Write(archiveBytes)
 }

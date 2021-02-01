@@ -10,6 +10,8 @@ _	"archive/zip"
 _	"net/url"
 	"errors"
 	"time"
+	"log"
+	"strconv"
 	"fmt"
 	"net/http"
 _	"os"
@@ -30,24 +32,18 @@ func (m *Mux) datasetIdentifiers(ctx context.Context) ([]byte, error) {
 		Sets: make([]string, 0),
 	}
 
-	ids := make(chan []string, 1)
-	defer close(ids)
-	
+	ids := make(chan []string)
 	errChan := make(chan error)
-	defer close(errChan)
 
-	var wg sync.WaitGroup
-
-	ctx, cancel := context.WithCancel(ctx)
+	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	for _, node := range m.StorageNodes() {
 		n := node
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
-			c, _ := context.WithCancel(ctx)
-			identifiers, err := m.requestDatasetIdentifiers(n.GetIfritAddress(), c)
+			defer close(ids)
+			defer close(errChan)
+			identifiers, err := m.requestDatasetIdentifiers(n.GetIfritAddress(), newCtx)
 			if err != nil {
 				errChan <-err
 				return
@@ -60,18 +56,19 @@ func (m *Mux) datasetIdentifiers(ctx context.Context) ([]byte, error) {
 	select {
 	case id := <-ids:
 		jsonOutput.Sets = append(jsonOutput.Sets, id...)
-	case <-ctx.Done():
-		return nil, fmt.Errorf("Fetching dataset identifiers timeout")
+	case <-newCtx.Done():
+		return nil, fmt.Errorf("Timeout in 'func (m *Mux) datasetIdentifiers()")
 	case err := <-errChan:
 		return nil, err
 	}
-
-	wg.Wait()
 
 	return json.Marshal(jsonOutput)
 }
 
 func (m *Mux) requestDatasetIdentifiers(addr string, ctx context.Context) ([]string, error) {
+	newCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	msg := &pb.Message{
 		Type:   message.MSG_TYPE_GET_DATASET_IDENTIFIERS,
 		Sender: m.pbNode(),
@@ -106,7 +103,7 @@ func (m *Mux) requestDatasetIdentifiers(addr string, ctx context.Context) ([]str
 		}
 
 		return respMsg.GetStringSlice(), nil
-	case <-ctx.Done():
+	case <-newCtx.Done():
 		return nil, fmt.Errorf("Fetching dataset identifiers from %s failed", addr)
 	}
 
@@ -115,7 +112,10 @@ func (m *Mux) requestDatasetIdentifiers(addr string, ctx context.Context) ([]str
 
 // Fetches the information about a dataset
 func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset string, ctx context.Context) ([]byte, error) {
-	nodeAddr, err := m.probeNetworkForDataset(dataset)
+	newCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	nodeAddr, err := m.probeNetworkForDataset(dataset, newCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -160,43 +160,50 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset 
 			panic(err)
 		}
 
-		return m.getMetadata(w, respMsg.GetSender().GetHttpAddress(), respMsg.GetStringValue(), ctx)
+		return m.getMetadata(w, respMsg.GetSender().GetHttpAddress(), respMsg.GetStringValue(), newCtx)
+	case <-newCtx.Done():
+		log.Println("Timeout in 'func (m *Mux) datasetMetadata()'")
 	}
 
 	return nil, err
 }
 
-func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, ctx context.Context) ([]byte, error) {
-	nodeAddr, err := m.probeNetworkForDataset(dataset)
+func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, ctx context.Context) error {
+	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second * 15)) // set proper time to wait
+	defer cancel()
+
+	nodeAddr, err := m.probeNetworkForDataset(dataset, newCtx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if nodeAddr == "" {
-		return nil, errors.New("Dataset is not in network")
+		return errors.New("Dataset is not in network")
 	}
 
 	// Create dataset request
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_URL,
-		StringValue: dataset,
+		DatasetRequest: &pb.DatasetRequest{
+			Identifier: dataset,
+		},
 	}
 
 	// Marshal the request
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Sign it
 	r, s, err := m.ifritClient.Sign(data)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	msg.Signature = &pb.MsgSignature{R: r, S: s}
 	data, err = proto.Marshal(msg)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	ch := m.ifritClient.SendTo(nodeAddr, data)
@@ -205,19 +212,23 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 	case resp := <-ch:
 		respMsg := &pb.Message{}
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			panic(err)
+			return err
 		}
 		
 		if err := m.verifyMessageSignature(respMsg); err != nil {
-			panic(err)
+			return err
 		}
 
-		return m.getZipArchive(w, respMsg.GetSender().GetHttpAddress(), respMsg.GetStringValue(), ctx)
+		return m.datasetRequest(w, req, respMsg.GetStringValue(), ctx)
+	case <-newCtx.Done():
+		log.Println("Timeout in 'func (m *Mux) dataset()'")
+		return errors.New("Timeout in 'func (m *Mux) dataset()'")
 	}
 
-	return nil, err
+	return nil
 }
 
+// TODO: use context
 func (m *Mux) getMetadata(w http.ResponseWriter, host, remoteUrl string, ctx context.Context) ([]byte, error) {
 	request, err := http.NewRequest("GET", "http://" + host + "/metadata/", nil)
 	if err != nil {
@@ -239,21 +250,21 @@ func (m *Mux) getMetadata(w http.ResponseWriter, host, remoteUrl string, ctx con
 
 	if response.StatusCode == http.StatusOK {
 		buf := new(bytes.Buffer)
-		buf.ReadFrom(response.Body)
+		_, err := buf.ReadFrom(response.Body)
+		if err != nil {
+			return nil, err
+		}
 		return buf.Bytes(), nil
 	}
-	return nil, errors.New("Could not fetch dataset from host.")
+	return nil, errors.New("Could not fetch dataset from host")
 }
 
-func (m *Mux) getZipArchive(w http.ResponseWriter, host, remoteUrl string, ctx context.Context) ([]byte, error) {
-	request, err := http.NewRequest("GET", "http://" + host + "/archive/", nil)
+// TODO: use context request
+func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) error {
+	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	q := request.URL.Query()
-    q.Add("remote-url", remoteUrl)
-    request.URL.RawQuery = q.Encode()
 
 	httpClient := &http.Client{
 		Timeout: time.Duration(10 * time.Minute),
@@ -261,43 +272,95 @@ func (m *Mux) getZipArchive(w http.ResponseWriter, host, remoteUrl string, ctx c
 
 	response, err := httpClient.Do(request)
     if err != nil {
-        return nil, err
+        return err
     }
 
-	if response.StatusCode == http.StatusOK {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(response.Body)
-		return buf.Bytes(), nil
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(response.Body)
+	
+	w.WriteHeader(response.StatusCode)
+	req.Header.Add("Content-Length", strconv.Itoa(len(buf.Bytes())))
+
+	// Octet stream is default
+	contentType := req.Header.Get("Content-Type")
+	if contentType == "" {
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	return nil, errors.New("Could not fetch dataset from host.")
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", req.Header.Get("Content-Type"))
+	w.Write(buf.Bytes())
+	return nil
 }
 
 // Returns the address of the Lohpi node that stores the given dataset
-func (m *Mux) probeNetworkForDataset(dataset string) (string, error) {
-	//|var wg sync.WaitGroup
+func (m *Mux) probeNetworkForDataset(dataset string, ctx context.Context) (string, error) {
+	newCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	for _, n := range m.StorageNodes() {
+	strChan := make(chan string)
+	errChan := make(chan error)
+	existsChan := make(chan bool)
+	
+	members := m.StorageNodes()
+
+	if len(members) == 0 {
+		return "", errors.New("No such dataset in network:" + dataset)
+	}
+
+	var wg sync.WaitGroup
+
+	// Ask all nodes. Write address to strChan if address is found
+	for _, n := range members {
 		node := n
-		//wg.Add(1)
-		//|go func() {
-			//defer wg.Done()
-			exists, err := m.datasetExistsAtNode(node.GetIfritAddress(), dataset)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			exists, err := m.datasetExistsAtNode(node.GetIfritAddress(), dataset, newCtx)
 			if err != nil {
-				return "", err
+				errChan <-err
+				return
 			}
 
 			if exists {
-				return node.GetIfritAddress(), nil
+				strChan <-node.GetIfritAddress()
+			} else {
+				existsChan <-false
 			}
+		}()
 	}
 
-	//wg.ait()
+	// Close all channels when all writers are done
+	go func() {
+		wg.Wait()
+		defer close(errChan)
+		defer close(strChan)
+		defer close(existsChan)
+	}()
 
+	missed := 0
+
+	select {
+	case s := <-strChan:
+		return s, nil
+	case err := <-errChan:
+		return "", err
+	case <-existsChan:
+		missed++
+		if missed == len(members) {
+			return "", errors.New("No such dataset in network:" + dataset)
+		}
+	case <-newCtx.Done():
+		log.Println("Timeout in func '(m *Mux) probeNetworkForDataset()'")
+	}
 	return "", nil
 }
 
 // Returns true if the dataset identifier exists at the node, returns false otherwise. 
-func (m *Mux) datasetExistsAtNode(node, dataset string) (bool, error) {
+func (m *Mux) datasetExistsAtNode(node, dataset string, ctx context.Context) (bool, error) {
+	newCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_DATASET_EXISTS,
 		Sender:      m.pbNode(),
@@ -335,6 +398,9 @@ func (m *Mux) datasetExistsAtNode(node, dataset string) (bool, error) {
 		if respMsg.GetBoolValue() {
 			return true, nil
 		}
+	case <-newCtx.Done():
+		log.Println("Timeout in func '(m *Mux) datasetExistsAtNode()'")
+		return false, errors.New("Timeout in func '(m *Mux) datasetExistsAtNode()'")
 	}
 
 	return false, nil
