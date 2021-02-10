@@ -3,7 +3,7 @@ package multicast
 import ( 
 	"sync"
 	"time"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 // Describes the configuration for one round

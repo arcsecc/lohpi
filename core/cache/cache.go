@@ -6,7 +6,7 @@ package cache
 	"log"
 
 	"github.com/joonnna/ifrit"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )*/
 
 // Cache is the internal overview of objects and nodes

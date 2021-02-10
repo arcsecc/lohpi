@@ -1,16 +1,16 @@
 package node
 
 // Registers the given handler when a compressed archive is fetched from a remote source.
-func (n *Node) RegisterArchiveHandler(f ExternalArchiveHandler) {
-	n.archiveCallbackLock.Lock()
-	defer n.archiveCallbackLock.Unlock()
-	n.archiveCallback = f
+func (n *Node) RegisterDatasetHandler(f ExternalArchiveHandler) {
+	n.datasetCallbackLock.Lock()
+	defer n.datasetCallbackLock.Unlock()
+	n.datasetCallback = f
 }
 
-func (n *Node) getArchiveCallback() ExternalArchiveHandler {
-	n.archiveCallbackLock.RLock()
-	defer n.archiveCallbackLock.RUnlock()
-	return n.archiveCallback
+func (n *Node) getDatasetCallback() ExternalArchiveHandler {
+	n.datasetCallbackLock.RLock()
+	defer n.datasetCallbackLock.RUnlock()
+	return n.datasetCallback
 }
 
 // Registers the given callback whenever a new dataset from an external source is requested.

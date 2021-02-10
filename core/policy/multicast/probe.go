@@ -10,9 +10,9 @@ import (
 	"log"
 	
 	"github.com/joonnna/ifrit"
-	"github.com/tomcat-bit/lohpi/core/message"
+	"github.com/arcsecc/lohpi/core/message"
 	"github.com/golang/protobuf/proto"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 var (

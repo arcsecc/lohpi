@@ -6,7 +6,7 @@ import (
 	"crypto/rand"
 	"io"
 	"sync"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 type Manager struct {

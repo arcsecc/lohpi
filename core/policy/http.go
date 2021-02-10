@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 
-	"github.com/tomcat-bit/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/netutil"
 	"github.com/gorilla/mux"
 )
 
