@@ -9,7 +9,7 @@ import (
 
 	logger "github.com/inconshreveable/log15"
 	"github.com/jinzhu/configor"
-	"github.com/tomcat-bit/lohpi/core/mux"
+	"github.com/arcsecc/lohpi/core/mux"
 )
 
 type Launcher struct {

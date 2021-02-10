@@ -8,7 +8,7 @@ import (
 	"log"
 
 	logger "github.com/inconshreveable/log15"
-	"github.com/tomcat-bit/lohpi/core/policy"
+	"github.com/arcsecc/lohpi/core/policy"
 	"github.com/jinzhu/configor"
 )
 

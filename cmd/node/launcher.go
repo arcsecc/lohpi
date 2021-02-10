@@ -14,7 +14,7 @@ import (
 
 	logger "github.com/inconshreveable/log15"
 	"github.com/jinzhu/configor"
-	"github.com/tomcat-bit/lohpi/core/node"
+	"github.com/arcsecc/lohpi/core/node"
 )
 
 var NodeConfig = struct {

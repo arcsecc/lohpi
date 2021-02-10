@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"runtime"
 	"syscall"
-	lohpi_ca "github.com/tomcat-bit/lohpi/cauth"
+	lohpi_ca "github.com/arcsecc/lohpi/cauth"
 
 	log "github.com/sirupsen/logrus"
 	ifrit_ca "github.com/joonnna/ifrit/cauth"
