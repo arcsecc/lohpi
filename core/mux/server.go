@@ -9,11 +9,11 @@ import (
 	"time"
 
 
-	"github.com/tomcat-bit/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/comm"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/credentials"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 var (

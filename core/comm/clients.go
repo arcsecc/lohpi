@@ -7,7 +7,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 // TODO: clean up this mess

@@ -9,8 +9,8 @@ import (
 	"github.com/joonnna/ifrit"
 	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/proto"
-	"github.com/tomcat-bit/lohpi/core/message"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/arcsecc/lohpi/core/message"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 type MessageMode byte

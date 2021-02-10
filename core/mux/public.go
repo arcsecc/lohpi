@@ -20,8 +20,8 @@ _	"os"
 
 	"github.com/golang/protobuf/proto"
 	//log "github.com/sirupsen/logrus"
-	"github.com/tomcat-bit/lohpi/core/message"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/arcsecc/lohpi/core/message"
+	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 // Returns a JSON object that contains all globally unique dataset identifiers

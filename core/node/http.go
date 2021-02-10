@@ -11,7 +11,7 @@ _	"fmt"
 _	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/tomcat-bit/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/comm"
 )
 
 const PROJECTS_DIRECTORY = "projects"

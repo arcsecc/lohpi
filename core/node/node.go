@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"database/sql"
 	"crypto/x509/pkix"
 	"os"
 _	"net/url"
@@ -14,10 +15,10 @@ _	"net/url"
 	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
 	"github.com/pkg/errors"
-	"github.com/tomcat-bit/lohpi/core/comm"
-	"github.com/tomcat-bit/lohpi/core/message"
-	"github.com/tomcat-bit/lohpi/core/netutil"
-	pb "github.com/tomcat-bit/lohpi/protobuf"
+	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/message"
+	"github.com/arcsecc/lohpi/core/netutil"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -31,12 +32,7 @@ type Config struct {
 	LohpiCaAddr    string `default:"127.0.1.1:8301"`
 	RecIP          string `default:"127.0.1.1:8084"`
 	FileDigesters  int    `default:20`
-	Root           string `required:true`
 	HttpPort       int    `required:false`
-	OverridePolicy bool   `default:false`
-	UseRemoteURL	bool	`default:false`
-	// Fuse configuration
-	//	FuseConfig fuse.Config
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -59,8 +55,13 @@ type ExternalMetadata struct {
 }
 
 // Used to describe an external archive
-type ExternalArchive struct {
+type ExternalDataset struct {
 	URL string
+}
+
+type ObjectPolicy struct {
+	Attribute string
+	Value string
 }
 
 type Dataset struct {
@@ -101,9 +102,6 @@ type objectFile struct {
 }
 
 type Node struct {
-	// Fuse file system
-	//	fs *fuse.Ptfs
-
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
 
@@ -146,8 +144,8 @@ type Node struct {
 	identifierExistsHandlerLock sync.RWMutex
 
 	// Callback to fetch remote archives
-	archiveCallback     ExternalArchiveHandler
-	archiveCallbackLock sync.RWMutex
+	datasetCallback     ExternalArchiveHandler
+	datasetCallbackLock sync.RWMutex
 
 	// Callback to fetch external metadata
 	externalMetadataHandler     ExternalMetadataHandler
@@ -160,7 +158,18 @@ type Node struct {
 	// If true, use in-memory maps. Only use remote URL when absolutely 
 	// nescessary (ie. missing results)
 	useCache bool
+
+	// Azure database
+	db *sql.DB
+	pk string
 }
+
+// Database-related consts
+var (
+	dbName = "nodepolicydb"
+	schemaName = "policy_schema" 
+	policyTable = "policy_table"
+)
 
 func NewNode(name string, config *Config) (*Node, error) {
 	ifritClient, err := ifrit.NewClient()
@@ -214,7 +223,7 @@ func (n *Node) IfritClient() *ifrit.Client {
 }
 
 func (n *Node) InitializeLogfile(logToFile bool) error {
-	logfilePath := "nice.log"
+	logfilePath := "node.log"
 
 	if logToFile {
 		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
@@ -231,6 +240,59 @@ func (n *Node) InitializeLogfile(logToFile bool) error {
 	
 	return nil
 }
+
+// Initializes the underlying node database using 'id' as the unique identifier for the relation.
+func (n *Node) InitializePolicyDb(primaryKey string) error {
+	var connectionString = fmt.Sprintf(os.Getenv("NODE_DB_CONNECTION_STRING"))
+	if connectionString == "" {
+		return errors.New("Tried to fetch 'NODE_DB_CONNECTION_STRING' from environment but it was not set.")
+	}
+
+	log.Println("Using NODE_DB_CONNECTION_STRING")
+
+	n.pk = primaryKey
+	return n.initializePostgreSQLdb(primaryKey, connectionString)
+}
+
+// Assoicated the given object attribute with the object identifier.
+func (n *Node) SetObjectPolicy(id, objectAttribute string) error {
+	return n.setObjectPolicy(id, objectAttribute)
+}
+
+// Returns true if the subject's attributes are compatible with the object's attributes, 
+// returns false otherwise.
+func (n *Node) SubjectIsAllowedAccess(subjectAttribute, objectAttribute string) bool {
+	return n.subjectIsAllowedAccess(subjectAttribute, objectAttribute)
+}
+
+// Removes the object policy from the node
+func (n *Node) RemoveObjectPolicy(id string) {
+	n.removeObjectPolicy(id)
+}
+
+func (n *Node) DatasetExistsInDb(id string) bool {
+	return n.datasetExistsInDb(id)
+}
+
+/*func (n *Node) InitializePolicyDb(primaryKey string, attributes []string) error {
+	var attr bytes.Buffer
+
+	for n, a := range attributes {
+		if n == len(attributes) - 1 {
+			attr.WriteString(a + " VARCHAR(50)")
+		} else {
+			attr.WriteString(a + " VARCHAR(50), ")
+		}
+	}
+
+	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + policyTable + ` (
+		` + primaryKey + ` VARCHAR(45) PRIMARY KEY NOT NULL, ` + attr.String() + `);`
+
+	if err := n.initializeAzurePostgreSQLdb(q); err != nil {
+		return err
+	}
+	return nil 
+}*/
 
 // Shuts down the node
 func (n *Node) Shutdown() {
@@ -277,7 +339,7 @@ func (n *Node) UseCache(use bool) {
 type ExernalDatasetIdentifiersHandler = func(id string) ([]string, error)
 
 // Function type used to fetch compressed archives from external sources.
-type ExternalArchiveHandler = func(id string) (*ExternalArchive, error)
+type ExternalArchiveHandler = func(id string) (*ExternalDataset, error)
 
 // Function type to check if external identifiers in a dataset exists.
 type ExternalIdentifierExistsHandler = func(id string) bool
@@ -383,7 +445,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 // TODO: separate internal and external data sources
 func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 	id := msg.GetDatasetRequest().GetIdentifier()
-	if handler := n.getArchiveCallback(); handler != nil {
+	if handler := n.getDatasetCallback(); handler != nil {
 		externalArchive, err := handler(id)
 		if err != nil {
 			panic(err)

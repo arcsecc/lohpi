@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/tomcat-bit/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/comm"
 	log "github.com/sirupsen/logrus"
 )
 

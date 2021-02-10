@@ -56,29 +56,13 @@ message Node {
 
 message DatasetRequest {
     string identifier = 1; // String identifier
+    string requestAttribute = 2;        // access attribute from client
 }
 
 message DatasetResponse {
     string Type = 1;        // zip/gzip/binary...
     string URL = 2;
     MsgSignature signature = 3;
-}
-
-message Metadata {
-    map<string, string> mapField = 1;
-    MsgSignature signature = 2;
-}
-
-message StorageObject {
-    string identifier = 1;                  // Name for this study
-    Policy policy = 2;                      // Policy in effect
-    string owner = 3;                       // more fields here... 
-    StorageObjectContent content = 4;
-    MsgSignature signature = 5;
-}
-
-message StorageObjectContent {
-    bytes content = 1;
 }
 
 message Policy {
