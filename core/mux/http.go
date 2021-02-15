@@ -35,12 +35,21 @@ func (m *Mux) startHttpServer(addr string) error {
 	dRouter.Use(m.middlewareValidateAccessToken)
 
 	m.httpServer = &http.Server{
+<<<<<<< HEAD
 		Addr: 		  	addr,
 		Handler:      	r,
 		WriteTimeout: 	time.Second * 30,
 		ReadTimeout:  	time.Second * 30,
 		IdleTimeout:  	time.Second * 60,
 		TLSConfig: 		comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
+=======
+		Addr: 		  addr,
+		Handler:      r,
+		WriteTimeout: time.Second * 30,
+		ReadTimeout:  time.Second * 30,
+		IdleTimeout:  time.Second * 60,
+		TLSConfig: comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
+>>>>>>> 33f79106e6eeccfdf39b5cfddc48d4d22689cfd1
 	}
 
 	return m.httpServer.ListenAndServe()
