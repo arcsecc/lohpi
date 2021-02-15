@@ -5,13 +5,25 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"errors"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/dgrijalva/jwt-go"
 	log "github.com/sirupsen/logrus"
 )
 
-func (m *Mux) startHttpServer() error {
+type JwtClaim struct {
+	//Email string
+	Stuff interface{}
+}
+
+func (a *JwtClaim) Valid() error {
+	return nil
+}
+
+func (m *Mux) startHttpServer(addr string) error {
 	r := mux.NewRouter()
 	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
 
@@ -20,21 +32,65 @@ func (m *Mux) startHttpServer() error {
 	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
+	dRouter.Use(m.middlewareValidateAccessToken)
 
 	m.httpServer = &http.Server{
-		Handler:      r,
-		WriteTimeout: time.Second * 30,
-		ReadTimeout:  time.Second * 30,
-		IdleTimeout:  time.Second * 60,
-		TLSConfig: comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
+		Addr: 		  	addr,
+		Handler:      	r,
+		WriteTimeout: 	time.Second * 30,
+		ReadTimeout:  	time.Second * 30,
+		IdleTimeout:  	time.Second * 60,
+		TLSConfig: 		comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
 	}
 
-	err := m.httpServer.Serve(m.httpListener)
-	if err != nil {
-		log.Errorln(err)
-		return err
+	return m.httpServer.ListenAndServe()
+}
+
+func (m *Mux) middlewareValidateAccessToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+		t, err := extractToken(r)
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusBadRequest) + ": malformed access token", http.StatusBadRequest)
+			return
+		}
+
+		m.validateAccessToken(t)
+		log.Println("Token:", t)
+	})
+}
+
+func (m *Mux) validateAccessToken(tokenString string) (string, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &JwtClaim{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			//auth.logger.Error("Unexpected signing method in auth token")
+			return nil, errors.New("Unexpected signing method in auth token")
+		}
+		
+		return nil, nil
+	})
+
+
+	claims, ok := token.Claims.(*JwtClaim)
+	if !ok {
+		err = errors.New("Couldn't parse claims")
+		return "", err
 	}
-	return nil
+
+	log.Printf("Claims: %+v\n", claims)
+
+	_ = err
+	return "", nil
+}
+
+
+
+func extractToken(r *http.Request) (string, error) {
+	authHeader := r.Header.Get("Authorization")
+	authHeaderContent := strings.Split(authHeader, " ")
+	if len(authHeaderContent) != 2 {
+		return "", errors.New("Token not provided or malformed")
+	}
+	return authHeaderContent[1], nil
 }
 
 func (m *Mux) shutdownHttpServer() {
