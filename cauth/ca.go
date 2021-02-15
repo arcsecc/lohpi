@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/rand"
+	"fmt"
 	"crypto/rsa"
+	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math/big"
@@ -22,7 +23,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	log "github.com/inconshreveable/log15"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -161,40 +162,39 @@ func (c *Ca) SaveCertificate() error {
 	return nil
 }
 
-func (c *Ca) Start(host string, port int) error {
-	l, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
-	if err != nil {
-		return err
-	}
-	c.listener = l
-
-	log.Info("Started certificate authority", "addr", c.listener.Addr().String())
-
-	return c.httpHandler()
+func (c *Ca) Start(port int) error {
+	log.Info("Started certificate authority at", port)
+	return c.httpHandler(fmt.Sprintf(":%d", port))
 }
 
 func (c *Ca) Shutdown() {
-	log.Info("Shuting down certificate authority")
-	c.listener.Close()
+	log.Info("Shuting down Lohpi certificate authority")
+	
+	idleConnsClosed := make(chan struct{})
+	go func() {
+		// We received an interrupt signal, shut down.
+		if err := c.httpServer.Shutdown(context.Background()); err != nil {
+			// Error from closing listeners, or context timeout:
+			log.Info("Lohpi CA's HTTP server shutdown error: %v", err)
+		}
+		close(idleConnsClosed)
+	}()
+
+	<-idleConnsClosed
 }
 
-func (c *Ca) httpHandler() error {
+func (c *Ca) httpHandler(addr string) error {
 	r := mux.NewRouter()
 	r.HandleFunc("/certificateRequest", c.certificateSigning).Methods("POST")
 	r.HandleFunc("/clientCertificateRequest", c.clientCertificateSigning).Methods("POST")
 
 	c.httpServer = &http.Server{
-		Handler:     r,
-		ReadTimeout: time.Second * 10,
+		Addr: 			addr,
+		Handler:     	r,
+		ReadTimeout: 	time.Second * 10,
 	}
 
-	err := c.httpServer.Serve(c.listener)
-	if err != nil {
-		log.Error(err.Error())
-		return err
-	}
-
-	return nil
+	return c.httpServer.ListenAndServe()
 }
 
 func (c *Ca) clientCertificateSigning(w http.ResponseWriter, r *http.Request) {
