@@ -124,12 +124,6 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 		return nil, err
 	}
 
-	httpListener, err := netutil.ListenOnPort(config.MuxHttpPort)
-	if err != nil {
-		log.Errorln(err)
-		return nil, err
-	}
-
 	m := &Mux{
 		config:     config,
 		configLock: sync.RWMutex{},
@@ -137,7 +131,7 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 		ifritClient: ifritClient,
 
 		// HTTP
-		httpListener: httpListener,
+		//httpListener: httpListener,
 		cu: cu,
 
 		// Network nodes
@@ -168,7 +162,7 @@ func NewMux(config *MuxConfig) (*Mux, error) {
 
 func (m *Mux) Start() {
 	go m.ifritClient.Start()
-	go m.startHttpServer()
+	go m.startHttpServer(":8080")
 	go m.grpcs.Start()
 
 	log.Println("Mux running gRPC server at", m.grpcs.Addr(), "and Ifrit client at", m.ifritClient.Addr())
