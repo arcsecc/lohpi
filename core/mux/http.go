@@ -28,7 +28,7 @@ func (m *Mux) startHttpServer(addr string) error {
 	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
 
 	// Main dataset router exposed to the clients
-	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
+	dRouter := r.PathPrefix("/dataset").Schemes("HTTPS").Subrouter().SkipClean(true)
 	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
