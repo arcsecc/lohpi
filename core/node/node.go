@@ -27,12 +27,14 @@ var (
 )
 
 type Config struct {
-	MuxIP          string `default:"127.0.1.1:8081"`
-	PolicyStoreIP  string `default:"127.0.1.1:8082"`
-	LohpiCaAddr    string `default:"127.0.1.1:8301"`
-	RecIP          string `default:"127.0.1.1:8084"`
-	FileDigesters  int    `default:20`
-	HttpPort       int    `required:false`
+	MuxIP          		string 		`default:"127.0.1.1:8081"`
+	PolicyStoreIP  		string 		`default:"127.0.1.1:8082"`
+	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
+	RecIP          		string 		`default:"127.0.1.1:8084"`
+	FileDigesters  		int    		`default:20`
+	HttpPort       		int    		`required:false`
+	PolicyIdentifier 	string    	`required:true`
+
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -41,13 +43,6 @@ type gossipMessage struct {
 	Hash    []byte
 	Addr    string
 }
-
-type ExternalDataType uint16
-
-const (
-	Files  ExternalDataType = 0
-	Binary ExternalDataType = 1
-)
 
 // Normally used to transfer metadata from external sources
 type ExternalMetadata struct {
@@ -73,6 +68,13 @@ type Dataset struct {
 
 	// Global policy?
 	// Actual data here as well
+}
+
+// Used to configure the time intervals between each fetching of the identifiers of the dataset.
+// You really should use this config to enable a push-based approach. 
+type RefreshConfig struct {
+	RefreshInterval time.Duration
+	URL string
 }
 
 // A generic representation of a storage object stored at this node.
@@ -151,6 +153,9 @@ type Node struct {
 	externalMetadataHandler     ExternalMetadataHandler
 	externalMetadataHandlerLock sync.RWMutex
 
+	refreshConfigLock sync.RWMutex
+	refreshConfig RefreshConfig
+
 	// If true, callbaks used for remote resources are invoked.
 	// If false, only in-memory maps are used for query processing.
 	useRemoteURL bool
@@ -160,15 +165,17 @@ type Node struct {
 	useCache bool
 
 	// Azure database
-	db *sql.DB
-	pk string
+	clientCheckoutTable *sql.DB
+	policyDB *sql.DB
+	policyIdentifier string
 }
 
 // Database-related consts
 var (
 	dbName = "nodepolicydb"
-	schemaName = "policy_schema" 
+	schemaName = "nodedbschema" 
 	policyTable = "policy_table"
+	datasetCheckoutTable = "dataset_checkout_table"
 )
 
 func NewNode(name string, config *Config) (*Node, error) {
@@ -215,6 +222,10 @@ func NewNode(name string, config *Config) (*Node, error) {
 		datasetMapLock: sync.RWMutex{},
 	}
 
+	if err := node.initializePolicyDb(config.PolicyIdentifier); err != nil {
+		return nil, err 
+	}
+
 	return node, nil
 }
 
@@ -242,7 +253,7 @@ func (n *Node) InitializeLogfile(logToFile bool) error {
 }
 
 // Initializes the underlying node database using 'id' as the unique identifier for the relation.
-func (n *Node) InitializePolicyDb(primaryKey string) error {
+func (n *Node) initializePolicyDb(policyIdentifier string) error {
 	var connectionString = fmt.Sprintf(os.Getenv("NODE_DB_CONNECTION_STRING"))
 	if connectionString == "" {
 		return errors.New("Tried to fetch 'NODE_DB_CONNECTION_STRING' from environment but it was not set.")
@@ -250,8 +261,8 @@ func (n *Node) InitializePolicyDb(primaryKey string) error {
 
 	log.Println("Using NODE_DB_CONNECTION_STRING")
 
-	n.pk = primaryKey
-	return n.initializePostgreSQLdb(primaryKey, connectionString)
+	n.policyIdentifier = policyIdentifier
+	return n.initializePostgreSQLdb(connectionString)
 }
 
 // Assoicated the given object attribute with the object identifier.
@@ -274,6 +285,7 @@ func (n *Node) DatasetExistsInDb(id string) bool {
 	return n.datasetExistsInDb(id)
 }
 
+// Might be used as a way to specify attributes more precisely
 /*func (n *Node) InitializePolicyDb(primaryKey string, attributes []string) error {
 	var attr bytes.Buffer
 
@@ -418,7 +430,14 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		return n.fetchDatasetIdentifiers(msg)
 
 	case message.MSG_TYPE_GET_DATASET_URL:
-		return n.fetchDatasetURL(msg)
+		if n.clientIsAllowed(msg.GetDatasetRequest()) {
+			if err := n.checkoutDataset(msg.GetDatasetRequest()); err != nil {
+				panic(err)
+			}
+			return n.fetchDatasetURL(msg)
+		} else {
+			return n.unauthorizedAccess(msg)
+		}
 
 	case message.MSG_TYPE_GET_DATASET:
 	//	return n.marshalledStorageObjectContent(msg)
@@ -442,6 +461,32 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	return n.acknowledgeMessage()
 }
 
+// TODO: match the required access credentials of the dataset to the 
+// access attributes of the client. Return true if the client can access the data, 
+// return false otherwise. Also, verify that all the fields are present
+func (n *Node) clientIsAllowed(r *pb.DatasetRequest) bool {
+	return true
+}
+
+func (n *Node) unauthorizedAccess(msg *pb.Message) ([]byte, error) {
+	respMsg := &pb.DatasetResponse{
+		IsAllowed: false,
+	}
+
+	data, err := proto.Marshal(respMsg)
+	if err != nil {
+		return []byte{}, err
+	}
+
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		return []byte{}, err
+	}
+
+	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
+	return proto.Marshal(respMsg)
+}
+
 // TODO: separate internal and external data sources
 func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 	id := msg.GetDatasetRequest().GetIdentifier()
@@ -452,8 +497,10 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 		}
 
 		respMsg := &pb.Message{
-			StringValue: externalArchive.URL,
-			Sender: n.pbNode(),
+			DatasetResponse: &pb.DatasetResponse{
+				URL: externalArchive.URL,
+				IsAllowed: true,
+			},
 		}
 
 		data, err := proto.Marshal(respMsg)
@@ -466,7 +513,6 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 			panic(err)
 		}
 
-		log.Println("Url:", externalArchive)
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 		return proto.Marshal(respMsg)
 	} else {
@@ -477,6 +523,7 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 }
 
 func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
+
 	id := msg.GetStringValue()
 	if handler := n.getExternalMetadataHandler(); handler != nil {
 		metadataUrl, err := handler(id)

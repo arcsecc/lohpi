@@ -27,13 +27,14 @@ message Message {
     GossipMessage gossipMessage = 6;
     Probe probe = 7;
     DatasetRequest datasetRequest = 8;
+    DatasetResponse datasetResponse = 9;
 
     // Other fields
-    string stringValue = 9;
-    repeated string stringSlice = 10;  // Arbitrary use
-    bytes Bytes = 11;
-    repeated bytes BytesSlice = 12;
-    bool boolValue = 13;
+    string stringValue = 10;
+    repeated string stringSlice = 11;  // Arbitrary ue
+    bytes Bytes = 12;
+    repeated bytes BytesSlice = 13;
+    bool boolValue = 14;
 }
 
 message Response {
@@ -55,14 +56,27 @@ message Node {
 }
 
 message DatasetRequest {
-    string identifier = 1; // String identifier
-    string requestAttribute = 2;        // access attribute from client
+    string identifier = 1;          // String identifier
+    bytes clientToken = 2;    // access attribute from client
+    MsgSignature signature = 3;
 }
 
 message DatasetResponse {
     string Type = 1;        // zip/gzip/binary...
     string URL = 2;
+    bool isAllowed = 3;
+    MsgSignature signature = 4;
+}
+
+message MetadataRequest {
+    string identifier = 1;          // String identifier
+    bytes clientToken = 2;    // access attribute from client
     MsgSignature signature = 3;
+}
+
+message MetadataResponse {
+    string URL = 1;
+    MsgSignature signature = 2;
 }
 
 message Policy {

@@ -7,20 +7,23 @@ import (
 	"time"
 	"errors"
 	"strings"
+_	"bytes"
 
 	"github.com/gorilla/mux"
 	"github.com/arcsecc/lohpi/core/comm"
-	"github.com/dgrijalva/jwt-go"
+	//"github.com/dgrijalva/jwt-go"
+	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/jws"
+	"github.com/lestrrat-go/jwx/jwa"
+
 	log "github.com/sirupsen/logrus"
 )
 
-type JwtClaim struct {
-	//Email string
-	Stuff interface{}
-}
-
-func (a *JwtClaim) Valid() error {
-	return nil
+type azureConfig struct {
+	appId string // Validate me!
+	issuer string // Validate me?
+	nonce string // Validate me!
+	roles []string
 }
 
 func (m *Mux) startHttpServer(addr string) error {
@@ -28,11 +31,14 @@ func (m *Mux) startHttpServer(addr string) error {
 	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
 
 	// Main dataset router exposed to the clients
-	dRouter := r.PathPrefix("/dataset").Schemes("HTTPS").Subrouter().SkipClean(true)
+	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
 	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
-	dRouter.Use(m.middlewareValidateAccessToken)
+
+	// Middlewares used for validation
+	dRouter.Use(m.middlewareValidateTokenSignature)
+	dRouter.Use(m.middlewareValidateTokenClaims)
 
 	m.httpServer = &http.Server{
 		Addr: 		  	addr,
@@ -43,54 +49,114 @@ func (m *Mux) startHttpServer(addr string) error {
 		TLSConfig: 		comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
 	}
 
+	if err := m.setPublicKeyCache(); err != nil {
+		return err
+	}
+
 	return m.httpServer.ListenAndServe()
 }
 
-func (m *Mux) middlewareValidateAccessToken(next http.Handler) http.Handler {
+func (m *Mux) setPublicKeyCache() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m.ar = jwk.NewAutoRefresh(ctx)
+	const msCerts = "https://login.microsoftonline.com/common/discovery/v2.0/keys" // TODO: config me
+
+	m.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
+
+	// Keep the cache warm
+	_, err := m.ar.Refresh(ctx, msCerts)
+	if err != nil {
+		log.Println("Failed to refresh Microsoft Azure JWKS")
+		return err
+	}
+	return nil 
+}
+
+func (m *Mux) middlewareValidateTokenSignature(next http.Handler) http.Handler {
 	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
-		t, err := extractToken(r)
+		token, err := getBearerToken(r)
 		if err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest) + ": malformed access token", http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+			return
+		}
+		
+		if err := m.validateTokenSignature(token); err != nil {
+			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		m.validateAccessToken(t)
-		log.Println("Token:", t)
+		next.ServeHTTP(w, r)
 	})
 }
 
-func (m *Mux) validateAccessToken(tokenString string) (string, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &JwtClaim{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-			//auth.logger.Error("Unexpected signing method in auth token")
-			return nil, errors.New("Unexpected signing method in auth token")
-		}
-		
-		return nil, nil
+func (m *Mux) middlewareValidateTokenClaims(next http.Handler) http.Handler {
+	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+		// TODO: parse the claims in the access token
+		// Return error if there are any mismatches. Call next.ServeHTTP(w, r) otherwise
+		log.Println("in middlewareValidateTokenClaims")
+
+		next.ServeHTTP(w, r)
 	})
+}
 
+func (m *Mux) validateTokenSignature(token []byte) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	claims, ok := token.Claims.(*JwtClaim)
-	if !ok {
-		err = errors.New("Couldn't parse claims")
-		return "", err
+	// TODO: fetch keys again if it fails
+	// TODO: add clock skew. Use jwt.WithAcceptableSkew
+	set, err := m.ar.Fetch(ctx, "https://login.microsoftonline.com/common/discovery/v2.0/keys")
+	if err != nil {
+		return err
 	}
 
-	log.Printf("Claims: %+v\n", claims)
+	// Note: see https://github.com/lestrrat-go/jwx/blob/a7f076fc6eadb44380d41b5e30eb5a85a91de864/jws/jws.go#L186
+	// There is no guarantee that the algorithm is RS256
+	for it := set.Iterate(context.Background()); it.Next(context.Background()); {
+		_, err := jws.Verify(token, jwa.RS256, it.Pair().Value)
+		if err == nil {
+			return nil
+		}
+	}
 
-	_ = err
-	return "", nil
+	// Fetch the public keys again from URL if the verification failed.
+	// Fetching it again will guarantee a best-effort to verify the request.
+	/*ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
+	// This doesn't work!
+	// TODO: this doesn't work
+	set, err := m.ar.Refresh(ctx, msCerts)
+	if err != nil {
+		log.Println("Failed to refresh Microsoft Azure JWKS")
+		return err
+	}
+
+	// Note: see https://github.com/lestrrat-go/jwx/blob/a7f076fc6eadb44380d41b5e30eb5a85a91de864/jws/jws.go#L186
+	// There is no guarantee that algorithm is RS256
+	for it := set.Iterate(context.Background()); it.Next(context.Background()); {
+		_, err := jws.Verify(token, jwa.RS256, it.Pair().Value)
+		if err == nil {
+			return nil
+		}
+	}*/
+
+	return errors.New("Could not verify token")
 }
 
+func (m *Mux) validateTokenClaims(token []byte) error {
+	return nil	
+}
 
-
-func extractToken(r *http.Request) (string, error) {
+func getBearerToken(r *http.Request) ([]byte, error) {
 	authHeader := r.Header.Get("Authorization")
 	authHeaderContent := strings.Split(authHeader, " ")
 	if len(authHeaderContent) != 2 {
-		return "", errors.New("Token not provided or malformed")
+		return nil, errors.New("Token not provided or malformed")
 	}
-	return authHeaderContent[1], nil
+	return []byte(authHeaderContent[1]), nil
 }
 
 func (m *Mux) shutdownHttpServer() {
@@ -124,7 +190,7 @@ func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Reques
 		defer close(setsChan)
 		
 		r = r.WithContext(ctx)
-		sets, err := m.datasetIdentifiers(ctx)
+		sets, err := m.datasetIdentifiers(ctx)	
 		if err != nil {
 			errChan <-err
 			return
@@ -154,7 +220,7 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
 		errMsg := fmt.Errorf("Missing project identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + errMsg.Error(), http.StatusBadRequest)
 		return
 	}
 	
@@ -186,7 +252,7 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 		return
 	case err := <-errChan:
 		log.Errorln(err)
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	case <-doneChan:
 		return
@@ -196,18 +262,22 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 // Handler used to fetch an entire dataset. Writes a zip file to the client
 func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
+
+	token, err := getBearerToken(req)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
 	
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
-		errMsg := fmt.Errorf("Missing storage identifier.")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": " + errMsg.Error(), http.StatusBadRequest)
+		err := fmt.Errorf("Missing storage identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Second * 2))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute * 5))
 	defer cancel()
 
-	if err := m.dataset(w, req, dataset, ctx); err != nil {
-		log.Println(err.Error())
-	}
+	m.dataset(w, req, dataset, token, ctx)
 }

@@ -126,7 +126,10 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset 
 	// Create dataset request
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_METADATA_URL,
-		StringValue: dataset,
+		DatasetRequest: &pb.DatasetRequest{
+			Identifier: dataset, 
+    		ClientToken: nil,
+		},
 	}
 
 	// Marshal the request
@@ -160,7 +163,7 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset 
 			panic(err)
 		}
 
-		return m.getMetadata(w, respMsg.GetSender().GetHttpAddress(), respMsg.GetStringValue(), newCtx)
+		return m.getMetadata(w, req, respMsg.GetSender().GetHttpAddress(), respMsg.GetStringValue(), newCtx)
 	case <-newCtx.Done():
 		log.Println("Timeout in 'func (m *Mux) datasetMetadata()'")
 	}
@@ -168,16 +171,19 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset 
 	return nil, err
 }
 
-func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, ctx context.Context) error {
+func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, clientToken []byte, ctx context.Context) {
 	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second * 15)) // set proper time to wait
 	defer cancel()
 
 	nodeAddr, err := m.probeNetworkForDataset(dataset, newCtx)
 	if err != nil {
-		return err
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
 	}
 	if nodeAddr == "" {
-		return errors.New("Dataset is not in network")
+		err := fmt.Errorf("Dataset '%s' is not in network", dataset)
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return 
 	}
 
 	// Create dataset request
@@ -185,25 +191,32 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 		Type: message.MSG_TYPE_GET_DATASET_URL,
 		DatasetRequest: &pb.DatasetRequest{
 			Identifier: dataset,
+			ClientToken: clientToken,
 		},
 	}
 
 	// Marshal the request
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		return err
+		log.Println(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
 	// Sign it
 	r, s, err := m.ifritClient.Sign(data)
 	if err != nil {
-		return err
+		log.Println(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
 	msg.Signature = &pb.MsgSignature{R: r, S: s}
 	data, err = proto.Marshal(msg)
 	if err != nil {
-		return err
+		log.Println(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
 	ch := m.ifritClient.SendTo(nodeAddr, data)
@@ -212,24 +225,34 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 	case resp := <-ch:
 		respMsg := &pb.Message{}
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			return err
+			log.Println(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
 		
 		if err := m.verifyMessageSignature(respMsg); err != nil {
-			return err
+			log.Println(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
 		}
 
-		return m.datasetRequest(w, req, respMsg.GetStringValue(), ctx)
+		if respMsg.GetDatasetResponse().GetIsAllowed() {
+			m.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx)
+		} else {
+			err := fmt.Errorf("Incompatible client access attributes")
+			log.Println(err.Error())
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return 
+		}
 	case <-newCtx.Done():
-		log.Println("Timeout in 'func (m *Mux) dataset()'")
-		return errors.New("Timeout in 'func (m *Mux) dataset()'")
+		log.Println(err.Error())
+		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
+		return 
 	}
-
-	return nil
 }
 
-// TODO: use context
-func (m *Mux) getMetadata(w http.ResponseWriter, host, remoteUrl string, ctx context.Context) ([]byte, error) {
+// TODO: use context and refine me otherwise
+func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, host, remoteUrl string, ctx context.Context) ([]byte, error) {
 	request, err := http.NewRequest("GET", "http://" + host + "/metadata/", nil)
 	if err != nil {
 		return nil, err
@@ -256,14 +279,17 @@ func (m *Mux) getMetadata(w http.ResponseWriter, host, remoteUrl string, ctx con
 		}
 		return buf.Bytes(), nil
 	}
+
 	return nil, errors.New("Could not fetch dataset from host")
 }
 
 // TODO: use context request
-func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) error {
+func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
-		return err
+		log.Println(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
 	httpClient := &http.Client{
@@ -272,7 +298,9 @@ func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUr
 
 	response, err := httpClient.Do(request)
     if err != nil {
-        return err
+		log.Println(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
     }
 
 	buf := new(bytes.Buffer)
@@ -288,9 +316,8 @@ func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUr
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", req.Header.Get("Content-Type"))
+	//w.Header().Set("Content-Disposition", req.Header.Get("Content-Type"))
 	w.Write(buf.Bytes())
-	return nil
 }
 
 // Returns the address of the Lohpi node that stores the given dataset

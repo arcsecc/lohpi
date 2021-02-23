@@ -10,6 +10,7 @@ import (
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
 	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/lestrrat-go/jwx/jwk"
 	"net"
 	"net/http"
 	"os"
@@ -81,6 +82,9 @@ type Mux struct {
 	ignoredIP map[string]string
 
 	eventChan <-chan Event
+
+	// Fetch the JWK
+	ar *jwk.AutoRefresh
 }
 
 // Returns a new mux using the given configuration and HTTP port number. Returns a non-nil error, if any

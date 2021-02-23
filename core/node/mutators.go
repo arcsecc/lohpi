@@ -50,3 +50,9 @@ func (n *Node) getExternalMetadataHandler() ExternalMetadataHandler {
 	defer n.externalMetadataHandlerLock.RUnlock()
 	return n.externalMetadataHandler
 }
+
+func (n *Node) SetExternalDatasetRefresh(c RefreshConfig) {
+	n.refreshConfigLock.Lock()
+	defer n.refreshConfigLock.Unlock()
+	n.refreshConfig = c
+}
