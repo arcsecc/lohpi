@@ -37,8 +37,8 @@ func (m *Mux) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
 
 	// Middlewares used for validation
-	dRouter.Use(m.middlewareValidateTokenSignature)
-	dRouter.Use(m.middlewareValidateTokenClaims)
+	//dRouter.Use(m.middlewareValidateTokenSignature)
+	//dRouter.Use(m.middlewareValidateTokenClaims)
 
 	m.httpServer = &http.Server{
 		Addr: 		  	addr,
@@ -219,12 +219,12 @@ func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Reques
 func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
-		errMsg := fmt.Errorf("Missing project identifier")
+		errMsg := fmt.Errorf("Missing dataset identifier")
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + errMsg.Error(), http.StatusBadRequest)
 		return
 	}
 	
-	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 5))
+	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 10))
 	defer cancel()
 
 	errChan := make(chan error)
@@ -248,6 +248,7 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 
 	select {
 	case <-ctx.Done():
+		log.Println("Timeout!")
 		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
 		return
 	case err := <-errChan:

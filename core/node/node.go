@@ -32,9 +32,8 @@ type Config struct {
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
 	RecIP          		string 		`default:"127.0.1.1:8084"`
 	FileDigesters  		int    		`default:20`
-	HttpPort       		int    		`required:false`
-	PolicyIdentifier 	string    	`required:true`
-
+	HttpPort       		int    		`required:true`
+	PolicyIdentifier 	string    	`required:true` // TODO: need to formalize policies in a better!
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -172,9 +171,9 @@ type Node struct {
 
 // Database-related consts
 var (
-	dbName = "nodepolicydb"
+	dbName = "nodepolicydb" // change me to nodedb
 	schemaName = "nodedbschema" 
-	policyTable = "policy_table"
+	datasetPolicyTable = "policy_table"
 	datasetCheckoutTable = "dataset_checkout_table"
 )
 
@@ -222,7 +221,17 @@ func NewNode(name string, config *Config) (*Node, error) {
 		datasetMapLock: sync.RWMutex{},
 	}
 
+	// Create the database if needed
 	if err := node.initializePolicyDb(config.PolicyIdentifier); err != nil {
+		log.Errorf(err.Error())
+		return nil, err 
+	}
+
+	// Remove all stale identifiers since the last run. This will remove all the identifiers 
+	// from the table. The node cannot host datasets that have been removed from the remote location 
+	// since it last ran. 
+	if err := node.dbResetDatasetIdentifiers(); err != nil {
+		log.Errorf(err.Error())
 		return nil, err 
 	}
 
@@ -252,6 +261,80 @@ func (n *Node) InitializeLogfile(logToFile bool) error {
 	return nil
 }
 
+// RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
+// It will also populate the node's database with the available identifiers and assoicate them with policies.
+// All policies have a default value of nil, which leads to client requests being rejected. You must call this method to 
+// make the dataset available to the clients by fetching the latest dataset. The call will block until a context timeout or 
+// the policy is applied to the dataset. Dataset identifiers that have not been passed to this method will not
+// be available to clients.
+func (n *Node) RequestPolicy(id string, ctx context.Context) error {
+	//TODO: handle context
+	if id == "" {
+		return errors.New("Dataset identifier must be a non-empty string")
+	}
+
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_GET_DATASET_POLICY,
+		Sender: n.pbNode(),
+		PolicyRequest: &pb.PolicyRequest{
+			Identifier: id,
+		},
+	}
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		panic(err)
+		log.Errorln(err.Error())
+		return err
+	}
+
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		panic(err)
+		log.Errorln(err.Error())
+		return err
+	}
+
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		panic(err)
+		log.Errorln(err.Error())
+		return err
+	}
+
+	// TODO: use context with timeout :)
+	ch := n.ifritClient.SendTo(n.policyStoreIP, data)
+
+	select {
+	case resp := <-ch:
+		respMsg := &pb.Message{}
+		if err := proto.Unmarshal(resp, respMsg); err != nil {
+			log.Errorln(err.Error())
+			return err
+		}
+
+		if err := n.verifyMessageSignature(respMsg); err != nil {
+			panic(err)
+			log.Errorln(err.Error())
+			return err
+		}
+
+		pResponse := respMsg.GetPolicyResponse()
+		if err := n.dbSetObjectPolicy(id, pResponse.GetObjectPolicy().GetContent()); err != nil {
+			log.Errorln(err.Error())
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Removes the dataset policy from the node. The dataset will no longer be available to clients.
+func (n *Node) RemoveDataset(id string) error {
+	return nil
+}
+
 // Initializes the underlying node database using 'id' as the unique identifier for the relation.
 func (n *Node) initializePolicyDb(policyIdentifier string) error {
 	var connectionString = fmt.Sprintf(os.Getenv("NODE_DB_CONNECTION_STRING"))
@@ -259,52 +342,11 @@ func (n *Node) initializePolicyDb(policyIdentifier string) error {
 		return errors.New("Tried to fetch 'NODE_DB_CONNECTION_STRING' from environment but it was not set.")
 	}
 
-	log.Println("Using NODE_DB_CONNECTION_STRING")
+	log.Infoln("Using NODE_DB_CONNECTION_STRING")
 
 	n.policyIdentifier = policyIdentifier
 	return n.initializePostgreSQLdb(connectionString)
 }
-
-// Assoicated the given object attribute with the object identifier.
-func (n *Node) SetObjectPolicy(id, objectAttribute string) error {
-	return n.setObjectPolicy(id, objectAttribute)
-}
-
-// Returns true if the subject's attributes are compatible with the object's attributes, 
-// returns false otherwise.
-func (n *Node) SubjectIsAllowedAccess(subjectAttribute, objectAttribute string) bool {
-	return n.subjectIsAllowedAccess(subjectAttribute, objectAttribute)
-}
-
-// Removes the object policy from the node
-func (n *Node) RemoveObjectPolicy(id string) {
-	n.removeObjectPolicy(id)
-}
-
-func (n *Node) DatasetExistsInDb(id string) bool {
-	return n.datasetExistsInDb(id)
-}
-
-// Might be used as a way to specify attributes more precisely
-/*func (n *Node) InitializePolicyDb(primaryKey string, attributes []string) error {
-	var attr bytes.Buffer
-
-	for n, a := range attributes {
-		if n == len(attributes) - 1 {
-			attr.WriteString(a + " VARCHAR(50)")
-		} else {
-			attr.WriteString(a + " VARCHAR(50), ")
-		}
-	}
-
-	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + policyTable + ` (
-		` + primaryKey + ` VARCHAR(45) PRIMARY KEY NOT NULL, ` + attr.String() + `);`
-
-	if err := n.initializeAzurePostgreSQLdb(q); err != nil {
-		return err
-	}
-	return nil 
-}*/
 
 // Shuts down the node
 func (n *Node) Shutdown() {
@@ -324,7 +366,7 @@ func (n *Node) JoinNetwork() error {
 		return err
 	}
 
-	go n.startHttpServer()
+	go n.startHttpServer(fmt.Sprintf(":%d", n.config.HttpPort))
 	
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
@@ -348,7 +390,7 @@ func (n *Node) UseCache(use bool) {
 }
 
 // Function type used for callbacks to fetch datasets on-demand. 
-type ExernalDatasetIdentifiersHandler = func(id string) ([]string, error)
+type ExernalDatasetIdentifiersHandler = func() ([]string, error)
 
 // Function type used to fetch compressed archives from external sources.
 type ExternalArchiveHandler = func(id string) (*ExternalDataset, error)
@@ -386,7 +428,6 @@ func (n *Node) muxHandshake() error {
 }
 
 func (n *Node) policyStoreHandshake() error {
-	return nil
 	conn, err := n.psClient.Dial(n.config.PolicyStoreIP)
 	if err != nil {
 		return err
@@ -410,6 +451,9 @@ func (n *Node) policyStoreHandshake() error {
 
 	n.policyStoreIP = r.GetIp()
 	n.policyStoreID = r.GetId()
+
+	log.Infoln("n.policyStoreIP:", n.policyStoreIP)
+	log.Infoln("n.policyStoreID:", string(n.policyStoreID))
 	return nil
 }
 
@@ -420,7 +464,12 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		panic(err)
 	}
 
-	log.Printf("Node '%s' got message %s\n", n.name, msg.GetType())
+	log.Infof("Node '%s' got message %s\n", n.name, msg.GetType())
+	if err := n.verifyMessageSignature(msg); err != nil {
+		panic(err)
+		log.Errorln(err)
+		return nil, err
+	}
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_GET_NODE_INFO:
@@ -429,18 +478,29 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
 		return n.fetchDatasetIdentifiers(msg)
 
+		// Only allow one check-out at a time by the same client of the same dataset.
+		// Respond with "Unauthorized" if something fails
 	case message.MSG_TYPE_GET_DATASET_URL:
+		// Check if dataset is indexed by the policy enforcement. If it is not, reject the request (404).
+		if !n.dbDatasetExists(msg.GetDatasetRequest().GetIdentifier()) {
+			return n.unauthorizedAccess(fmt.Sprintf("Dataset '%s' is not indexed by the node", msg.GetDatasetRequest().GetIdentifier()))
+		}
+		if n.isCheckedOutByClient(msg.GetDatasetRequest()) {
+			return n.unauthorizedAccess("Client has already checked out this dataset")
+		}
+
 		if n.clientIsAllowed(msg.GetDatasetRequest()) {
 			if err := n.checkoutDataset(msg.GetDatasetRequest()); err != nil {
-				panic(err)
+				log.Errorln(err.Error())
+				return nil, err
 			}
 			return n.fetchDatasetURL(msg)
 		} else {
-			return n.unauthorizedAccess(msg)
+			return n.unauthorizedAccess("Client has invalid access attributes")
 		}
 
 	case message.MSG_TYPE_GET_DATASET:
-	//	return n.marshalledStorageObjectContent(msg)
+	//	return n.marshalledStorageObjectContent(msg)s
 
 	case message.MSG_TYPE_DATASET_EXISTS:
 		return n.datasetExists(msg)
@@ -461,26 +521,48 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	return n.acknowledgeMessage()
 }
 
+// Returns true if a client has already checked out the dataset,
+// returns false otherwise.
+func (n *Node) isCheckedOutByClient(r *pb.DatasetRequest) bool {
+	if r == nil {
+		log.Errorln("Dataset request is nil")
+		return true
+	}
+
+	return n.dbDatasetIsCheckedOutByClient(r.GetIdentifier())
+}
+
 // TODO: match the required access credentials of the dataset to the 
 // access attributes of the client. Return true if the client can access the data, 
 // return false otherwise. Also, verify that all the fields are present
 func (n *Node) clientIsAllowed(r *pb.DatasetRequest) bool {
-	return true
+	if r == nil {
+		log.Errorln("Dataset request is nil")
+		return false
+	}
+
+	return n.dbDatasetIsAvailable(r.GetIdentifier())
 }
 
-func (n *Node) unauthorizedAccess(msg *pb.Message) ([]byte, error) {
-	respMsg := &pb.DatasetResponse{
-		IsAllowed: false,
+// Returns a message notifying the recipient that the data request was unauthorized. 
+func (n *Node) unauthorizedAccess(errorMsg string) ([]byte, error) {
+	respMsg := &pb.Message{
+		DatasetResponse: &pb.DatasetResponse{
+			IsAllowed: false,
+			ErrorMessage: errorMsg,
+		},
 	}
 
 	data, err := proto.Marshal(respMsg)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	r, s, err := n.ifritClient.Sign(data)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
@@ -493,7 +575,8 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 	if handler := n.getDatasetCallback(); handler != nil {
 		externalArchive, err := handler(id)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
 		}
 
 		respMsg := &pb.Message{
@@ -505,12 +588,14 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 
 		data, err := proto.Marshal(respMsg)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
 		}
 
 		r, s, err := n.ifritClient.Sign(data)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
 		}
 
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
@@ -523,12 +608,12 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 }
 
 func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
-
-	id := msg.GetStringValue()
+	id := msg.GetDatasetRequest().GetIdentifier()
 	if handler := n.getExternalMetadataHandler(); handler != nil {
 		metadataUrl, err := handler(id)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
 		}
 
 		respMsg := &pb.Message{
@@ -538,71 +623,76 @@ func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 
 		data, err := proto.Marshal(respMsg)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
 		}
 
 		r, s, err := n.ifritClient.Sign(data)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
+		
 		}
-
+		log.Println("ID:", id)
+		log.Println("Metadata URL:", metadataUrl.URL)
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 		return proto.Marshal(respMsg)
 	} else {
-		log.Println("Dataset archive handler not registered")
+		log.Warnln("ExternalMetadataHandler is not set")
 	}
 
 	return nil, nil 
 }
 
 func (n *Node) datasetExists(msg *pb.Message) ([]byte, error) {
-	if n.identifierExistsHandler == nil {
-		return []byte{}, nil
+	if handler := n.getIdentifierExistsHandler(); handler != nil {
+		datasetId := msg.GetStringValue()
+		respMsg := &pb.Message{}
+		respMsg.BoolValue = handler(datasetId)
+	
+		data, err := proto.Marshal(respMsg)
+		if err != nil {
+			log.Errorln(err.Error())
+			return nil, err
+		}
+
+		r, s, err := n.ifritClient.Sign(data)
+		if err != nil {
+			log.Errorln(err.Error())
+			return nil, err
+		}
+
+		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
+		return proto.Marshal(respMsg)
+	} else {
+		log.Warnln("ExternalIdentifierExistsHandler is not set")		
 	}
 
-	datasetId := msg.GetStringValue()
-	respMsg := &pb.Message{}
-
-	respMsg.BoolValue = n.identifierExistsHandler(datasetId)
-	data, err := proto.Marshal(respMsg)
-	if err != nil {
-		return []byte{}, err
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		return []byte{}, err
-	}
-
-	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-	return proto.Marshal(respMsg)
+	return nil, nil
 }
 
 // BUG: timeout when issuing identifier requests to multiple nodes
 func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
-	if n.datasetIdentifiersHandler == nil {
-		return []byte{}, nil
+	ids, err := n.dbGetDatasetIdentifiers()
+	if err != nil {
+		log.Errorln(err.Error())
+		return nil, err
 	}
-
-	datasetId := msg.GetStringValue()
+	
 	respMsg := &pb.Message{
-		StringSlice: make([]string, 0),
+		StringSlice: ids,
 	}
-
-	var callbackErr error
-	respMsg.StringSlice, callbackErr = n.datasetIdentifiersHandler(datasetId)
-	if callbackErr != nil {
-		return []byte{}, callbackErr
-	}
-
+	
 	data, err := proto.Marshal(respMsg)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	r, s, err := n.ifritClient.Sign(data)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
@@ -613,12 +703,14 @@ func (n *Node) acknowledgeMessage() ([]byte, error) {
 	msg := &pb.Message{Type: message.MSG_TYPE_OK}
 	data, err := proto.Marshal(msg)
 	if err != nil {
+		log.Errorln(err.Error())
 		return nil, err
 	}
 
 	r, s, err := n.ifritClient.Sign(data)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	msg.Signature = &pb.MsgSignature{R: r, S: s}
@@ -628,7 +720,8 @@ func (n *Node) acknowledgeMessage() ([]byte, error) {
 func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	// Might need to move this one? check type!
@@ -692,31 +785,17 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 		return []byte{}, err
 	}
 
-	// Sign the acknowledgment response
 	r, s, err := n.ifritClient.Sign(data)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
-	// Message with signature appended to it
-	resp = &pb.Message{
-		Type: message.MSG_TYPE_PROBE_ACK,
-		Sender: &pb.Node{
-			Name:    n.name,
-			IfritAddress: n.ifritClient.Addr(),
-			Role:    "Storage node",
-			Id:      []byte(n.ifritClient.Id()),
-		},
-		Signature: &pb.MsgSignature{
-			R: r,
-			S: s,
-		},
-		Probe: msg.GetProbe(),
-	}
-
-	data, err = proto.Marshal(resp)
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	data, err = proto.Marshal(msg)
 	if err != nil {
-		return []byte{}, err
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	log.Println(n.name, "sending ack to Policy store")
@@ -732,12 +811,16 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Println(err.Error())
+		log.Errorln(err.Error())
 		return err
 	}
 
+	log.Println("string(n.policyStoreID);", string(n.policyStoreID))
+
 	if !n.ifritClient.VerifySignature(r, s, data, string(n.policyStoreID)) {
-		return errors.New("Could not securely verify the integrity of the policy store message")
+		err := errors.New("Could not securely verify the integrity of the policy store message")
+		log.Errorln(err.Error())
+		return err
 	}
 
 	// Restore message
@@ -758,4 +841,31 @@ func (n *Node) pbNode() *pb.Node {
 		//ContactEmail
 		Id: []byte(n.ifritClient.Id()),
 	}
+}
+
+func (n *Node) verifyMessageSignature(msg *pb.Message) error {
+	return nil
+	// Verify the integrity of the node
+	r := msg.GetSignature().GetR()
+	s := msg.GetSignature().GetS()
+
+	msg.Signature = nil
+
+	// Marshal it before verifying its integrity
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	if !n.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
+		return errors.New("Mux could not securely verify the integrity of the message")
+	}
+
+	// Restore message
+	msg.Signature = &pb.MsgSignature{
+		R: r,
+		S: s,
+	}
+
+	return nil
 }

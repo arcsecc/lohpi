@@ -163,7 +163,7 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset 
 			panic(err)
 		}
 
-		return m.getMetadata(w, req, respMsg.GetSender().GetHttpAddress(), respMsg.GetStringValue(), newCtx)
+		return m.getMetadata(w, req, respMsg.GetStringValue(), newCtx)
 	case <-newCtx.Done():
 		log.Println("Timeout in 'func (m *Mux) datasetMetadata()'")
 	}
@@ -239,9 +239,9 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 		if respMsg.GetDatasetResponse().GetIsAllowed() {
 			m.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx)
 		} else {
-			err := fmt.Errorf("Incompatible client access attributes")
+			err := fmt.Errorf(respMsg.GetDatasetResponse().GetErrorMessage())
 			log.Println(err.Error())
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
 			return 
 		}
 	case <-newCtx.Done():
@@ -252,18 +252,14 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 }
 
 // TODO: use context and refine me otherwise
-func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, host, remoteUrl string, ctx context.Context) ([]byte, error) {
-	request, err := http.NewRequest("GET", "http://" + host + "/metadata/", nil)
+func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl string, ctx context.Context) ([]byte, error) {
+	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	q := request.URL.Query()
-    q.Add("remote-url", remoteUrl)
-    request.URL.RawQuery = q.Encode()
-
 	httpClient := &http.Client{
-		Timeout: time.Duration(10 * time.Second),
+		Timeout: time.Duration(20 * time.Second),
 	}
 
 	response, err := httpClient.Do(request)
@@ -280,7 +276,7 @@ func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, host, remoteUr
 		return buf.Bytes(), nil
 	}
 
-	return nil, errors.New("Could not fetch dataset from host")
+	return nil, errors.New("Could not fetch metadata from host")
 }
 
 // TODO: use context request

@@ -1,5 +1,4 @@
 syntax = "proto3";
-import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 package proto;
 
@@ -10,7 +9,6 @@ service Mux {
 
 service PolicyStore {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc SetPolicy (Policy) returns (google.protobuf.Empty) {}
 }
 
 message Client {
@@ -28,13 +26,15 @@ message Message {
     Probe probe = 7;
     DatasetRequest datasetRequest = 8;
     DatasetResponse datasetResponse = 9;
+    PolicyRequest policyRequest = 10;
+    PolicyResponse policyResponse = 11;
 
     // Other fields
-    string stringValue = 10;
-    repeated string stringSlice = 11;  // Arbitrary ue
-    bytes Bytes = 12;
-    repeated bytes BytesSlice = 13;
-    bool boolValue = 14;
+    string stringValue = 14;
+    repeated string stringSlice = 15;  // Arbitrary ue
+    bytes Bytes = 16;
+    repeated bytes BytesSlice = 17;
+    bool boolValue = 18;
 }
 
 message Response {
@@ -65,7 +65,18 @@ message DatasetResponse {
     string Type = 1;        // zip/gzip/binary...
     string URL = 2;
     bool isAllowed = 3;
-    MsgSignature signature = 4;
+    string errorMessage = 4;
+    MsgSignature signature = 5;
+}
+
+message PolicyRequest {
+    string identifier = 1;
+}
+
+// TODO: specify policies here
+message PolicyResponse {
+    Policy objectPolicy = 1;
+    MsgSignature signature = 2;
 }
 
 message MetadataRequest {

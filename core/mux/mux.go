@@ -291,7 +291,7 @@ func (m *Mux) IgnoreIP(ctx context.Context, node *pb.Node) (*pb.Node, error) {
 
 // Invoked by ifrit message handler
 func (m *Mux) verifyMessageSignature(msg *pb.Message) error {
-	return nil 
+	return nil
 	// Verify the integrity of the node
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
