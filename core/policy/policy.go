@@ -271,8 +271,7 @@ func (ps *PolicyStore) syncMapsWithDatabases() error {
 	ps.datasetPolicyMapLock.Lock()
 	defer ps.datasetPolicyMapLock.Unlock()
 	ps.datasetPolicyMap = m
-
-	log.Println("ps.datasetPolicyMap:", ps.datasetPolicyMap)
+	
 	return nil
 }
 
@@ -663,32 +662,20 @@ func (ps *PolicyStore) Shutdown() {
 
 // Sets up the Git resources in an already-existing Git repository
 func initializeGitRepository(path string) (*git.Repository, error) {
-	ok, err := exists(path)
+	policiesDir := path + "/" + policiesStringToken
+	ok, err := exists(policiesDir)
 	if err != nil {
 		log.Fatalf(err.Error())
 		return nil, err
-	}
-
-	// Plain init if the repository doesn't exist
-	if !ok {
-		errMsg := "No such Git repository at " + path
-		return nil, errors.New(errMsg)
-	} else {
-		log.Println("Git repository already exists at", path)
-	}
-
-	policiesDir := path + "/" + policiesStringToken
-	ok, err = exists(policiesDir)
-	if err != nil {
-		log.Fatalf(err.Error())
 	}
 
 	if !ok {
 		if err := os.MkdirAll(policiesDir, os.ModePerm); err != nil {
 			return nil, err
 		}
+		return git.PlainInit(path, false)
 	} else {
-		log.Println("Policies directory in Git repository already exists at", policiesDir)
+		log.Infoln("Policies directory in Git repository already exists at", policiesDir)
 	}
 
 	return git.PlainOpen(path)
