@@ -28,7 +28,7 @@ type azureConfig struct {
 
 func (m *Mux) startHttpServer(addr string) error {
 	r := mux.NewRouter()
-	log.Printf("MUX: Started HTTP server on port %d\n", m.config.MuxHttpPort)
+	log.Printf("MUX: Started HTTP server on port %d\n", m.config.HttpPort)
 
 	// Main dataset router exposed to the clients
 	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
@@ -50,6 +50,7 @@ func (m *Mux) startHttpServer(addr string) error {
 	}
 
 	if err := m.setPublicKeyCache(); err != nil {
+		log.Errorln(err.Error())
 		return err
 	}
 

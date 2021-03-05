@@ -1,11 +1,13 @@
 FROM golang:alpine AS builder
 ENV GOBIN $GOPATH/bin
 RUN apk update
-RUN apk add git curl fuse-dev gcc libc-dev attr
+RUN apk --no-cache add ca-certificates
+
+#RUN apk add git
 
 # Set necessary environmet variables needed for our image
 ENV GO111MODULE=auto \
-    CGO_ENABLED=1 \
+    CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64
 
@@ -17,42 +19,44 @@ COPY go.mod .
 COPY go.sum .
 RUN go mod download
 
-# Copy the code into the container
-COPY ./cmd/node/launcher.go ./cmd/node/launcher.go
-COPY ./pkg/netutil/ ./pkg/netutil
-COPY ./pkg/message ./pkg/message
-COPY ./pkg/mux ./pkg/mux
-COPY ./pkg/node ./pkg/node
-COPY ./pkg/policy ./pkg(policy
-COPY ./pkg/rec ./pkg/rec
+# Golang files
+COPY ./cmd/mux/main.go .
+COPY ./core/mux/ ./core/mux/
+COPY ./core/netutil/ ./core/netutil
+COPY ./core/policy/ ./core/policy/
+COPY ./core/comm/ ./core/comm/
+COPY ./core/cache/ ./core/cache/
+COPY ./core/util/ ./core/util/
+COPY ./core/message/ ./core/message/
 COPY ./protobuf/ ./protobuf
-COPY ./pkg/comm ./pkg/comm
-COPY ./pkg/session ./pkg/session
+COPY ./cauth/ ./cauth
+#COPY ./cmd/mux/config.yml cmd/mux/config.yml
 
 # Run test
 #RUN go test ./...
 
 # Build the application
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-RUN go build -a -o main ./cmd/node/launcher.go
+#RUN CGO_ENABLED=0 go- install -ldflags '-extldflags "-static"'
+#RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-extldflags "-static"' -o mux .
+RUN go build -o mux .
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
 
 # Copy binary from build to main folder
-RUN cp /build/main .
+RUN cp /build/mux .
 
 ############################
 # STEP 2 build a small image
 ############################
-FROM alpine
-RUN apk update
-RUN apk add fuse-dev 
-COPY --from=builder /dist/main /
-
-# Copy the configuration files
-COPY configs/ifrit_config.yaml /var/tmp/ifrit_config
-COPY cmd/node/config.yml .
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /dist/mux /
+COPY ./configs/ifrit_config.yaml /var/tmp/ifrit_config
+COPY ./cmd/mux/config.yml cmd/mux/config.yml
 
 # Command to run the executable
-ENTRYPOINT ["/main"]
+ENTRYPOINT ["/mux"]
+
+EXPOSE 8080

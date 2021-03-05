@@ -12,6 +12,7 @@ require (
 	github.com/jinzhu/configor v1.2.1
 	github.com/joonnna/ifrit v0.0.0-20210111192913-55d97c711f10
 	github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727
+	github.com/lestrrat-go/jwx v1.1.4 // indirect
 	github.com/lib/pq v1.9.0
 	github.com/magiconair/properties v1.8.4 // indirect
 	github.com/mattn/go-colorable v0.1.8 // indirect

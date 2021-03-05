@@ -6,6 +6,7 @@ import (
 	"crypto/x509/pkix"
 	"os"
 _	"net/url"
+	"strconv"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,12 +28,12 @@ var (
 )
 
 type Config struct {
-	MuxIP          		string 		`default:"127.0.1.1:8081"`
-	PolicyStoreIP  		string 		`default:"127.0.1.1:8082"`
+	Port				int 		`default:"8090"`
+	PolicyStoreHost 	string 		`default:"127.0.1.1"`
+	PolicyStoreGRPCPort int    		`default:"8084"`
+	MuxHost				string		`default:"127.0.1.1"`
+	MuxGRPCPort 		int    		`default:"8084"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	RecIP          		string 		`default:"127.0.1.1:8084"`
-	FileDigesters  		int    		`default:20`
-	HttpPort       		int    		`required:true`
 	PolicyIdentifier 	string    	`required:true` // TODO: need to formalize policies in a better!
 }
 
@@ -359,6 +360,7 @@ func (n *Node) Shutdown() {
 // with the policy store and multiplexer at known addresses.
 func (n *Node) JoinNetwork() error {
 	if err := n.muxHandshake(); err != nil {
+		panic(err)
 		return err
 	}
 
@@ -366,7 +368,7 @@ func (n *Node) JoinNetwork() error {
 		return err
 	}
 
-	go n.startHttpServer(fmt.Sprintf(":%d", n.config.HttpPort))
+	go n.startHttpServer(fmt.Sprintf(":%d", n.config.Port))
 	
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
@@ -403,7 +405,10 @@ type ExternalMetadataHandler = func(id string) (*ExternalMetadata, error)
 
 // PRIVATE METHODS BELOW
 func (n *Node) muxHandshake() error {
-	conn, err := n.muxClient.Dial(n.config.MuxIP)
+	address := fmt.Sprintf("%s:%s", n.config.MuxHost, strconv.Itoa(n.config.MuxGRPCPort))
+	log.Infoln("Performing handshake with mux. Addr:", address)
+	
+	conn, err := n.muxClient.Dial(address)
 	if err != nil {
 		return err
 	}
@@ -419,7 +424,8 @@ func (n *Node) muxHandshake() error {
 		Id:      []byte(n.ifritClient.Id()),
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalln(err)
+		return err
 	}
 
 	n.muxIP = r.GetIp()
@@ -428,7 +434,10 @@ func (n *Node) muxHandshake() error {
 }
 
 func (n *Node) policyStoreHandshake() error {
-	conn, err := n.psClient.Dial(n.config.PolicyStoreIP)
+	address := fmt.Sprintf("%s:%s", n.config.MuxHost, strconv.Itoa(n.config.PolicyStoreGRPCPort))
+	log.Infoln("Performing handshake with policy store at address", address)
+	
+	conn, err := n.psClient.Dial(address)
 	if err != nil {
 		return err
 	}
@@ -444,7 +453,7 @@ func (n *Node) policyStoreHandshake() error {
 		Id:      []byte(n.ifritClient.Id()),
 	})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	defer conn.CloseConn()
@@ -452,8 +461,6 @@ func (n *Node) policyStoreHandshake() error {
 	n.policyStoreIP = r.GetIp()
 	n.policyStoreID = r.GetId()
 
-	log.Infoln("n.policyStoreIP:", n.policyStoreIP)
-	log.Infoln("n.policyStoreID:", string(n.policyStoreID))
 	return nil
 }
 

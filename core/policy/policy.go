@@ -44,7 +44,7 @@ type Config struct {
 	MulticastAcceptanceLevel	float64		`default:0.5`
 
 	// Other parameters
-	MuxAddress						string	`default:"127.0.1.1:8081"`
+	MuxAddress					string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr 				string		`default:"127.0.1.1:8301"`
 	RecIP 						string 		`default:"127.0.1.1:8084"`
 	PolicyStoreGitRepository  	string 		`required:"true`
@@ -290,8 +290,6 @@ func (ps *PolicyStore) verifyMessageSignature(msg *pb.Message) error {
 		return err
 	}	
 
-	log.Println("string(msg.GetSender().GetId()):", string(msg.GetSender().GetId()))
-
 	if !ps.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
 		return errors.New("Policy store could not securely verify the integrity of the message")
 	}
@@ -403,10 +401,10 @@ func (ps *PolicyStore) Stop() {
 func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := ps.StorageNodes()[node.GetName()]; !ok {
 		ps.insertStorageNode(node)
-		log.Infoln("Mux added %s to map with Ifrit IP %s and HTTPS adrress %s\n", 
+		log.Infoln("Policy store added %s to map with Ifrit IP %s and HTTPS adrress %s\n", 
 			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
 	} else {
-		return nil, fmt.Errorf("Mux: node '%s' already exists in network\n", node.GetName())
+		return nil, fmt.Errorf("Policy store: node '%s' already exists in network\n", node.GetName())
 	}
 	return &pb.HandshakeResponse{
 		Ip: ps.ifritClient.Addr(),
@@ -669,17 +667,17 @@ func initializeGitRepository(path string) (*git.Repository, error) {
 	}
 
 	if !ok {
-		log.Println("Path:", path)
 		if err := os.MkdirAll(path, os.ModePerm); err != nil {
 			return nil, err
 		}
-		log.Println("INIT")
+
+		log.Infof("Initializing a plain Git repository at '%s'\n", path)
 		return git.PlainInit(path, false)
 	} else {
 		log.Infoln("Policies directory in Git repository already exists at", path)
 	}
 
-	log.Println("OPEN")
+	log.Infof("Opening a plain Git repository at %s\n", path)
 	return git.PlainOpen(path)
 }
 

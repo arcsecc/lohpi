@@ -34,6 +34,7 @@ func (ps *PolicyStore) startHttpServer(addr string) error {
 		TLSConfig: 		comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.Priv()),
 	}
 
+	log.Infoln("Started HTTP server at " + addr)
 	return ps.httpServer.ListenAndServe()
 }
 

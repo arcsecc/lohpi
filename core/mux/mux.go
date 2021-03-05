@@ -14,8 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,12 +29,13 @@ var (
 	errInvalidPermission = errors.New("Requested to send an invalid permission")
 )
 
-type MuxConfig struct {
-	MuxHttpPort   int    `default:8080`
-	MuxHttpsIP    string `default:"127.0.1.1:8081"`
-	PolicyStoreIP string `default:"127.0.1.1:8082"`
-	LohpiCaAddr   string `default:"127.0.1.1:8301"`
-	RecIP         string `default:"127.0.1.1:8084"`
+type Config struct {
+	HttpPort   			int    `default:"8080"`
+	GRPCPort    		int    `default:"8081"`
+	PolicyStoreHost 	string `default:"127.0.1.1"`
+	PolicyStorePort   	int    `default:"8083"`
+	PolicyStoreGRPCPort int    `default:"8084"`
+	LohpiCaAddr 				string 	`default:"127.0.1.1:8301"`
 }
 
 type service interface {
@@ -52,7 +51,7 @@ type Event struct {
 
 type Mux struct {
 	// Configuration
-	config     *MuxConfig
+	config     *Config
 	configLock sync.RWMutex
 
 	// Underlying Ifrit client
@@ -88,24 +87,14 @@ type Mux struct {
 }
 
 // Returns a new mux using the given configuration and HTTP port number. Returns a non-nil error, if any
-func NewMux(config *MuxConfig) (*Mux, error) {
+func NewMux(config *Config) (*Mux, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		log.Errorln(err)
 		return nil, err
 	}
 
-	go ifritClient.Start()
-
-	portString := strings.Split(config.MuxHttpsIP, ":")[1]
-	port, err := strconv.Atoi(portString)
-	if err != nil {
-		log.Errorln(err)
-		return nil, err
-	}
-
-	netutil.ValidatePortNumber(&port)
-	listener, err := netutil.ListenOnPort(port)
+	listener, err := netutil.ListenOnPort(config.GRPCPort)
 	if err != nil {
 		log.Errorln(err)
 		return nil, err
@@ -177,7 +166,7 @@ func (m *Mux) ServeHttp() error {
 	return nil
 }
 
-func (m *Mux) Configuration() *MuxConfig {
+func (m *Mux) Configuration() *Config {
 	m.configLock.RLock()
 	defer m.configLock.RUnlock()
 	return m.config
@@ -268,7 +257,7 @@ func (m *Mux) datasetNodes() map[string]*pb.Node {
 func (m *Mux) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := m.StorageNodes()[node.GetName()]; !ok {
 		m.insertStorageNode(node)
-		log.Infoln("Mux added %s to map with Ifrit IP %s and HTTPS adrress %s\n", 
+		log.Infof("Mux added '%s' to map with Ifrit IP %s and HTTPS adrress %s\n", 
 			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
 	} else {
 		return nil, fmt.Errorf("Mux: node '%s' already exists in network\n", node.GetName())

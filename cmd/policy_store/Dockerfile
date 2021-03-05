@@ -50,7 +50,7 @@ COPY --from=builder /dist/policy_store /
 # Copy the configuration files
 COPY configs/ifrit_config.yaml /var/tmp/ifrit_config
 COPY cmd/policy_store/config.yml .
-COPY ./cmd/policy_store/certs/BaltimoreCyberTrustRoot.crt.pem .
+COPY ./cmd/policy_store/BaltimoreCyberTrustRoot.crt.pem .
 
 # Command to run the executable
 ENTRYPOINT ["/policy_store"]
