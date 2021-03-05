@@ -6,9 +6,6 @@ import (
 _	"io/ioutil"
 	log "github.com/sirupsen/logrus"
 	"os"
-	_ "github.com/lib/pq"
-	"strconv"
-	"strings"
 	"sync"
 _	"time"
 //	"math/rand"
@@ -36,16 +33,18 @@ _	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/joonnna/ifrit"
 )
 
-type PolicyStoreConfig struct {
+type Config struct {
 	// Policy store specific
-	PolicyStoreIP				string 		`default:"127.0.1.1:8082"`
+	Name						string 		`default:"Policy store"`
+	Host						string      `default:"127.0.1.1"`
 	BatchSize 					int 		`default:10`
 	GossipInterval				int 		`default:10`
-	HttpPort					int 		`default:8083`
+	Port						int 		`default:8083`
+	GRPCPort					int 		`default:8084`
 	MulticastAcceptanceLevel	float64		`default:0.5`
 
 	// Other parameters
-	MuxIP						string		`default:"127.0.1.1:8081"`
+	MuxAddress						string	`default:"127.0.1.1:8081"`
 	LohpiCaAddr 				string		`default:"127.0.1.1:8301"`
 	RecIP 						string 		`default:"127.0.1.1:8084"`
 	PolicyStoreGitRepository  	string 		`required:"true`
@@ -63,7 +62,7 @@ type PolicyStore struct {
 	name string
 
 	// Policy store's configuration
-	config *PolicyStoreConfig
+	config *Config
 	configLock sync.RWMutex
 
 	// The underlying Fireflies client
@@ -122,7 +121,7 @@ type datasetPolicyMapEntry struct {
 }
 
 
-func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
+func NewPolicyStore(config *Config) (*PolicyStore, error) {
 	// Ifrit client
 	c, err := ifrit.NewClient()
 	if err != nil {
@@ -135,14 +134,7 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	// Set a proper port on which the gRPC server listens
-	portString := strings.Split(config.PolicyStoreIP, ":")[1]
-	port, err := strconv.Atoi(portString)
-	if err != nil {
-		return nil, err
-	}
-	netutil.ValidatePortNumber(&port)
-	listener, err := netutil.ListenOnPort(port)
+	listener, err := netutil.ListenOnPort(config.GRPCPort)
 	if err != nil {
 		return nil, err
 	}
@@ -201,21 +193,23 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 	return ps, nil
 }
 
-func (ps *PolicyStore) Start() {
+func (ps *PolicyStore) Start() error {
 	// Initialize the databases
 	if err := ps.initializePolicyDb(); err != nil {
 		log.Errorln(err.Error())
+		return err
 	}
 
 	// Synchronize the in-memory maps with the databases
 	if err := ps.syncMapsWithDatabases(); err != nil {
 		log.Errorln(err.Error())
+		return err
 	}
 
 	// Start the services
 	go ps.grpcs.Start()
 	go ps.ifritClient.Start()
-	go ps.startHttpServer(fmt.Sprintf(":%d", ps.config.HttpPort))
+	go ps.startHttpServer(fmt.Sprintf(":%d", ps.config.Port))
 
 	// Set Ifrit callbacks
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
@@ -258,6 +252,8 @@ func (ps *PolicyStore) Start() {
 			})
 		}
 	}*/
+
+	return nil
 }
 
 // Populates the in-memory maps with the data stored in the postgres database
@@ -271,7 +267,7 @@ func (ps *PolicyStore) syncMapsWithDatabases() error {
 	ps.datasetPolicyMapLock.Lock()
 	defer ps.datasetPolicyMapLock.Unlock()
 	ps.datasetPolicyMap = m
-	
+
 	return nil
 }
 
@@ -639,7 +635,7 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 	return nil
 }
 
-func (ps *PolicyStore) PsConfig() PolicyStoreConfig {
+func (ps *PolicyStore) PsConfig() Config {
 	ps.configLock.RLock()
 	defer ps.configLock.RUnlock()
 	return *ps.config
@@ -662,22 +658,28 @@ func (ps *PolicyStore) Shutdown() {
 
 // Sets up the Git resources in an already-existing Git repository
 func initializeGitRepository(path string) (*git.Repository, error) {
-	policiesDir := path + "/" + policiesStringToken
-	ok, err := exists(policiesDir)
+	if path == "" {
+		return nil, errors.New("Git repository path needs to be set")
+	}
+
+	ok, err := exists(path)
 	if err != nil {
 		log.Fatalf(err.Error())
 		return nil, err
 	}
 
 	if !ok {
-		if err := os.MkdirAll(policiesDir, os.ModePerm); err != nil {
+		log.Println("Path:", path)
+		if err := os.MkdirAll(path, os.ModePerm); err != nil {
 			return nil, err
 		}
+		log.Println("INIT")
 		return git.PlainInit(path, false)
 	} else {
-		log.Infoln("Policies directory in Git repository already exists at", policiesDir)
+		log.Infoln("Policies directory in Git repository already exists at", path)
 	}
 
+	log.Println("OPEN")
 	return git.PlainOpen(path)
 }
 

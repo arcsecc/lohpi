@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"database/sql"
+	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 	"os"
 	"errors"
@@ -14,7 +15,7 @@ import (
 func (ps *PolicyStore) initializePolicyDb() error {
 	var connectionString = fmt.Sprintf(os.Getenv("POLICY_STORE_DB_CONNECTION_STRING"))
 	if connectionString == "" {
-		return errors.New("Tried to fetch 'POLICY_STORE_DB_CONNECTION_STRING' from environment but it was not set.")
+		return errors.New("Tried to use 'POLICY_STORE_DB_CONNECTION_STRING' from environment but it was not set.")
 	}
 
 	log.Infoln("Using POLICY_STORE_DB_CONNECTION_STRING environment variable")
@@ -26,13 +27,11 @@ func (ps *PolicyStore) initializePolicyDb() error {
 func (ps *PolicyStore)  initializePostgreSQLdb(connectionString string) error {
 	// Create schema 
 	if err := ps.createSchema(connectionString); err != nil {
-		panic(err)
 		return err
 	}
 
 	// Policy table
 	if err := ps.initializeDatasetPolicyTable(connectionString); err != nil {
-		panic(err)
 		return err
 	}
 	
@@ -49,12 +48,10 @@ func (ps *PolicyStore) initializeDatasetPolicyTable(connectionString string) err
 
 	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
-		panic(err)
 		return err
 	}
 
 	if err := db.Ping(); err != nil {
-		panic(err)
 		return err
 	}
 
@@ -72,18 +69,15 @@ func (ps *PolicyStore) createSchema(connectionString string) error {
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
 	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
-		panic(err)
 		return err
 	}
 
 	if err := db.Ping(); err != nil {
-		panic(err)
 		return err
 	}
 
 	_, err = db.Exec(q)
 	if err != nil {
-		panic(err)
 		return err
 	}
 
