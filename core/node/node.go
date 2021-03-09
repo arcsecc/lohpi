@@ -448,7 +448,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		return n.nodeInfo()
 
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
-		return n.fetchDatasetIdentifiers(msg)
+		return n.pbDatasetIdentifiers(msg)
 
 		// Only allow one check-out at a time by the same client of the same dataset.
 		// Respond with "Unauthorized" if something fails. We might disable this feature
@@ -672,7 +672,7 @@ func (n *Node) pbDatasetExists(msg *pb.Message) ([]byte, error) {
 }
 
 // TODO: create protobuf/ifrit related functions their own notation :))
-func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
+func (n *Node) pbDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{
 		StringSlice: n.datasetIdentifiers(),
 	}
