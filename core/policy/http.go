@@ -23,7 +23,7 @@ func (ps *PolicyStore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/metadata/{id:.*}", ps.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/getpolicy/{id:.*}", ps.getObjectPolicy).Methods("GET")
 	dRouter.HandleFunc("/setpolicy/{id:.*}", ps.setObjectPolicy).Methods("PUT")
-	
+	//dRouter.HandleFunc("/probe}", ps.probe).Methods("GET")
 
 	ps.httpServer = &http.Server{
 		Addr: 		  	addr,
@@ -152,9 +152,9 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Destination struct
+	// Destination struct. Require only booleans for now
 	reqBody := struct  {
-		Policy string
+		Policy bool
 	}{}
 
 	if err := util.DecodeJSONBody(w, r, "application/json", &reqBody); err != nil {
@@ -172,10 +172,16 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	policy := &pb.Policy{
 		Issuer: ps.name,
 		ObjectIdentifier: datasetId,
-		Content: reqBody.Policy,
+		Content: strconv.FormatBool(reqBody.Policy),
 	}
 
-	ps.storePolicy(context.Background(), datasetEntry.node, datasetId, policy) // if err...
+	if err := ps.storePolicy(context.Background(), datasetEntry.node, datasetId, policy); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	go ps.submitPolicyForDistribution(policy)
 
 	respMsg := "Successfully set a new policy for " + datasetId + "\n"
 	w.WriteHeader(http.StatusOK)

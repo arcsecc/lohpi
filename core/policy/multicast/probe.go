@@ -392,7 +392,7 @@ func (p *probeManager) decreaseProbeSessionConfiguration() {
 func (p *probeManager) probeRoundRecipients(mode MessageMode, directRecipients int) ([]string, error) {
 	switch mode {
 	case LruMembers:
-		return p.memManager.lruMembers(directRecipients)
+//		return p.memManager.lruMembers(directRecipients)
 //	case RandomMembers:
 //		return p.memManager.RandomMembers()
 	default:

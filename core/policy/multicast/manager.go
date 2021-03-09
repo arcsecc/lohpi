@@ -2,7 +2,7 @@ package multicast
 
 import (
 	"errors"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"time"
 	"sync"
 
@@ -37,7 +37,15 @@ type multicastConfig struct {
 	multicastInterval time.Duration		// tau	Dynamic
 
 	// Level of consistency 
-	acceptanceLevel float64
+	acceptanceLevel float64 // static
+}
+
+type Config struct {
+	// Sets the behaviour of the message passing
+	Mode MessageMode
+
+	// The members at the time the message passing is invoked
+	Members []string
 }
 
 // Maintains all gossip-related events
@@ -74,17 +82,15 @@ type memberFetch struct {
 
 // Returns a new MulticastManager, given the Ifrit node and the configuration. Sigma and tau are initial values
 // that may be changed after initiating probing sessions. The values will be adjusted if they are higher than they should be.
-func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, multicastInterval time.Duration) (*MulticastManager, error) {	
+func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, multicastDirectRecipients int) (*MulticastManager, error) {	
 	m := &MulticastManager{
 		PolicyChan:	make(chan pb.Policy, 100),
 		multicastTimer:	time.NewTimer(1 * time.Second),
 		mcLock:			sync.RWMutex{},
-
 		ifritClient: 	ifritClient,
 
 		config: &multicastConfig {
-			multicastDirectRecipients: 	1,
-			multicastInterval: 			multicastInterval,
+			multicastDirectRecipients: 	multicastDirectRecipients,
 			acceptanceLevel:			acceptanceLevel,
 		},
 
@@ -112,34 +118,17 @@ func (m *MulticastManager) setMulticastConfiguration(config *multicastConfig) {
 	m.config = config
 }
 
-func (m *MulticastManager) MulticastTimer() *time.Timer {
-	m.mcLock.RLock()
-	defer m.mcLock.RUnlock()
-	return m.multicastTimer
-}
 
 // Sends a batch of messages, given the messaging mode. The call will block until
 // all messages have been dispatched. The caller is responsible to wait until probing is finished
 // to avoid inconsistency. See IsProbing() in this package.
-func (m *MulticastManager) Multicast(mode MessageMode) error {
-	return m.multicast(mode)
+func (m *MulticastManager) Multicast(c *Config) error {
+	return m.multicast(c)
 }
 
 // Registers the given message as a probe message
 func (m *MulticastManager) RegisterProbeMessage(msg *pb.Message) {
 	m.prbManager.probeChan <- *msg
-}
-
-// Sends a batch of messages to a random set of members
-func (m *MulticastManager) SendToRandomMembers() error {
-	log.Println("Implement SendToRandomMembers()")
-	return nil
-}
-
-func (m *MulticastManager) SetIgnoredIfritNodes(ignoredIPs map[string]string) {
-	// Hacky af...
-	m.memManager.setIgnoredIfritNodes(ignoredIPs)
-	m.prbManager.setIgnoredIfritNodes(ignoredIPs)
 }
 
 // Probes the network to adjust the parameters
@@ -178,36 +167,40 @@ func (m *MulticastManager) ResetMulticastTimer() {
 	m.multicastTimer.Reset(currentConfig.multicastInterval)
 }
 
-// FINISH ME
-func (m *MulticastManager) getMembers(mode MessageMode, directRecipients int) ([]string, error) {
+func (m *MulticastManager) getMessageRecipients(members []string, mode MessageMode, directRecipients int) ([]string, error) {
 	switch mode {
 	case LruMembers:
-		return m.memManager.lruMembers(directRecipients)
+		return m.memManager.lruMembers(members, directRecipients)
 	case RandomMembers:
-		log.Fatal("Implement me")
+		return m.memManager.randomMembers(members, directRecipients)
 	default:
-		log.Fatalf("Unknown mode: %s\n", mode)
+		break
 	}
 
 	return nil, errors.New("Unknown mode!")
 }
 
 // FINISH ME
-func (m *MulticastManager) multicast(mode MessageMode) error {
-	members, err := m.getMembers(mode, 2)
-	if err != nil {
-		return err
+func (m *MulticastManager) multicast(c *Config) error {
+	if c == nil {
+		return errors.New("Multicast configuration is nil")
 	}
 
 	// Empty channel. Nothing to do 
 	if len(m.PolicyChan) == 0 {
+		log.Infoln("Multicast queue is empty. Aborting message passing")
 		return nil
 	}
+	
+	members, err := m.getMessageRecipients(c.Members, c.Mode, m.config.multicastDirectRecipients)
+	if err != nil {
+		return err
+	}
 
+	// Pack all chunks together in a batch
 	gossipChunks := make([]*pb.GossipMessageBody, 0)
 	// TODO: avoid sizes exceeding 4MB
 
-	log.Println("BEfore sending batch, length is", len(m.PolicyChan))
 	for p := range m.PolicyChan {
 		gossipChunk := &pb.GossipMessageBody{
 			//string object = 1;          // subject or study. Appliy the policy to the object
@@ -227,8 +220,8 @@ func (m *MulticastManager) multicast(mode MessageMode) error {
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_POLICY_STORE_UPDATE,
 		GossipMessage: &pb.GossipMessage{
-			Sender: 				"Policy store",				// Do we really need it?
-			MessageType: 			message.GOSSIP_MSG_TYPE_POLICY,
+			Sender: 				"Polciy store",
+			MessageType: 			message.GOSSIP_MSG_TYPE_POLICY, // Don't really need this one because the outtermost Message type already has a type specifier
 			Timestamp: 				timestamp,
 			GossipMessageBody:		gossipChunks,
 		},
@@ -246,19 +239,7 @@ func (m *MulticastManager) multicast(mode MessageMode) error {
 	}
 
 	// Message with signature
-	msg = &pb.Message{
-		Type: message.MSG_TYPE_POLICY_STORE_UPDATE,
-		Signature: &pb.MsgSignature{
-			R: r,
-			S: s,
-		},
-		GossipMessage: &pb.GossipMessage{
-			Sender: 				"Policy store",
-			MessageType: 			message.GOSSIP_MSG_TYPE_POLICY,
-			Timestamp: 				timestamp,
-			GossipMessageBody:		gossipChunks,
-		},
-	}
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
 
 	// Marshalled message to be multicasted
 	data, err = proto.Marshal(msg)
@@ -273,9 +254,9 @@ func (m *MulticastManager) multicast(mode MessageMode) error {
 		member := mem
 		wg.Add(1)
 		go func() {
-			log.Println("Sending msg", msg)
+			defer wg.Done()
+			log.Infof("Sending policy batch to member '%s'\n", member)
 			m.ifritClient.SendTo(member, data)
-			wg.Done()
 		}()
 	}
 

@@ -59,17 +59,6 @@ type ObjectPolicy struct {
 	Value string
 }
 
-type Dataset struct {
-	name     string
-	metadata *Metadata
-
-	storageObjectsMap     map[string]*StorageObject
-	storageObjectsMapLock sync.RWMutex
-
-	// Global policy?
-	// Actual data here as well
-}
-
 // Used to configure the time intervals between each fetching of the identifiers of the dataset.
 // You really should use this config to enable a push-based approach. 
 type RefreshConfig struct {
@@ -77,30 +66,11 @@ type RefreshConfig struct {
 	URL string
 }
 
-// A generic representation of a storage object stored at this node.
-// This can be a file, blob or anything at all.
-type StorageObject struct {
-	policy   *Policy
-	metadata *Metadata
-	content  []byte
-}
-
 // Policy assoicated with metadata
 type Policy struct {
 	Issuer           string
 	ObjectIdentifier string
 	Content          string
-}
-
-type StorageObjectContent []byte
-
-type Metadata map[string]string
-
-type objectFile struct {
-	path       string
-	attributes []byte
-	content    []byte
-	err        error
 }
 
 type Node struct {
@@ -130,8 +100,8 @@ type Node struct {
 	muxID         []byte
 	policyStoreID []byte
 
-	// Object id -> object header
-	datasetMap     map[string]*Dataset
+	// Object id -> empty value for quick indexing
+	datasetMap     map[string]struct{}
 	datasetMapLock sync.RWMutex
 
 	httpListener net.Listener
@@ -218,7 +188,7 @@ func NewNode(name string, config *Config) (*Node, error) {
 		httpListener:      	httpListener,
 		cu: cu,
 
-		datasetMap:     make(map[string]*Dataset),
+		datasetMap:     make(map[string]struct{}),
 		datasetMapLock: sync.RWMutex{},
 	}
 
@@ -274,6 +244,10 @@ func (n *Node) RequestPolicy(id string, ctx context.Context) error {
 		return errors.New("Dataset identifier must be a non-empty string")
 	}
 
+	if n.datasetExists(id) {
+		return fmt.Errorf("Dataset with identifier '%s' already exists", id)
+	}
+
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_POLICY,
 		Sender: n.pbNode(),
@@ -321,11 +295,16 @@ func (n *Node) RequestPolicy(id string, ctx context.Context) error {
 			return err
 		}
 
+		// Insert into database
 		pResponse := respMsg.GetPolicyResponse()
 		if err := n.dbSetObjectPolicy(id, pResponse.GetObjectPolicy().GetContent()); err != nil {
 			log.Errorln(err.Error())
 			return err
 		}
+
+		// Insert into map too if all went well in the database transaction
+		// TODO: store other things in the struct? More complex policies?
+		n.insertDataset(id, struct{}{})
 	}
 
 	return nil
@@ -486,9 +465,10 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		return n.fetchDatasetIdentifiers(msg)
 
 		// Only allow one check-out at a time by the same client of the same dataset.
-		// Respond with "Unauthorized" if something fails
+		// Respond with "Unauthorized" if something fails. We might disable this feature
+		// based on certain criterias.
 	case message.MSG_TYPE_GET_DATASET_URL:
-		// Check if dataset is indexed by the policy enforcement. If it is not, reject the request (404).
+		// Check if dataset is indexed by the policy enforcement. If it is not, reject the request (401).
 		if !n.dbDatasetExists(msg.GetDatasetRequest().GetIdentifier()) {
 			return n.unauthorizedAccess(fmt.Sprintf("Dataset '%s' is not indexed by the node", msg.GetDatasetRequest().GetIdentifier()))
 		}
@@ -509,14 +489,17 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_DATASET:
 	//	return n.marshalledStorageObjectContent(msg)s
 
-	case message.MSG_TYPE_DATASET_EXISTS:
-		return n.datasetExists(msg)
+//	case message.MSG_TYPE_DATASET_EXISTS:
+//		return n.datasetExists(msg)
 
 	case message.MSG_TYPE_GET_DATASET_METADATA_URL:
 		return n.fetchDatasetMetadataURL(msg)
 		// TODO finish me
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		log.Println("Got new policy from policy store!")
+		// gossip
+		log.Debugln("Got new policy batch from policy store!")
+		return n.processPolicyBatch(msg)
+		
 
 	case message.MSG_TYPE_PROBE:
 		return n.acknowledgeProbe(msg, data)
@@ -526,6 +509,39 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	}
 
 	return n.acknowledgeMessage()
+}
+
+// TODO check the internal tables and so on...
+func (n *Node) processPolicyBatch(msg *pb.Message) ([]byte, error) {
+	if msg.GetGossipMessage() == nil {
+		err := errors.New("Gossip message is nil")
+		log.Fatalln(err.Error())
+		return nil, err
+	}
+
+	gspMsg := msg.GetGossipMessage() 
+	
+	log.Println("gspMsg:", gspMsg)
+
+	if gspMsg.GetGossipMessageBody() == nil {
+		err := errors.New("Gossip message body is nil")
+		log.Fatalln(err.Error())
+		return nil, err
+	} else {
+		for _, m := range gspMsg.GetGossipMessageBody() {
+			// TODO check policy ID and so on...
+			policy := m.GetPolicy()
+			datasetId := policy.GetObjectIdentifier()
+			if n.datasetExists(datasetId) {
+				if err := n.dbSetObjectPolicy(datasetId, policy.GetContent()); err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 // Returns true if a client has already checked out the dataset,
@@ -649,33 +665,6 @@ func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 	}
 
 	return nil, nil 
-}
-
-func (n *Node) datasetExists(msg *pb.Message) ([]byte, error) {
-	if handler := n.getIdentifierExistsHandler(); handler != nil {
-		datasetId := msg.GetStringValue()
-		respMsg := &pb.Message{}
-		respMsg.BoolValue = handler(datasetId)
-	
-		data, err := proto.Marshal(respMsg)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		r, s, err := n.ifritClient.Sign(data)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-		return proto.Marshal(respMsg)
-	} else {
-		log.Warnln("ExternalIdentifierExistsHandler is not set")		
-	}
-
-	return nil, nil
 }
 
 // BUG: timeout when issuing identifier requests to multiple nodes
@@ -875,4 +864,23 @@ func (n *Node) verifyMessageSignature(msg *pb.Message) error {
 	}
 
 	return nil
+}
+
+func (n *Node) insertDataset(id string, elem struct{}) {
+	n.datasetMapLock.Lock()
+	defer n.datasetMapLock.Unlock()
+	n.datasetMap[id] = struct{}{}
+}
+
+func (n *Node) datasetExists(id string) bool {
+	n.datasetMapLock.RLock()
+	defer n.datasetMapLock.RUnlock()
+	_, ok := n.datasetMap[id]
+	return ok
+}
+
+func (n *Node) removeDataset(id string) {
+	n.datasetMapLock.Lock()
+	defer n.datasetMapLock.Unlock()
+	delete(n.datasetMap, id)
 }

@@ -2,8 +2,10 @@ package multicast
 
 import (
 	"errors"
-	"log"
+	"time"
+	log "github.com/sirupsen/logrus"
 	"sort"
+	"math/rand"
 	"sync"
 
 	"github.com/joonnna/ifrit"
@@ -42,7 +44,10 @@ func (m *membershipManager) lruNodes() map[string]int {
 // Returns a subset of the least recently used members. Returns an array of one element if
 // and only if 0 < numDirectRecipients < 4. numDirectRecipients is a whole number (not percetage).
 // TODO: numDirectRecipients tends to live its own life. Fix this!
-func (m *membershipManager) lruMembers(numDirectRecipients int) ([]string, error) {
+func (m *membershipManager) lruMembers(members []string, numDirectRecipients int) ([]string, error) {
+	log.Debugln("Implement lruMembers!")
+	return nil, nil
+	
 	m.updateLruMembers()
 
 	// BUG HERE!
@@ -153,8 +158,38 @@ func (m *membershipManager) updateLruMembers() {
 	}
 }
 
-func (m *membershipManager) RandomMembers() ([]string, error) {
-	return nil, nil
+// TODO: test me
+func (m *membershipManager) randomMembers(members []string, numDirectRecipients int) ([]string, error) {
+	if len(members) == 0 {
+		return nil, errors.New("Members list is empty")
+	}
+
+	if numDirectRecipients < 0 {
+		log.Warnln("numDirectRecipients is negative. Setting it to 1")
+		numDirectRecipients = 1
+	}
+
+	if numDirectRecipients > len(members) {
+		log.Warnln(`numDirectRecipients is greater than number of available members.
+			Sets numDirectRecipients equal to number of available members`)
+		numDirectRecipients = len(members)
+	}
+
+	if len(members) > 4 {
+		numDirectRecipients = 1
+	}
+
+	// Populate 'result' from n random members from 'members'
+	result := make([]string, 0, numDirectRecipients)
+
+	rand.Seed(time.Now().UnixNano())
+    p := rand.Perm(numDirectRecipients)
+    for i := range p {
+		result = append(result, members[i])
+	}
+	
+	log.Println("result:", result)
+	return result, nil
 }
 
 // Returns true if the given ip address is ignored, returns false otherwise

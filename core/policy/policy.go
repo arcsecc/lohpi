@@ -2,18 +2,19 @@ package policy
 
 import (
 	"errors"
+	"path/filepath"
+	"time"
 	"fmt"
 _	"io/ioutil"
+	
 	log "github.com/sirupsen/logrus"
 	"os"
 	"sync"
-_	"time"
 //	"math/rand"
 	"context"
 	"net"
 	"net/http"
 
-	"database/sql"
 	"crypto"
 	"crypto/rsa"
 	"crypto/x509/pkix"
@@ -29,7 +30,6 @@ _	"google.golang.org/grpc/peer"
 	"github.com/joonnna/workerpool"
 	"github.com/golang/protobuf/proto"
 	"github.com/go-git/go-git/v5"
-_	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/joonnna/ifrit"
 )
 
@@ -42,6 +42,7 @@ type Config struct {
 	Port						int 		`default:8083`
 	GRPCPort					int 		`default:8084`
 	MulticastAcceptanceLevel	float64		`default:0.5`
+	NumDirectRecipients			int			`default:"1"`
 
 	// Other parameters
 	MuxAddress					string		`default:"127.0.1.1:8081"`
@@ -50,19 +51,11 @@ type Config struct {
 	PolicyStoreGitRepository  	string 		`required:"true`
 }
 
-var (
-	policiesStringToken = "policies"
-	dbName = "policy_store_db"
-	schemaName = "policy_store_db_schema" 
-	datasetPolicyTable = "dataset_policy_table"
-	datasetCheckoutTable = "dataset_checkout_table"
-)
-
 type PolicyStore struct {
 	name string
 
 	// Policy store's configuration
-	config *Config
+	config Config
 	configLock sync.RWMutex
 
 	// The underlying Fireflies client
@@ -76,6 +69,7 @@ type PolicyStore struct {
 
 	// Go-git
 	repository *git.Repository
+	baseDir string
 
 	// Sync 
 	exitChan 	chan bool
@@ -110,9 +104,6 @@ type PolicyStore struct {
 	// Datasets in the network 
 	datasetPolicyMapLock sync.RWMutex
 	datasetPolicyMap map[string]*datasetPolicyMapEntry
-
-	policyIdentifier string
-	datasetDB *sql.DB
 }
 
 type datasetPolicyMapEntry struct {
@@ -120,8 +111,7 @@ type datasetPolicyMapEntry struct {
 	node string
 }
 
-
-func NewPolicyStore(config *Config) (*PolicyStore, error) {
+func NewPolicyStore(config Config) (*PolicyStore, error) {
 	// Ifrit client
 	c, err := ifrit.NewClient()
 	if err != nil {
@@ -133,6 +123,7 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	baseDir := filepath.Base(config.PolicyStoreGitRepository)
 
 	listener, err := netutil.ListenOnPort(config.GRPCPort)
 	if err != nil {
@@ -155,19 +146,13 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		return nil, err
 	}
 
-	/*muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
-	if err != nil {
-		return nil, err
-	}*/
-
 	// In-memory cache
 	//cache := cache.NewCache(c)
 
-	/*t := time.Duration(config.GossipInterval) * time.Second
-	multicastManager, err := multicast.NewMulticastManager(c, config.MulticastAcceptanceLevel, t)
+	multicastManager, err := multicast.NewMulticastManager(c, config.MulticastAcceptanceLevel, config.NumDirectRecipients)
 	if err != nil {
 		return nil, err
-	}*/
+	}
 
 	// TODO: remove some of the variables into other interfaces/packages?
 	ps := &PolicyStore{
@@ -181,11 +166,12 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 		dispatcher: 		workerpool.NewDispatcher(50),
 		//muxClient:			muxClient,
 		config: 			config,
+		baseDir: 		baseDir,
 		configLock:			sync.RWMutex{},
 		nodeMap:     make(map[string]*pb.Node),
 		nodeMapLock: sync.RWMutex{},
 		datasetPolicyMap: make(map[string]*datasetPolicyMapEntry),
-		//multicastManager:	multicastManager,
+		multicastManager:	multicastManager,
 	}
 
 	ps.grpcs.Register(ps)
@@ -194,14 +180,13 @@ func NewPolicyStore(config *Config) (*PolicyStore, error) {
 }
 
 func (ps *PolicyStore) Start() error {
-	// Initialize the databases
-	if err := ps.initializePolicyDb(); err != nil {
+	// Synchronize the in-memory maps with the databases
+	if err := ps.remoteGitSync(); err != nil {
 		log.Errorln(err.Error())
 		return err
 	}
 
-	// Synchronize the in-memory maps with the databases
-	if err := ps.syncMapsWithDatabases(); err != nil {
+	if err := ps.syncPolicyMaps(); err != nil {
 		log.Errorln(err.Error())
 		return err
 	}
@@ -229,45 +214,48 @@ func (ps *PolicyStore) Start() error {
 	// Make sure we ignore the Mux before multicasting
 	ignoredIPs[remoteIfritAddr] = remoteName
 	ps.multicastManager.SetIgnoredIfritNodes(ignoredIPs)
+*/
+	multicastInterval := time.Duration(5 * time.Second)
+	mcTimer := time.NewTimer(multicastInterval)
 
 	// Main event loop for multicasting messages 
 	for {
 		select {
 		// When a probing session starts, it blocks the multicast timer from being reset.
 		// This allows us to run policy updates and probing in an orderly fashion
-		case <-ps.multicastManager.MulticastTimer().C:
+		case <-mcTimer.C:
 			ps.dispatcher.Submit(func() {
-				// Reset timer 
-				defer func() {
-					ps.multicastManager.ResetMulticastTimer()
-				}()
-				
+				defer mcTimer.Reset(multicastInterval)
+
 				if ps.multicastManager.IsProbing() {
 					return
 				}
 				
-				if err := ps.multicastManager.Multicast(multicast.LruMembers); err != nil {
+				if err := ps.multicastManager.Multicast(&multicast.Config{
+					Mode: multicast.RandomMembers, 
+					Members: ps.ifritMembersAddress(),
+				}); err != nil {
 					log.Println(err.Error())
 				}
 			})
 		}
-	}*/
+	}
 
 	return nil
 }
 
+func (ps *PolicyStore) ifritMembersAddress() []string {
+	memMap := ps.StorageNodes()
+	members := make([]string, 0)
+	for _, n := range memMap {
+		members = append(members, n.GetIfritAddress())
+	}
+	return members
+}
+
 // Populates the in-memory maps with the data stored in the postgres database
 // TODO: sync db and maps with the state of the nodes
-func (ps *PolicyStore) syncMapsWithDatabases() error {
-	m, err := ps.getAllDatasetPolicies()
-	if err != nil {
-		return err
-	}
-
-	ps.datasetPolicyMapLock.Lock()
-	defer ps.datasetPolicyMapLock.Unlock()
-	ps.datasetPolicyMap = m
-
+func (ps *PolicyStore) syncPolicyMaps() error {
 	return nil
 }
 
@@ -484,7 +472,8 @@ func (ps *PolicyStore) sendDatasetPolicy(nodeIdentifier string, pr *pb.PolicyReq
 	// If dataset is not contained in the database, set an initial policy to the dataset
 	// and return it to the node. The initial policy is "disallow". "Allow" policy should be set from 
 	// the policy store client. See the else clause.
-	if !ps.datasetExistsInDb(pr.GetIdentifier()) {
+	// What happens if the PS has crashed...? Should we set FALSE then too?
+	if !ps.datasetExists(pr.GetIdentifier()) {
 		policy = &pb.Policy {
 			Issuer: ps.name,
 			ObjectIdentifier: pr.GetIdentifier(),
@@ -519,25 +508,22 @@ func (ps *PolicyStore) sendDatasetPolicy(nodeIdentifier string, pr *pb.PolicyReq
 	return proto.Marshal(resp)
 }
 
-// Hacky af...
 func (ps *PolicyStore) storePolicy(ctx context.Context, nodeIdentifier, datasetIdentifier string, policy *pb.Policy) error {
-	ps.dispatcher.Submit(func() {
-		ps.insertDatasetPolicy(datasetIdentifier, nodeIdentifier, policy) // if err...
-		ps.setDatasetPolicyMap(datasetIdentifier, &datasetPolicyMapEntry{policy, nodeIdentifier})
+	go ps.addDatasetPolicy(datasetIdentifier, &datasetPolicyMapEntry{policy, nodeIdentifier})
 
-		/*if err := ps.storePolicy(p); err != nil {
-			log.Fatalf(err.Error())
-		}
-		
-		if err := ps.commitPolicy(p); err != nil {
-			log.Fatalf(err.Error())
-		}*/
+	if err := ps.writePolicy(policy); err != nil {
+		log.Errorln(err.Error())
+	}
 
-		// Submit policy to be commited and gossiped
-		//ps.multicastManager.PolicyChan <- *p
-	})
+	if err := ps.commitPolicy(policy); err != nil {
+		log.Errorln(err.Error())
+	}
 
 	return nil
+}
+
+func (ps *PolicyStore) submitPolicyForDistribution(p *pb.Policy) {
+	ps.multicastManager.PolicyChan <- *p
 }
 
 // Returns the policy store's dataset identifier-to-policy map
@@ -547,138 +533,28 @@ func (ps *PolicyStore) getDatasetPolicyMap() map[string]*datasetPolicyMapEntry {
 	return ps.datasetPolicyMap
 }
 
-func (ps *PolicyStore) setDatasetPolicyMap(id string, entry *datasetPolicyMapEntry) {
+func (ps *PolicyStore) addDatasetPolicy(id string, entry *datasetPolicyMapEntry) {
 	ps.datasetPolicyMapLock.Lock()
 	defer ps.datasetPolicyMapLock.Unlock()
 	ps.datasetPolicyMap[id] = entry
 }
 
-// Stores the given policy on disk
-//func (ps *PolicyStore) storePolicy(p *pb.Policy) error {
-	// Check if directory exists for the given study and subject
-	// Use "git-repo/study/subject/policy/policy.conf" paths 
-/*	dirPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetObjectName())
-	ok, err := exists(dirPath)
-	if err != nil {
-		log.Fatalf(err.Error())
-	}
-
-	// Create study directory if it doesn't exists
-	if !ok {
-		if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
-			return err
-		}
-	}
-
-/*	fullPath := filepath.Join(ps.config.PolicyStoreGitRepository, policiesStringToken, p.GetObjectName(), p.GetFilename())
-	return ioutil.WriteFile(fullPath, p.GetContent(), 0644)*/
-//	return nil
-//}
-
-// Commit the policy model to the Git repository
-func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
-	// Get the current worktree
-	/*worktree, err := ps.repository.Worktree()
-	if err != nil {
-		panic(err)
-	}
-
-	// Add the file to the staging area
-	path := filepath.Join(policiesStringToken, p.GetObjectName(), p.GetFilename())
-	_, err = worktree.Add(path)
-	if err != nil {
-		panic(err)
-	}
-
-	status, err := worktree.Status()
-	if err != nil {
-		panic(err)
-	}
-
-	// Check status and abort commit if staging changes don't differ from HEAD.
-	// TODO: might need to re-consider this one! What if we need to reorder commits?
-	if status.File(path).Staging == git.Untracked {
-		if err := worktree.Checkout(&git.CheckoutOptions{}); err != nil {
-			panic(err)
-		}
-		return nil
-	}
-
-	// Commit the file
-	// TODO: use RECs attributes when commiting the file
-	c, err := worktree.Commit(path, &git.CommitOptions{
-		Author: &object.Signature{
-			Name: p.GetIssuer(),
-			//Email: "john@doe.org",
-			When:  time.Now(),
-		},
-		Committer: &object.Signature{
-			Name: "Policy store",
-			//Email: "john@doe.org",
-			When:  time.Now(),
-		},
-	})
-
-	if err != nil {
-		return err
-	}
-
-	obj, err := ps.repository.CommitObject(c)
-	if err != nil {
-		return err
-	}
-
-	//fmt.Println(obj)
-	_ = obj*/
-	return nil
+func (ps *PolicyStore) datasetExists(id string) bool {
+	_, ok := ps.getDatasetPolicyMap()[id]
+	return ok
 }
 
 func (ps *PolicyStore) PsConfig() Config {
 	ps.configLock.RLock()
 	defer ps.configLock.RUnlock()
-	return *ps.config
+	return ps.config
 }
 
 // Shut down all resources assoicated with the policy store
 func (ps *PolicyStore) Shutdown() {
 	log.Println("Shutting down policy store")
+	// TODO: shut down servers too
 	ps.ifritClient.Stop()
-}
-
-// Updates the internal cache by assigning the object headers' ids to the object headers themselves
-// TODO: update only deltas. Sync with node'S implementation
-/*func (ps *PolicyStore) updateObjectHeaders(objectHeaders *pb.ObjectHeaders) {
-	for _, header := range objectHeaders.GetObjectHeaders() {
-		objectID := header.GetName()
-		ps.cache.InsertObjectHeader(objectID, header)
-	}
-}*/
-
-// Sets up the Git resources in an already-existing Git repository
-func initializeGitRepository(path string) (*git.Repository, error) {
-	if path == "" {
-		return nil, errors.New("Git repository path needs to be set")
-	}
-
-	ok, err := exists(path)
-	if err != nil {
-		log.Fatalf(err.Error())
-		return nil, err
-	}
-
-	if !ok {
-		if err := os.MkdirAll(path, os.ModePerm); err != nil {
-			return nil, err
-		}
-
-		log.Infof("Initializing a plain Git repository at '%s'\n", path)
-		return git.PlainInit(path, false)
-	} else {
-		log.Infoln("Policies directory in Git repository already exists at", path)
-	}
-
-	log.Infof("Opening a plain Git repository at %s\n", path)
-	return git.PlainOpen(path)
 }
 
 func (ps *PolicyStore) StorageNodes() map[string]*pb.Node {
@@ -720,23 +596,3 @@ func exists(path string) (bool, error) {
 	}
 	return true, err
 }
-
-
-/*
-
-
-
-	/*	msg := &message.NodeMessage {
-		MessageType: message.MSG_TYPE_SET_REC_POLICY,
-		Study: 		"study_0",
-		Filename: 	"model.conf",
-		Extras: 	[]byte(`[request_definition]
-		r = sub, obj, act
-		[policy_definition]
-		p = sub, obj, act
-		[policy_effect]
-		e = some(where (p.eft == allow))
-		[matchers]
-		m=r.sub.Country==r.obj.Country && r.sub.Network==r.obj.Network && r.sub.Purpose==r.obj.Purpose
-		`),
-	}*/
