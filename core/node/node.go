@@ -107,14 +107,6 @@ type Node struct {
 	httpListener net.Listener
 	httpServer   *http.Server
 
-	// Callbacks for external sources
-	datasetIdentifiersHandler     ExernalDatasetIdentifiersHandler
-	datasetIdentifiersHandlerLock sync.RWMutex
-
-	// Callback to check if dataset exists
-	identifierExistsHandler     ExternalIdentifierExistsHandler
-	identifierExistsHandlerLock sync.RWMutex
-
 	// Callback to fetch remote archives
 	datasetCallback     ExternalArchiveHandler
 	datasetCallbackLock sync.RWMutex
@@ -370,14 +362,8 @@ func (n *Node) UseCache(use bool) {
 	n.useCache = use
 }
 
-// Function type used for callbacks to fetch datasets on-demand. 
-type ExernalDatasetIdentifiersHandler = func() ([]string, error)
-
 // Function type used to fetch compressed archives from external sources.
 type ExternalArchiveHandler = func(id string) (*ExternalDataset, error)
-
-// Function type to check if external identifiers in a dataset exists.
-type ExternalIdentifierExistsHandler = func(id string) bool
 
 // Function type to fetch metadata from the external data source
 type ExternalMetadataHandler = func(id string) (*ExternalMetadata, error)
@@ -489,8 +475,8 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_DATASET:
 	//	return n.marshalledStorageObjectContent(msg)s
 
-//	case message.MSG_TYPE_DATASET_EXISTS:
-//		return n.datasetExists(msg)
+	case message.MSG_TYPE_DATASET_EXISTS:
+		return n.pbDatasetExists(msg)
 
 	case message.MSG_TYPE_GET_DATASET_METADATA_URL:
 		return n.fetchDatasetMetadataURL(msg)
@@ -521,8 +507,6 @@ func (n *Node) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 
 	gspMsg := msg.GetGossipMessage() 
 	
-	log.Println("gspMsg:", gspMsg)
-
 	if gspMsg.GetGossipMessageBody() == nil {
 		err := errors.New("Gossip message body is nil")
 		log.Fatalln(err.Error())
@@ -630,6 +614,8 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 	return nil, nil 
 }
 
+// TODO: consider abandoning fetchting the metadata url at each request and index it at the node instead
+// Use psql or in-memory map?
 func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 	id := msg.GetDatasetRequest().GetIdentifier()
 	if handler := n.getExternalMetadataHandler(); handler != nil {
@@ -656,8 +642,7 @@ func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 			return nil, err
 		
 		}
-		log.Println("ID:", id)
-		log.Println("Metadata URL:", metadataUrl.URL)
+	
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 		return proto.Marshal(respMsg)
 	} else {
@@ -667,16 +652,29 @@ func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 	return nil, nil 
 }
 
-// BUG: timeout when issuing identifier requests to multiple nodes
-func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
-	ids, err := n.dbGetDatasetIdentifiers()
+func (n *Node) pbDatasetExists(msg *pb.Message) ([]byte, error) {
+	respMsg := &pb.Message{}
+	respMsg.BoolValue = n.datasetExists(msg.GetStringValue())
+	
+	data, err := proto.Marshal(respMsg)
 	if err != nil {
 		log.Errorln(err.Error())
 		return nil, err
 	}
-	
+
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		log.Errorln(err.Error())
+		return nil, err
+	}
+	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
+	return proto.Marshal(respMsg)
+}
+
+// TODO: create protobuf/ifrit related functions their own notation :))
+func (n *Node) fetchDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{
-		StringSlice: ids,
+		StringSlice: n.datasetIdentifiers(),
 	}
 	
 	data, err := proto.Marshal(respMsg)
@@ -883,4 +881,19 @@ func (n *Node) removeDataset(id string) {
 	n.datasetMapLock.Lock()
 	defer n.datasetMapLock.Unlock()
 	delete(n.datasetMap, id)
+}
+
+func (n *Node) getDatasetMap() map[string]struct{} {
+	n.datasetMapLock.RLock()
+	defer n.datasetMapLock.RUnlock()
+	return n.datasetMap
+}
+
+func (n *Node) datasetIdentifiers() []string {
+	ids := make([]string, 0)
+	m := n.getDatasetMap()
+	for id := range m {
+		ids = append(ids, id)
+	}
+	return ids
 }
