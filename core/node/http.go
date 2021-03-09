@@ -49,36 +49,23 @@ func (n *Node) startHttpServer(addr string) error {
 func (n *Node) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
-	// TODO: list only database identifiers? be in sync with the "datasetIdentifiersHandler"
-	if handler := n.getDatasetIdentifiersHandler(); handler != nil {
-		ids, err := n.datasetIdentifiersHandler()
-		if err != nil {
-			log.Errorln(err.Error())
-			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-			return
-		}
 
-		b := new(bytes.Buffer)
-		if err := json.NewEncoder(b).Encode(ids); err != nil {
-			log.Errorln(err.Error())
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
+	ids := n.datasetIdentifiers()
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(ids); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 
-		w.WriteHeader(http.StatusOK)
-		w.Header().Set("Content-Type", "application/json")
-		r.Header.Add("Content-Length", strconv.Itoa(len(ids)))
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	r.Header.Add("Content-Length", strconv.Itoa(len(ids)))
 
-		_, err = w.Write(b.Bytes())
-		if err != nil { 
-			log.Errorln(err.Error())
-			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-			return
-		}
-	} else {
-		err := errors.New("ExernalDatasetIdentifiersHandler is not set")
-		log.Warnln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotImplemented), http.StatusNotImplemented)
+	_, err := w.Write(b.Bytes())
+	if err != nil { 
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -96,9 +83,6 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if dataset exists in the database only. We check the database instead of the external repository
-	// beacuse only policy-indexed datasets resides in the database. Datasets identifiers that are not in the 
-	// database does not have a policy, so we cannot serve them to clients. 
 	if !n.dbDatasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", dataset)
 		log.Infoln(err.Error())
@@ -154,7 +138,7 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 
 /* Assigns a new policy to the dataset. The request body must be a JSON object with a string similar to this:
  *{
- *	"policy": "this is a policy"	
+ *	"policy": true/false	
  *}
  */
 // TODO: restrict this function only to be used to set the initial dataset policy.
@@ -180,16 +164,13 @@ func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if dataset exists in the external repository
-	if handler := n.getIdentifierExistsHandler(); handler != nil {
-		exists := handler(dataset)
-		if !exists {
-			err := fmt.Errorf("Dataset '%s' is not stored in this node", dataset)
-			log.Infoln(err.Error())
-			http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
-			return 
-		}
+	if !n.datasetExists(dataset) {
+		err := fmt.Errorf("Dataset '%s' is not stored in this node", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return 
 	}
-
+	
 	// Destination struct
 	reqBody := struct  {
 		Policy string
