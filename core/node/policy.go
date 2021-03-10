@@ -180,7 +180,7 @@ func (n *Node) dbDatasetIsAvailable(id string) bool {
 		WHERE dataset_id = '` + id + `' AND allowed = 't');`
 	err := n.policyDB.QueryRow(q).Scan(&allowed)
 	if err != nil && err != sql.ErrNoRows {
-		log.Fatalln("error checking if row exists:", err.Error())
+		log.Errorln("error checking if row exists:", err.Error())
 		//log.Warnln(err.Error())
 	}
 	return allowed
@@ -206,7 +206,7 @@ func (n *Node) dbDatasetExists(id string) bool {
 
 // Returns a list of records displaying the dataset being checked out and 
 func (n *Node) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
-	q := `SELECT * FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE dataset_id = '` + id + `';`
+	q := `SELECT * FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE dataset_id='` + id + `';`
 
 	rows, err := n.clientCheckoutTable.Query(q)
 	if err != nil {
@@ -252,7 +252,21 @@ func (n *Node) dbDatasetIsCheckedOutByClient(id string) bool {
 	return exists
 }
 
-func (n *Node) checkoutDataset(r *pb.DatasetRequest) error {
+// TODO: create a table for past checkouts and checkins 
+func (n *Node) dbCheckinDataset(id string) error {
+	q := `DELETE FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE
+		dataset_id='` + id + `';`
+
+	_, err := n.clientCheckoutTable.Exec(q)
+	if err != nil {
+		panic(err)
+		return err
+	}
+
+	return nil
+}
+
+func (n *Node) dbCheckoutDataset(r *pb.DatasetRequest) error {
 	token := r.GetClientToken()
 	msg, err := jws.ParseString(string(token))
 	if err != nil {
@@ -268,8 +282,7 @@ func (n *Node) checkoutDataset(r *pb.DatasetRequest) error {
 	if err := json.Unmarshal(s, &c); err != nil {
     	return err
 	}
-
-	log.Println("C:", c)
+	
 	clientID := c.Oid
 	clientName := c.Name
 	doi := r.GetIdentifier()

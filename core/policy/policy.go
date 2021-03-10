@@ -14,6 +14,7 @@ _	"io/ioutil"
 	"context"
 	"net"
 	"net/http"
+	"strconv"
 
 	"crypto"
 	"crypto/rsa"
@@ -186,6 +187,7 @@ func (ps *PolicyStore) Start() error {
 		return err
 	}
 
+	// 
 	if err := ps.syncPolicyMaps(); err != nil {
 		log.Errorln(err.Error())
 		return err
@@ -455,8 +457,8 @@ func (ps *PolicyStore) gossipHandler(data []byte) ([]byte, error) {
 }
 
 // Returns the correct policy assoicated with a dataset to the node that stores it.
-func (ps *PolicyStore) sendDatasetPolicy(nodeIdentifier string, pr *pb.PolicyRequest) ([]byte, error) {
-	if pr == nil {
+func (ps *PolicyStore) sendDatasetPolicy(nodeName string, policyReq *pb.PolicyRequest) ([]byte, error) {
+	if policyReq == nil {
 		err := errors.New("Policy request is nil")
 		log.Errorln(err.Error())
 		return nil, err
@@ -473,24 +475,22 @@ func (ps *PolicyStore) sendDatasetPolicy(nodeIdentifier string, pr *pb.PolicyReq
 	// and return it to the node. The initial policy is "disallow". "Allow" policy should be set from 
 	// the policy store client. See the else clause.
 	// What happens if the PS has crashed...? Should we set FALSE then too?
-	if !ps.datasetExists(pr.GetIdentifier()) {
+	if !ps.datasetExists(policyReq.GetIdentifier()) {
 		policy = &pb.Policy {
 			Issuer: ps.name,
-			ObjectIdentifier: pr.GetIdentifier(),
-			Content: "FALSE",
+			ObjectIdentifier: policyReq.GetIdentifier(),
+			Content: strconv.FormatBool(false),
 		}
 
 		// Store the policy in the in-memory map and in the database
-		ps.storePolicy(context.Background(), nodeIdentifier, pr.GetIdentifier(), policy)
+		ps.storePolicy(context.Background(), nodeName, policyReq.GetIdentifier(), policy)
 
 		// Prepare response to node requesting the policy
-		resp.PolicyResponse.ObjectPolicy = policy
 	} else {
-		// TODO: fetch more complex policies if the dataset is already known to
-		// the policy store.
-		log.Warnf("Dataset '%s' has already been assigned an initial policy.")
-		log.Warnf("In 'func (ps *PolicyStore) sendDatasetPolicy': Implement more sophisticated policy definitions")
+		policy = ps.getDatasetPolicy(policyReq.GetIdentifier()).policy
 	}
+
+	resp.PolicyResponse.ObjectPolicy = policy
 
 	data, err := proto.Marshal(resp)
 	if err != nil {
@@ -537,6 +537,12 @@ func (ps *PolicyStore) addDatasetPolicy(id string, entry *datasetPolicyMapEntry)
 	ps.datasetPolicyMapLock.Lock()
 	defer ps.datasetPolicyMapLock.Unlock()
 	ps.datasetPolicyMap[id] = entry
+}
+
+func (ps *PolicyStore) getDatasetPolicy(id string) *datasetPolicyMapEntry {
+	ps.datasetPolicyMapLock.RLock()
+	defer ps.datasetPolicyMapLock.RUnlock()
+	return ps.datasetPolicyMap[id]
 }
 
 func (ps *PolicyStore) datasetExists(id string) bool {

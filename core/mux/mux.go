@@ -210,18 +210,22 @@ func (m *Mux) EventChannel() <-chan Event {
 // PIVATE METHODS BELOW THIS LINE
 func (m *Mux) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
-	if err := proto.Unmarshal(data, msg); err == nil {
+	if err := proto.Unmarshal(data, msg); err != nil {
+		panic(err)
 		log.Errorln(err)
 		return nil, err
 	}
 
 	if err := m.verifyMessageSignature(msg); err != nil {
+		panic(err)
 		log.Errorln(err)
 		return nil, err
 	}
 
-	switch msgType := msg.Type; string(msgType) {
-	case string(message.MSG_TYPE_INSERT_DATASET):
+	switch msgType := msg.Type; msgType {
+	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
+		go m.addDatasetNode(msg.GetStringValue(), msg.GetSender())
+		
 		//m.insertDataset(msg)
 	default:
 		log.Warnln("Unknown message type at mux handler: %s\n", msg.GetType())
@@ -240,18 +244,23 @@ func (m *Mux) streamHandler(input chan []byte, output chan []byte) {
 
 }
 
-/*func (m *Mux) insertDataset(msg *pb.Message) {
+func (m *Mux) addDatasetNode(id string, node *pb.Node) {
 	m.datasetNodesMapLock.Lock()
 	defer m.datasetNodesMapLock.Unlock()
-	id := msg.GetDataset().GetName()
-	m.datasetNodesMap[id] = msg.GetSender()
+	m.datasetNodesMap[id] = node
 }
 
 func (m *Mux) datasetNodes() map[string]*pb.Node {
 	m.datasetNodesMapLock.RLock()
 	defer m.datasetNodesMapLock.RUnlock()
 	return m.datasetNodesMap
-}*/
+}
+
+func (m *Mux) datasetNode(id string) *pb.Node {
+	m.datasetNodesMapLock.RLock()
+	defer m.datasetNodesMapLock.RUnlock()
+	return m.datasetNodesMap[id]
+}
 
 // Adds the given node to the network and returns the Mux's IP address
 func (m *Mux) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {

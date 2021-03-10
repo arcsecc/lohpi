@@ -230,7 +230,7 @@ func (n *Node) InitializeLogfile(logToFile bool) error {
 // make the dataset available to the clients by fetching the latest dataset. The call will block until a context timeout or 
 // the policy is applied to the dataset. Dataset identifiers that have not been passed to this method will not
 // be available to clients.
-func (n *Node) RequestPolicy(id string, ctx context.Context) error {
+func (n *Node) IndexDataset(id string, ctx context.Context) error {
 	//TODO: handle context
 	if id == "" {
 		return errors.New("Dataset identifier must be a non-empty string")
@@ -240,6 +240,24 @@ func (n *Node) RequestPolicy(id string, ctx context.Context) error {
 		return fmt.Errorf("Dataset with identifier '%s' already exists", id)
 	}
 
+	// Send policy request to policy store
+	// ctx too...
+	if err := n.requestPolicy(id); err != nil {
+		log.Errorln(err.Error())
+		return err
+	}
+
+	// Add notify mux of the newest policy update
+	if err := n.sendDatsetIdentifier(id, n.muxIP); err != nil {
+		log.Errorln(err.Error())
+		return err
+	}
+
+	return nil
+}
+
+// Requests the newest policy from the policy store
+func (n *Node) requestPolicy(id string) error {
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_POLICY,
 		Sender: n.pbNode(),
@@ -298,7 +316,41 @@ func (n *Node) RequestPolicy(id string, ctx context.Context) error {
 		// TODO: store other things in the struct? More complex policies?
 		n.insertDataset(id, struct{}{})
 	}
+	return nil
+}
 
+func (n *Node) sendDatsetIdentifier(id, recipient string) error {
+	msg := &pb.Message{
+		Type: message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
+		Sender: n.pbNode(),
+		StringValue: id,
+	}
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		panic(err)
+		log.Errorln(err.Error())
+		return err
+	}
+
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		panic(err)
+		log.Errorln(err.Error())
+		return err
+	}
+
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		panic(err)
+		log.Errorln(err.Error())
+		return err
+	}
+
+	// TODO: use context with timeout :)
+	// No need to do anything more. The mux doesn't respond to messages
+	n.ifritClient.SendTo(recipient, data)
 	return nil
 }
 
@@ -463,7 +515,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		}
 
 		if n.clientIsAllowed(msg.GetDatasetRequest()) {
-			if err := n.checkoutDataset(msg.GetDatasetRequest()); err != nil {
+			if err := n.dbCheckoutDataset(msg.GetDatasetRequest()); err != nil {
 				log.Errorln(err.Error())
 				return nil, err
 			}
@@ -483,9 +535,11 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// TODO finish me
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		// gossip
-		log.Debugln("Got new policy batch from policy store!")
+		log.Infoln("Got new policy batch from policy store")
 		return n.processPolicyBatch(msg)
-		
+	
+	case message.MSG_TYPE_ROLLBACK_CHECKOUT:
+		n.rollbackCheckout(msg)
 
 	case message.MSG_TYPE_PROBE:
 		return n.acknowledgeProbe(msg, data)
@@ -495,6 +549,13 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	}
 
 	return n.acknowledgeMessage()
+}
+
+func (n *Node) rollbackCheckout(msg *pb.Message) {
+	id := msg.GetStringValue()
+	if err := n.dbCheckinDataset(id); err != nil {
+		log.Errorln(err.Error())
+	}
 }
 
 // TODO check the internal tables and so on...

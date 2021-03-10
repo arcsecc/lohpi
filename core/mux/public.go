@@ -5,18 +5,15 @@ import (
 _	"io"
 _	"archive/zip"
 	"context"
-	"encoding/json"
 	"bytes"
 _	"net/url"
 	"errors"
 	"time"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"strconv"
 	"fmt"
 	"net/http"
 _	"os"
-
-	"sync"
 
 	"github.com/golang/protobuf/proto"
 	//log "github.com/sirupsen/logrus"
@@ -24,104 +21,10 @@ _	"os"
 	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
-// Returns a JSON object that contains all globally unique dataset identifiers
-func (m *Mux) datasetIdentifiers(ctx context.Context) ([]byte, error) {
-	jsonOutput := struct {
-		Sets []string
-	}{
-		Sets: make([]string, 0),
-	}
-
-	ids := make(chan []string)
-	errChan := make(chan error)
-
-	newCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	for _, node := range m.StorageNodes() {
-		n := node
-		go func() {
-			defer close(ids)
-			defer close(errChan)
-			identifiers, err := m.requestDatasetIdentifiers(n.GetIfritAddress(), newCtx)
-			if err != nil {
-				errChan <-err
-				return
-			}
-
-			ids <-identifiers
-		}()
-	}
-
-	select {
-	case id := <-ids:
-		jsonOutput.Sets = append(jsonOutput.Sets, id...)
-	case <-newCtx.Done():
-		return nil, fmt.Errorf("Timeout in 'func (m *Mux) datasetIdentifiers()")
-	case err := <-errChan:
-		return nil, err
-	}
-
-	return json.Marshal(jsonOutput)
-}
-
-func (m *Mux) requestDatasetIdentifiers(addr string, ctx context.Context) ([]string, error) {
-	newCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	msg := &pb.Message{
-		Type:   message.MSG_TYPE_GET_DATASET_IDENTIFIERS,
-		Sender: m.pbNode(),
-	}
-
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	r, s, err := m.ifritClient.Sign(data)
-	if err != nil {
-		return nil, err
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	ch := m.ifritClient.SendTo(addr, data)
-	select {
-	case resp := <-ch:
-		respMsg := &pb.Message{}
-		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			return nil, err
-		}
-
-		if err := m.verifyMessageSignature(respMsg); err != nil {
-			return nil, err
-		}
-
-		return respMsg.GetStringSlice(), nil
-	case <-newCtx.Done():
-		return nil, fmt.Errorf("Fetching dataset identifiers from %s failed", addr)
-	}
-
-	return nil, nil
-}
-
 // Fetches the information about a dataset
-func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset string, ctx context.Context) ([]byte, error) {
+func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, ctx context.Context) ([]byte, error) {
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	nodeAddr, err := m.probeNetworkForDataset(dataset, newCtx)
-	if err != nil {
-		return nil, err
-	}
-	if nodeAddr == "" {
-		return nil, errors.New("Dataset is not in network")
-	}
 
 	// Create dataset request
 	msg := &pb.Message{
@@ -171,20 +74,9 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset 
 	return nil, err
 }
 
-func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, clientToken []byte, ctx context.Context) {
+func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
 	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second * 15)) // set proper time to wait
 	defer cancel()
-
-	nodeAddr, err := m.probeNetworkForDataset(dataset, newCtx)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if nodeAddr == "" {
-		err := fmt.Errorf("Dataset '%s' is not in network", dataset)
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
-		return 
-	}
 
 	// Create dataset request
 	msg := &pb.Message{
@@ -198,7 +90,7 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 	// Marshal the request
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Println(err.Error())
+		log.Fatalln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -206,7 +98,7 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 	// Sign it
 	r, s, err := m.ifritClient.Sign(data)
 	if err != nil {
-		log.Println(err.Error())
+		log.Fatalln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -214,7 +106,7 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 	msg.Signature = &pb.MsgSignature{R: r, S: s}
 	data, err = proto.Marshal(msg)
 	if err != nil {
-		log.Println(err.Error())
+		log.Fatalln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -225,22 +117,28 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset string, 
 	case resp := <-ch:
 		respMsg := &pb.Message{}
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			log.Println(err.Error())
+			log.Fatalln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 		
 		if err := m.verifyMessageSignature(respMsg); err != nil {
-			log.Println(err.Error())
+			log.Fatalln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
 		if respMsg.GetDatasetResponse().GetIsAllowed() {
-			m.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx)
+			// If we tried to fetch the dataset but it failed, rollback on checking it out
+			if err := m.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx); err != nil {
+				if err := m.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
+					log.Errorln(err.Error())
+					return
+				}
+			}
 		} else {
 			err := fmt.Errorf(respMsg.GetDatasetResponse().GetErrorMessage())
-			log.Println(err.Error())
+			log.Errorln(err.Error())
 			http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
 			return 
 		}
@@ -280,12 +178,12 @@ func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl stri
 }
 
 // TODO: use context request
-func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) {
+func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) error {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		return err
 	}
 
 	httpClient := &http.Client{
@@ -296,12 +194,20 @@ func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUr
     if err != nil {
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+		return err
     }
 
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(response.Body)
-	
+
+	// Something failed. Rollback dataset checkout
+	if response.StatusCode != http.StatusOK {
+		log.Errorf("Error from remote archive: %s\n", buf.Bytes())
+		err := fmt.Errorf("Could not checkout dataset from the node")
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return err
+	}
+
 	w.WriteHeader(response.StatusCode)
 	req.Header.Add("Content-Length", strconv.Itoa(len(buf.Bytes())))
 
@@ -314,69 +220,8 @@ func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUr
 	w.Header().Set("Content-Type", contentType)
 	//w.Header().Set("Content-Disposition", req.Header.Get("Content-Type"))
 	w.Write(buf.Bytes())
-}
 
-// Returns the address of the Lohpi node that stores the given dataset
-func (m *Mux) probeNetworkForDataset(dataset string, ctx context.Context) (string, error) {
-	newCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	strChan := make(chan string)
-	errChan := make(chan error)
-	existsChan := make(chan bool)
-	
-	members := m.StorageNodes()
-
-	if len(members) == 0 {
-		return "", errors.New("No such dataset in network:" + dataset)
-	}
-
-	var wg sync.WaitGroup
-
-	// Ask all nodes. Write address to strChan if address is found
-	for _, n := range members {
-		node := n
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			exists, err := m.datasetExistsAtNode(node.GetIfritAddress(), dataset, newCtx)
-			if err != nil {
-				errChan <-err
-				return
-			}
-
-			if exists {
-				strChan <-node.GetIfritAddress()
-			} else {
-				existsChan <-false
-			}
-		}()
-	}
-
-	// Close all channels when all writers are done
-	go func() {
-		wg.Wait()
-		defer close(errChan)
-		defer close(strChan)
-		defer close(existsChan)
-	}()
-
-	missed := 0
-
-	select {
-	case s := <-strChan:
-		return s, nil
-	case err := <-errChan:
-		return "", err
-	case <-existsChan:
-		missed++
-		if missed == len(members) {
-			return "", errors.New("No such dataset in network:" + dataset)
-		}
-	case <-newCtx.Done():
-		log.Println("Timeout in func '(m *Mux) probeNetworkForDataset()'")
-	}
-	return "", nil
+	return nil
 }
 
 // Returns true if the dataset identifier exists at the node, returns false otherwise. 
@@ -427,4 +272,48 @@ func (m *Mux) datasetExistsAtNode(node, dataset string, ctx context.Context) (bo
 	}
 
 	return false, nil
+}
+
+// TODO: handle ctx
+func (m *Mux) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
+	msg := &pb.Message{
+		Type:        message.MSG_TYPE_ROLLBACK_CHECKOUT,
+		Sender:      m.pbNode(),
+		StringValue: dataset,
+	}
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	r, s, err := m.ifritClient.Sign(data)
+	if err != nil {
+		return err
+	}
+
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	ch := m.ifritClient.SendTo(nodeAddr, data)
+	select {
+	case resp := <-ch:
+		respMsg := &pb.Message{}
+		if err := proto.Unmarshal(resp, respMsg); err != nil {
+			return err
+		}
+		
+		if err := m.verifyMessageSignature(respMsg); err != nil {
+			return err
+		}
+		
+	case <-ctx.Done():
+		err := errors.New("Could not verify dataset checkout rollback")
+		return err
+	}
+
+	return nil
 }

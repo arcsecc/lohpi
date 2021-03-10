@@ -2,12 +2,14 @@ package mux
 
 import (
 	"context"
+	"strconv"
+	"bytes"
 	"fmt"
 	"net/http"
 	"time"
 	"errors"
 	"strings"
-_	"bytes"
+	"encoding/json"
 
 	"github.com/gorilla/mux"
 	"github.com/arcsecc/lohpi/core/comm"
@@ -180,44 +182,43 @@ func (m *Mux) shutdownHttpServer() {
 func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
-	defer cancel()
+//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
+//	defer cancel()
 
-	errChan := make(chan error)
-	setsChan := make(chan []byte)
+	// Destination struct
+	resp := struct  {
+		Identifiers []string
+	}{
+		Identifiers: make([]string, 0),
+	}
 
-	go func() {
-		defer close(errChan)
-		defer close(setsChan)
-		
-		r = r.WithContext(ctx)
-		sets, err := m.datasetIdentifiers(ctx)	
-		if err != nil {
-			errChan <-err
-			return
-		}
-
-		setsChan <-sets
-	}()
-
-	select {
-	case <-ctx.Done():
-		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
+	for id := range m.datasetNodes() {
+		resp.Identifiers = append(resp.Identifiers, id)
+	}
+	
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
-	case err := <-errChan:
-		log.Errorln(err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	case sets := <-setsChan:
-		w.WriteHeader(http.StatusOK)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(sets)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil { 
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
 // Fetches the information about a dataset
 func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
 		errMsg := fmt.Errorf("Missing dataset identifier")
@@ -228,21 +229,31 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 10))
 	defer cancel()
 
-	errChan := make(chan error)
 	doneChan := make(chan bool)
-	
+
+	// Check if dataset is known to network
+	node := m.datasetNode(dataset)
+	if node == nil {
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return
+	}
+
 	go func() {
 		defer close(doneChan)
-		defer close(errChan)
 
-		md, err := m.datasetMetadata(w, req, dataset, ctx)
+		// Fetch the node address that stores the dataset
+		md, err := m.datasetMetadata(w, req, dataset, node.GetIfritAddress(), ctx)
 		if err != nil {
-			errChan <-err
+			log.Errorln(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(md)))
 		w.Write(md)
 		doneChan <-true
 	}()
@@ -251,10 +262,6 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	case <-ctx.Done():
 		log.Println("Timeout!")
 		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
-		return
-	case err := <-errChan:
-		log.Errorln(err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	case <-doneChan:
 		return
@@ -265,8 +272,12 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute * 5))
+	defer cancel()
+
 	token, err := getBearerToken(req)
 	if err != nil {
+		log.Println()
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -278,8 +289,13 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute * 5))
-	defer cancel()
+	node := m.datasetNode(dataset)
+	if node == nil {
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return
+	}	
 
-	m.dataset(w, req, dataset, token, ctx)
+	m.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
 }
