@@ -32,9 +32,6 @@ var (
 type Config struct {
 	HttpPort   			int    `default:"8080"`
 	GRPCPort    		int    `default:"8081"`
-	PolicyStoreHost 	string `default:"127.0.1.1"`
-	PolicyStorePort   	int    `default:"8083"`
-	PolicyStoreGRPCPort int    `default:"8084"`
 	LohpiCaAddr 				string 	`default:"127.0.1.1:8301"`
 }
 

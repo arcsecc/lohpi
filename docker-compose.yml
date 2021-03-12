@@ -1,0 +1,50 @@
+version: '3.0'
+services:
+  ca:
+    build: 
+      context: .
+      dockerfile: "./cmd/ca/Dockerfile"
+    network_mode: host
+    command: --new
+    restart: unless-stopped
+  
+  mux:
+    build: 
+      context: .
+      dockerfile: "./cmd/mux/Dockerfile"
+    network_mode: host
+    command: --new
+    restart: unless-stopped
+    expose:
+    - "8080"
+    depends_on: 
+    - ca
+
+  policy_store:
+    build:
+      context: .
+      dockerfile: "./cmd/policy_store/Dockerfile"
+    network_mode: host
+    command: -new=true
+    restart: unless-stopped
+    expose:
+      - "8083"
+    depends_on:
+      - ca
+      - mux
+    environment:
+      POLICY_STORE_DB_CONNECTION_STRING: ${POLICY_STORE_DB_CONNECTION_STRING}
+      
+  node:
+    build: 
+      context: .
+      dockerfile: "./cmd/node/Dockerfile"
+    network_mode: host
+    restart: unless-stopped
+    command: -name "node_0" -new=true
+    depends_on: 
+    - ca
+    - mux
+    - policy_store
+    environment:
+      NODE_DB_CONNECTION_STRING: ${NODE_DB_CONNECTION_STRING}

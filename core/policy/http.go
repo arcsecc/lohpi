@@ -14,20 +14,23 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/arcsecc/lohpi/core/comm"
 	"strconv"
+	"github.com/rs/cors"
 )
 
 func (ps *PolicyStore) startHttpServer(addr string) error {
-	router := mux.NewRouter()
-	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
+	m := mux.NewRouter()
+	dRouter := m.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	dRouter.HandleFunc("/identifiers", ps.getDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", ps.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/getpolicy/{id:.*}", ps.getObjectPolicy).Methods("GET")
 	dRouter.HandleFunc("/setpolicy/{id:.*}", ps.setObjectPolicy).Methods("PUT")
 	//dRouter.HandleFunc("/probe}", ps.probe).Methods("GET")
 
+	handler := cors.AllowAll().Handler(m)
+
 	ps.httpServer = &http.Server{
 		Addr: 		  	addr,
-		Handler:      	router,
+		Handler:      	handler,
 		WriteTimeout: 	time.Second * 30,
 		ReadTimeout:  	time.Second * 30,
 		IdleTimeout:  	time.Second * 60,

@@ -52,11 +52,13 @@ func main() {
 	args.Parse(os.Args[1:])
 
 	configor.New(&configor.Config{Debug: false, ENVPrefix: "IFRIT"}).Load(&IfritCaConfig, ifritConfigFile, "/etc/ifrit/config.yaml")
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "IFRIT"}).Load(&LohpiCaConfig, lohpiConfigFile, "/etc/lohpi/config.yaml")
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "LOHPI"}).Load(&LohpiCaConfig, lohpiConfigFile, "/etc/lohpi/config.yaml")
 
 	var ifritCa *ifrit_ca.Ca
 	var lohpiCa *lohpi_ca.Ca
 	var err error
+
+	log.SetFormatter(&log.TextFormatter{DisableLevelTruncation: false})
 
 	// Attempt to load existing CAs
 	if !createNew {
@@ -111,11 +113,11 @@ func main() {
 
 	saveIfritState(ifritCa)
 	defer saveIfritState(ifritCa)
-	go ifritCa.Start(IfritCaConfig.Host, IfritCaConfig.Port)
+	go ifritCa.Start(IfritCaConfig.Port)
 	
 	saveLohpiState(lohpiCa)
 	defer saveLohpiState(lohpiCa)
-	go lohpiCa.Start(LohpiCaConfig.Host, LohpiCaConfig.Port)
+	go lohpiCa.Start(LohpiCaConfig.Port)
 
 	channel := make(chan os.Signal, 2)
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)

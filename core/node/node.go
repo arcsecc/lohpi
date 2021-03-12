@@ -6,7 +6,6 @@ import (
 	"crypto/x509/pkix"
 	"os"
 _	"net/url"
-	"strconv"
 	"fmt"
 	"net"
 	"net/http"
@@ -29,12 +28,9 @@ var (
 
 type Config struct {
 	Port				int 		`default:"8090"`
-	PolicyStoreHost 	string 		`default:"127.0.1.1"`
-	PolicyStoreGRPCPort int    		`default:"8084"`
-	MuxHost				string		`default:"127.0.1.1"`
-	MuxGRPCPort 		int    		`default:"8084"`
+	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
+	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	PolicyIdentifier 	string    	`required:true` // TODO: need to formalize policies in a better!
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -185,7 +181,7 @@ func NewNode(name string, config *Config) (*Node, error) {
 	}
 
 	// Create the database if needed
-	if err := node.initializePolicyDb(config.PolicyIdentifier); err != nil {
+	if err := node.initializePolicyDb(); err != nil {
 		log.Errorf(err.Error())
 		return nil, err 
 	}
@@ -360,7 +356,7 @@ func (n *Node) RemoveDataset(id string) error {
 }
 
 // Initializes the underlying node database using 'id' as the unique identifier for the relation.
-func (n *Node) initializePolicyDb(policyIdentifier string) error {
+func (n *Node) initializePolicyDb() error {
 	var connectionString = fmt.Sprintf(os.Getenv("NODE_DB_CONNECTION_STRING"))
 	if connectionString == "" {
 		return errors.New("Tried to fetch 'NODE_DB_CONNECTION_STRING' from environment but it was not set.")
@@ -368,7 +364,6 @@ func (n *Node) initializePolicyDb(policyIdentifier string) error {
 
 	log.Infoln("Using NODE_DB_CONNECTION_STRING")
 
-	n.policyIdentifier = policyIdentifier
 	return n.initializePostgreSQLdb(connectionString)
 }
 
@@ -388,6 +383,7 @@ func (n *Node) JoinNetwork() error {
 	}
 
 	if err := n.policyStoreHandshake(); err != nil {
+		panic(err)
 		return err
 	}
 
@@ -422,10 +418,8 @@ type ExternalMetadataHandler = func(id string) (*ExternalMetadata, error)
 
 // PRIVATE METHODS BELOW
 func (n *Node) muxHandshake() error {
-	address := fmt.Sprintf("%s:%s", n.config.MuxHost, strconv.Itoa(n.config.MuxGRPCPort))
-	log.Infoln("Performing handshake with mux. Addr:", address)
-	
-	conn, err := n.muxClient.Dial(address)
+	log.Infoln("Performing handshake with mux. Addr:", n.config.MuxAddr)
+	conn, err := n.muxClient.Dial(n.config.MuxAddr)
 	if err != nil {
 		return err
 	}
@@ -451,10 +445,8 @@ func (n *Node) muxHandshake() error {
 }
 
 func (n *Node) policyStoreHandshake() error {
-	address := fmt.Sprintf("%s:%s", n.config.MuxHost, strconv.Itoa(n.config.PolicyStoreGRPCPort))
-	log.Infoln("Performing handshake with policy store at address", address)
-	
-	conn, err := n.psClient.Dial(address)
+	log.Infoln("Performing handshake with policy store at address", n.config.PolicyStoreAddr)
+	conn, err := n.psClient.Dial(n.config.PolicyStoreAddr)
 	if err != nil {
 		return err
 	}
