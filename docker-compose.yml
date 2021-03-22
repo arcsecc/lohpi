@@ -1,50 +1,64 @@
 version: '3.0'
 services:
-  ca:
+
+  # Lohpi-DV 
+  dv-ca:
+    container_name: lohpi-ca
+    image: lohpi.azurecr.io/lohpi-ca
     build: 
       context: .
-      dockerfile: "./cmd/ca/Dockerfile"
-    network_mode: host
+      dockerfile: "./cmd/dataverse/ca/Dockerfile"
     command: --new
+    network_mode: host
     restart: unless-stopped
+    expose:
+      - "8300"
+      - "8301"
   
-  mux:
+  # Lohpi-DV 
+  dv-mux:
+    container_name: lohpi-mux
+    image: lohpi.azurecr.io/lohpi-mux
     build: 
       context: .
-      dockerfile: "./cmd/mux/Dockerfile"
+      dockerfile: "./cmd/dataverse/mux/Dockerfile"
     network_mode: host
     command: --new
     restart: unless-stopped
     expose:
     - "8080"
     depends_on: 
-    - ca
+    - dv-ca
 
-  policy_store:
+  # Lohpi-DV 
+  dv-policy_store:
+    container_name: lohpi-policy-store
+    image: lohpi.azurecr.io/lohpi-policy-store
     build:
       context: .
-      dockerfile: "./cmd/policy_store/Dockerfile"
+      dockerfile: "./cmd/dataverse/policy_store/Dockerfile"
     network_mode: host
     command: -new=true
     restart: unless-stopped
     expose:
       - "8083"
     depends_on:
-      - ca
-      - mux
-    environment:
-      POLICY_STORE_DB_CONNECTION_STRING: ${POLICY_STORE_DB_CONNECTION_STRING}
-      
-  node:
+      - dv-ca
+      - dv-mux
+
+  # Lohpi-DV     
+  dv-node:
+    container_name: lohpi-node
+    image: lohpi.azurecr.io/lohpi-node
     build: 
       context: .
-      dockerfile: "./cmd/node/Dockerfile"
+      dockerfile: "./cmd/dataverse/node/Dockerfile"
     network_mode: host
     restart: unless-stopped
     command: -name "node_0" -new=true
     depends_on: 
-    - ca
-    - mux
-    - policy_store
+    - dv-ca
+    - dv-mux
+    - dv-policy_store
     environment:
       NODE_DB_CONNECTION_STRING: ${NODE_DB_CONNECTION_STRING}

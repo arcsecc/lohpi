@@ -20,6 +20,7 @@ _	"io/ioutil"
 	"crypto/rsa"
 	"crypto/x509/pkix"
 
+	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/cache"
 	"github.com/arcsecc/lohpi/core/message"
@@ -105,6 +106,9 @@ type PolicyStore struct {
 	// Datasets in the network 
 	datasetPolicyMapLock sync.RWMutex
 	datasetPolicyMap map[string]*datasetPolicyMapEntry
+
+	// Fetch the JWK
+	ar *jwk.AutoRefresh
 }
 
 type datasetPolicyMapEntry struct {

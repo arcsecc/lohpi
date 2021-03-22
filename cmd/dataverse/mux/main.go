@@ -23,7 +23,7 @@ func main() {
 	var createNew bool
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&configFile, "c", "config.yml", "Mux's configuration file.")
+	args.StringVar(&configFile, "c", "lohpi_config.yaml", "Mux's configuration file.")
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi mux instance")
 	args.Parse(os.Args[1:])
 
@@ -31,20 +31,21 @@ func main() {
 
 	var m *mux.Mux
 	var err error
-
+	
 	if createNew {
 		c := &mux.Config{
 			HttpPort: config.HttpPort,
 			GRPCPort: config.GRPCPort,
 			LohpiCaAddr: config.LohpiCaAddr,
 		}
-			
+
+		log.Println("Config:", c)
+
 		m, err = mux.NewMux(c)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
-
 	} else {
 		log.Fatalln("Need to set the 'new' flag to true. Exiting")
 	}

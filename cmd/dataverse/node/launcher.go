@@ -112,7 +112,7 @@ func newNodeStorage(name string, nodeConfig *node.Config) (*StorageNode, error) 
 	sn.node.RegsiterMetadataHandler(sn.metadataHandler)
 	
 	if err := sn.node.JoinNetwork(); err != nil {
-		return err
+		return nil, err
 	}
 
 	return sn, nil

@@ -10,7 +10,7 @@ require (
 	github.com/gorilla/mux v1.8.0
 	github.com/inconshreveable/log15 v0.0.0-20201112154412-8562bdadbbac
 	github.com/jinzhu/configor v1.2.1
-	github.com/joonnna/ifrit v0.0.0-20210308145835-1a49fdc9e1ed
+	github.com/joonnna/ifrit v0.0.0-20210316144642-c84515123ba4
 	github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727
 	github.com/lestrrat-go/jwx v1.1.4
 	github.com/lib/pq v1.9.0

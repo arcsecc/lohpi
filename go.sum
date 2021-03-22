@@ -236,6 +236,8 @@ github.com/joonnna/ifrit v0.0.0-20210111192913-55d97c711f10 h1:mwEiHZiiuEAtbVNFR
 github.com/joonnna/ifrit v0.0.0-20210111192913-55d97c711f10/go.mod h1:tDPrAqB+vcNrCDwJYngMPgQoHpVY0KE0zGefItynFSc=
 github.com/joonnna/ifrit v0.0.0-20210308145835-1a49fdc9e1ed h1:FSajndA35pMS6sdtcxay/gfcAfTAQ5opH+D+xqT0G4k=
 github.com/joonnna/ifrit v0.0.0-20210308145835-1a49fdc9e1ed/go.mod h1:tDPrAqB+vcNrCDwJYngMPgQoHpVY0KE0zGefItynFSc=
+github.com/joonnna/ifrit v0.0.0-20210316144642-c84515123ba4 h1:gasG+yFYZn8jilfUywTDw1ELsP1WLViqa2A7fNY1wf8=
+github.com/joonnna/ifrit v0.0.0-20210316144642-c84515123ba4/go.mod h1:tDPrAqB+vcNrCDwJYngMPgQoHpVY0KE0zGefItynFSc=
 github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727 h1:MH4NQcYZsxtEp+XAgbjdfI8OyBFoj9Ppur2Wapf+YNM=
 github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727/go.mod h1:utEc4D1f8yWVsxOJqVccvTu2KTKKdhpshssbkocAUYE=
 github.com/json-iterator/go v1.1.6 h1:MrUvLMLTMxbqFJ9kzlvat/rYZqZnW3u4wkLzWTaFwKs=

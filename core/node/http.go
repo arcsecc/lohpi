@@ -13,6 +13,7 @@ import (
 	"github.com/arcsecc/lohpi/core/util"
 	"github.com/gorilla/mux"
 	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/rs/cors"
 )
 
 const PROJECTS_DIRECTORY = "projects"
@@ -30,20 +31,45 @@ func (n *Node) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/new_policy/{id:.*}", n.setDatasetPolicy).Methods("PUT")
 
 	// Middlewares used for validation
-	//dRouter.Use(m.middlewareValidateTokenSignature)
-	//dRouter.Use(m.middlewareValidateTokenClaims)
+	//dRouter.Use(n.middlewareValidateTokenSignature)
+	//dRouter.Use(n.middlewareValidateTokenClaims)
+
+	handler := cors.AllowAll().Handler(router)
 
 	n.httpServer = &http.Server{
 		Addr: 		  	addr,
-		Handler:      	router,
+		Handler:      	handler,
 		WriteTimeout: 	time.Second * 30,
 		ReadTimeout:  	time.Second * 30,
 		IdleTimeout:  	time.Second * 60,
 		TLSConfig: 		comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.Priv()),
 	}
 
+	/*if err := m.setPublicKeyCache(); err != nil {
+		log.Errorln(err.Error())
+		return err
+	}*/
+
 	return n.httpServer.ListenAndServe()
 }
+
+/*func (n *Node) setPublicKeyCache() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m.ar = jwk.NewAutoRefresh(ctx)
+	const msCerts = "https://login.microsoftonline.com/common/discovery/v2.0/keys" // TODO: config me
+
+	m.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
+
+	// Keep the cache warm
+	_, err := m.ar.Refresh(ctx, msCerts)
+	if err != nil {
+		log.Println("Failed to refresh Microsoft Azure JWKS")
+		return err
+	}
+	return nil 
+}*/
 
 // Returns the dataset identifiers stored at this node
 func (n *Node) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {

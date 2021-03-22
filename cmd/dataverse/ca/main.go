@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"flag"
 	"os"
 	"os/signal"
@@ -51,8 +52,8 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Ca structures")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "IFRIT"}).Load(&IfritCaConfig, ifritConfigFile, "/etc/ifrit/config.yaml")
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "LOHPI"}).Load(&LohpiCaConfig, lohpiConfigFile, "/etc/lohpi/config.yaml")
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "IFRIT_CA"}).Load(&IfritCaConfig, ifritConfigFile, "/etc/ifrit/config.yaml")
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "LOHPI_CA"}).Load(&LohpiCaConfig, lohpiConfigFile, "/etc/lohpi/config.yaml")
 
 	var ifritCa *ifrit_ca.Ca
 	var lohpiCa *lohpi_ca.Ca
@@ -75,7 +76,6 @@ func main() {
 			fmt.Fprintln(os.Stderr, "Error loading Lohpi CA. Run with --new option if Lohpi CA does not exit.")
 			os.Exit(1)
 		}
-		
 	} else {
 		// Create Ifrit run directory
 		err := os.MkdirAll(IfritCaConfig.Path, DefaultPermission)
@@ -113,7 +113,7 @@ func main() {
 
 	saveIfritState(ifritCa)
 	defer saveIfritState(ifritCa)
-	go ifritCa.Start(IfritCaConfig.Port)
+	go ifritCa.Start(IfritCaConfig.Host, strconv.Itoa(IfritCaConfig.Port))
 	
 	saveLohpiState(lohpiCa)
 	defer saveLohpiState(lohpiCa)
@@ -151,25 +151,6 @@ func saveLohpiState(ca *lohpi_ca.Ca) {
 	if err != nil {
 		panic(err)
 	}
-}
-
-func setConfiguration(configFile string, c interface{}) error {
-	conf := configor.New(&configor.Config{
-		ErrorOnUnmatchedKeys: true,
-		Verbose: true,
-		Debug: true,
-	})
-
-	return conf.Load(c, configFile)
-}
-
-func exists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return true
 }
 
 func initializeLogfile(logfile string) error {
