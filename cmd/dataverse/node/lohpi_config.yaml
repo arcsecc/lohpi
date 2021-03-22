@@ -1,0 +1,4 @@
+muxip: 127.0.1.1:8081
+policystoreaddr: 127.0.1.1:8084
+lohpicaaddr: 127.0.1.1:8301
+httpport: 8090

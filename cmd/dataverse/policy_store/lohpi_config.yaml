@@ -1,0 +1,9 @@
+policystoreconfig:
+    muxip: 127.0.1.1:8081
+    lohpicaaddr: 127.0.1.1:8301
+    policystoregitrepository: "/var/tmp/lohpi/policy_repo"
+    httpport: 8083
+    batchsize: 100
+    multicastacceptancelevel: 0.5
+    gossipinterval: 10                  # measured in seconds
+    numdirectrecipients: 1
