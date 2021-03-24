@@ -27,6 +27,12 @@ var config = struct {
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
+	AzureKeyVaultName 		string 		`required:true`
+	AzureKeyVaultSecret		string		`required:true`
+	AzureClientSecret	string 		`required:true`
+	AzureClientId		string		`required:true`
+	AzureKeyVaultBaseURL string		`required:true`
+	AzureTenantId		string		`required:true`
 }{}
 
 type StorageNode struct {
@@ -43,11 +49,11 @@ func main() {
 	// Logfile and name flags
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	args.StringVar(&configFile, "c", "config.yml", `Configuration file for the node. If not set, use default configuration values.`)
+	args.StringVar(&configFile, "c", "lohpi_config.yaml", `Configuration file for the node. If not set, use default configuration values.`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&config, configFile, "./config.yaml")
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&config, configFile, "./lohpi_config.yaml")
 
 	// Require node identifier
 	if nodeName == "" {
@@ -64,8 +70,14 @@ func main() {
 			PolicyStoreAddr: config.PolicyStoreAddr,
 			MuxAddr: config.MuxAddr,
 			LohpiCaAddr: config.LohpiCaAddr,
+			AzureKeyVaultName: config.AzureKeyVaultName,
+			AzureKeyVaultSecret: config.AzureKeyVaultSecret,
+			AzureClientSecret: config.AzureClientSecret,
+			AzureKeyVaultBaseURL: config.AzureKeyVaultBaseURL,
+			AzureClientId: config.AzureClientId,
+			AzureTenantId: config.AzureTenantId,
 		}
-	
+
 		// Create the new node and let it live its own life
 		sn, err = newNodeStorage(nodeName, c)
 		if err != nil {

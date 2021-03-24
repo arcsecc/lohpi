@@ -18,6 +18,7 @@ _	"net/url"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/keyvault"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	log "github.com/sirupsen/logrus"
 )
@@ -31,6 +32,12 @@ type Config struct {
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
+	AzureKeyVaultName 	string 		`required:true`
+	AzureKeyVaultSecret	string		`required:true`
+	AzureClientSecret	string 		`required:true`
+	AzureClientId		string		`required:true`
+	AzureTenantId		string		`required:true`
+	AzureKeyVaultBaseURL string		`required:true`
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -126,6 +133,9 @@ type Node struct {
 	clientCheckoutTable *sql.DB
 	policyDB *sql.DB
 	policyIdentifier string
+
+	// Key vault manager
+	kvClient *keyvault.KeyVaultClient
 }
 
 // Database-related consts
@@ -167,6 +177,20 @@ func NewNode(name string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
+	kvClientConfig := keyvault.KeyVaultClientConfig{
+		ClientID: config.AzureClientId,
+		ClientSecret: config.AzureClientSecret,
+		TenantID: config.AzureTenantId,
+		BaseURL: config.AzureKeyVaultBaseURL,
+		SecretName: config.AzureKeyVaultSecret,
+	}
+
+	keyClient, err := keyvault.NewKeyVaultClient(kvClientConfig)
+	if err != nil {
+		log.Errorf(err.Error())
+		return nil, err 
+	}
+
 	node := &Node{
 		name:        		name,
 		ifritClient: 		ifritClient,
@@ -176,8 +200,9 @@ func NewNode(name string, config *Config) (*Node, error) {
 		httpListener:      	httpListener,
 		cu: cu,
 
-		datasetMap:     make(map[string]struct{}),
-		datasetMapLock: sync.RWMutex{},
+		datasetMap:     	make(map[string]struct{}),
+		datasetMapLock: 	sync.RWMutex{},
+		kvClient: 			keyClient,
 	}
 
 	// Create the database if needed
@@ -357,14 +382,19 @@ func (n *Node) RemoveDataset(id string) error {
 
 // Initializes the underlying node database using 'id' as the unique identifier for the relation.
 func (n *Node) initializePolicyDb() error {
-	var connectionString = fmt.Sprintf(os.Getenv("NODE_DB_CONNECTION_STRING"))
-	if connectionString == "" {
-		return errors.New("Tried to fetch 'NODE_DB_CONNECTION_STRING' from environment but it was not set.")
+	resp, err := n.kvClient.GetSecret(n.config.AzureKeyVaultBaseURL, n.config.AzureKeyVaultSecret)
+	if err != nil {
+		return err
 	}
 
-	log.Infoln("Using NODE_DB_CONNECTION_STRING")
+	log.Println("Resp:", resp)
 
-	return n.initializePostgreSQLdb(connectionString)
+	if resp.Value == "" {
+		return errors.New("Connection string from Azure Key Vault is empty")
+	}
+
+
+	return n.initializePostgreSQLdb(resp.Value)
 }
 
 // Shuts down the node
