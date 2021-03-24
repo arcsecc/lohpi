@@ -27,8 +27,8 @@ var config = struct {
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	AzureKeyVaultName 		string 		`required:true`
-	AzureKeyVaultSecret		string		`required:true`
+	AzureKeyVaultName 	string 		`required:true`
+	AzureKeyVaultSecret	string		`required:true`
 	AzureClientSecret	string 		`required:true`
 	AzureClientId		string		`required:true`
 	AzureKeyVaultBaseURL string		`required:true`
