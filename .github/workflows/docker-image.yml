@@ -12,7 +12,8 @@ jobs:
     - uses: actions/checkout@v2
     - name: Build the Docker image
       run: docker-compose build --parallel 
-    - name: Bring up
+    - name: Shut down
       run: docker-compose down
+    - name: Bring up
       run: docker-compose up -d
   
