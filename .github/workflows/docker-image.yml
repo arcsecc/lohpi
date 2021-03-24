@@ -13,5 +13,6 @@ jobs:
     - name: Build the Docker image
       run: docker-compose build --parallel 
     - name: Bring up
+      run: docker-compose down
       run: docker-compose up -d
   
