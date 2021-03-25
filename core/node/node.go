@@ -530,21 +530,21 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		if !n.dbDatasetExists(msg.GetDatasetRequest().GetIdentifier()) {
 			return n.unauthorizedAccess(fmt.Sprintf("Dataset '%s' is not indexed by the node", msg.GetDatasetRequest().GetIdentifier()))
 		}
-		if n.isCheckedOutByClient(msg.GetDatasetRequest().GetIdentifier()) {
+		/*if n.isCheckedOutByClient(msg.GetDatasetRequest()) {
 			return n.unauthorizedAccess("Client has already checked out this dataset")
-		}
+		}*/
 
-		if n.clientIsAllowed(msg.GetDatasetRequest()) {
-			if err := n.dbCheckoutDataset(msg.GetDatasetRequest()); err != nil {
-				log.Errorln(err.Error())
-				return nil, err
-			}
-			return n.fetchDatasetURL(msg)
-		} else {
+		//if n.clientIsAllowed(msg.GetDatasetRequest()) {
+		if err := n.dbCheckoutDataset(msg.GetDatasetRequest()); err != nil {
+			log.Errorln(err.Error())
+			return nil, err
+		}
+		return n.fetchDatasetURL(msg)
+		/*} else {
 			return n.unauthorizedAccess("Client has invalid access attributes")
-		}
+		}*/
 
-	case message.MSG_TYPE_GET_DATASET:
+	//	case message.MSG_TYPE_GET_DATASET:
 	//	return n.marshalledStorageObjectContent(msg)s
 
 	case message.MSG_TYPE_DATASET_EXISTS:
