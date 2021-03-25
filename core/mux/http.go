@@ -37,6 +37,7 @@ func (m *Mux) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
+	dRouter.HandleFunc("/verify/{id:.*}", m.getDatasetPolicyVerification).Methods("GET")
 
 	// Middlewares used for validation
 	//dRouter.Use(m.middlewareValidateTokenSignature)
@@ -277,14 +278,13 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 
 	token, err := getBearerToken(req)
 	if err != nil {
-		log.Println()
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 	
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
-		err := fmt.Errorf("Missing storage identifier")
+		err := fmt.Errorf("Missing dataset identifier")
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -299,3 +299,40 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 
 	m.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
 }
+
+func (m *Mux) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	dataset := mux.Vars(r)["id"]
+	if dataset == "" {
+		err := fmt.Errorf("Missing dataset identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	isInvalidated:= m.datasetIsInvalidated(dataset)
+	b := new(bytes.Buffer)
+	c := struct{
+		IsInvalidated bool
+	}{
+		IsInvalidated: isInvalidated,	
+	}
+
+	if err := json.NewEncoder(b).Encode(c); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil { 
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+

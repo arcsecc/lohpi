@@ -532,7 +532,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		if !n.dbDatasetExists(msg.GetDatasetRequest().GetIdentifier()) {
 			return n.unauthorizedAccess(fmt.Sprintf("Dataset '%s' is not indexed by the node", msg.GetDatasetRequest().GetIdentifier()))
 		}
-		if n.isCheckedOutByClient(msg.GetDatasetRequest()) {
+		if n.isCheckedOutByClient(msg.GetDatasetRequest().GetIdentifier()) {
 			return n.unauthorizedAccess("Client has already checked out this dataset")
 		}
 
@@ -555,6 +555,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_GET_DATASET_METADATA_URL:
 		return n.fetchDatasetMetadataURL(msg)
 		// TODO finish me
+
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		// gossip
 		log.Infoln("Got new policy batch from policy store")
@@ -604,22 +605,55 @@ func (n *Node) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 					log.Errorln(err.Error())
 					return nil, err
 				}
+
+				if n.isCheckedOutByClient(datasetId) {
+					n.notifyPolicyChangeToDirectoryServer(datasetId)
+				}
 			}
 		}
 	}
-
 	return nil, nil
+}
+
+// Only disallow permissions for now
+func (n *Node) notifyPolicyChangeToDirectoryServer(dataset string) {
+	msg := &pb.Message{
+		Type: message.MSG_POLICY_REVOKE,
+		Sender: n.pbNode(),
+		StringValue: dataset,
+		BoolValue: false,
+	}
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		panic(err)
+	}
+
+	r, s, err := n.ifritClient.Sign(data)
+	if err != nil {
+		log.Errorln(err.Error())
+		panic(err)
+	}
+
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		log.Errorln(err.Error())
+		panic(err)
+	}
+
+	n.ifritClient.SendTo(n.muxIP, data)
 }
 
 // Returns true if a client has already checked out the dataset,
 // returns false otherwise.
-func (n *Node) isCheckedOutByClient(r *pb.DatasetRequest) bool {
-	if r == nil {
-		log.Errorln("Dataset request is nil")
+func (n *Node) isCheckedOutByClient(dataset string) bool {
+	if dataset == "" {
+		log.Errorln("Dataset identifier is empty")
 		return true
 	}
 
-	return n.dbDatasetIsCheckedOutByClient(r.GetIdentifier())
+	return n.dbDatasetIsCheckedOutByClient(dataset)
 }
 
 // TODO: match the required access credentials of the dataset to the 

@@ -10,9 +10,11 @@ _	"net/url"
 	"errors"
 	"time"
 	log "github.com/sirupsen/logrus"
+	"github.com/lestrrat-go/jwx/jws"
 	"strconv"
 	"fmt"
 	"net/http"
+	"encoding/json"
 _	"os"
 
 	"github.com/golang/protobuf/proto"
@@ -133,9 +135,21 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAdd
 			if err := m.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx); err != nil {
 				if err := m.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
 					log.Errorln(err.Error())
-					return
 				}
+				return
 			}
+
+			// Get client-related fiels
+			_, oid, err := m.getClientIdentifier(clientToken)
+			if err != nil {
+				if err := m.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
+					log.Errorln(err.Error())
+				}
+				return
+			}
+			
+			m.insertCheckedOutDataset(dataset, oid)
+
 		} else {
 			err := fmt.Errorf(respMsg.GetDatasetResponse().GetErrorMessage())
 			log.Errorln(err.Error())
@@ -147,6 +161,29 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAdd
 		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
 		return 
 	}
+}
+
+func (m *Mux) getClientIdentifier(token []byte) (string, string, error) {
+	msg, err := jws.ParseString(string(token))
+	if err != nil {
+		return "", "", err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return "", "", errors.New("Payload was nil")
+	}
+
+	c := struct{
+		Name string		`json:"name"`
+		Oid string		`json:"oid"`
+	}{}
+
+	if err := json.Unmarshal(s, &c); err != nil {
+    	return "", "", err
+	}
+	
+	return c.Name, c.Oid, nil
 }
 
 // TODO: use context and refine me otherwise
@@ -316,4 +353,31 @@ func (m *Mux) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) er
 	}
 
 	return nil
+}
+
+func (m *Mux) insertCheckedOutDataset(dataset, clientId string) {
+	m.clientCheckoutMapLock.Lock()
+	defer m.clientCheckoutMapLock.Unlock()
+	if m.clientCheckoutMap[dataset] == nil {
+		m.clientCheckoutMap[dataset] = make([]string, 0)
+	}
+	m.clientCheckoutMap[dataset] = append(m.clientCheckoutMap[dataset], clientId)
+}
+
+func (m *Mux) getCheckedOutDatasetMap() map[string][]string {
+	m.clientCheckoutMapLock.RLock()
+	defer m.clientCheckoutMapLock.RUnlock()
+	return m.clientCheckoutMap
+}
+
+func (m *Mux) datasetIsInvalidated(dataset string) bool {
+	l := m.revokedDatasets()
+
+	for e := l.Front(); e != nil; e = e.Next() {
+		if e.Value == dataset {
+			return true
+		}
+	}
+
+	return false
 }

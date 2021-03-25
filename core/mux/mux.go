@@ -16,6 +16,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"container/list"
 
 	"crypto/x509/pkix"
 
@@ -32,7 +33,7 @@ var (
 type Config struct {
 	HttpPort   			int    `default:"8080"`
 	GRPCPort    		int    `default:"8081"`
-	LohpiCaAddr 				string 	`default:"127.0.1.1:8301"`
+	LohpiCaAddr 		string 	`default:"127.0.1.1:8301"`
 }
 
 type service interface {
@@ -44,6 +45,13 @@ type service interface {
 type Event struct {
 	Timestamp   time.Time
 	Description string
+}
+
+/* Some time in the future we need to redefine the policy definition concepts */
+type ClientCheckout struct {
+	Dataset string
+	Timestamp time.Time
+	ClientID string
 }
 
 type Mux struct {
@@ -77,7 +85,12 @@ type Mux struct {
 	// Ignored IP addresses for the Ifrit client
 	ignoredIP map[string]string
 
-	eventChan <-chan Event
+	// Datasets that have been checked out
+	clientCheckoutMap map[string][]string  //datase id -> list of client who have checked out the data
+	clientCheckoutMapLock sync.RWMutex
+
+	invalidatedDatasets *list.List
+	invalidatedDatasetsLock sync.RWMutex
 
 	// Fetch the JWK
 	ar *jwk.AutoRefresh
@@ -138,7 +151,8 @@ func NewMux(config *Config) (*Mux, error) {
 		// Collection if nodes that should be ignored in certain cases
 		ignoredIP: make(map[string]string),
 
-		eventChan: make(<-chan Event),
+		clientCheckoutMap: make(map[string][]string),
+		invalidatedDatasets: list.New(),
 	}
 
 	m.grpcs.Register(m)
@@ -199,11 +213,6 @@ func (m *Mux) InitializeLogfile(logToFile bool) error {
 	return nil
 }
 
-// Returns the event channel that can be read from
-func (m *Mux) EventChannel() <-chan Event {
-	return m.eventChan
-}
-
 // PIVATE METHODS BELOW THIS LINE
 func (m *Mux) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
@@ -223,7 +232,9 @@ func (m *Mux) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
 		go m.addDatasetNode(msg.GetStringValue(), msg.GetSender())
 		
-		//m.insertDataset(msg)
+	case message.MSG_POLICY_REVOKE:
+		m.addRevokedDataset(msg.GetStringValue())
+
 	default:
 		log.Warnln("Unknown message type at mux handler: %s\n", msg.GetType())
 	}
@@ -235,6 +246,18 @@ func (m *Mux) messageHandler(data []byte) ([]byte, error) {
 	}
 
 	return resp, nil
+}
+
+func (m *Mux) addRevokedDataset(dataset string) {
+	m.invalidatedDatasetsLock.Lock()
+	defer m.invalidatedDatasetsLock.Unlock()
+	m.invalidatedDatasets.PushBack(dataset)
+}
+
+func (m *Mux) revokedDatasets() *list.List {
+	m.invalidatedDatasetsLock.RLock()
+	defer m.invalidatedDatasetsLock.RUnlock()
+	return m.invalidatedDatasets
 }
 
 func (m *Mux) streamHandler(input chan []byte, output chan []byte) {

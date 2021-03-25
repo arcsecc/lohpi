@@ -41,7 +41,7 @@ func (ps *PolicyStore) startHttpServer(addr string) error {
 		TLSConfig: 		comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.Priv()),
 	}
 
-	router.Use(ps.middlewareValidateTokenSignature)
+	//router.Use(ps.middlewareValidateTokenSignature)
 
 	if err := ps.setPublicKeyCache(); err != nil {
 		log.Errorln(err.Error())
