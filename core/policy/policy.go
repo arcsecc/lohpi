@@ -201,7 +201,7 @@ func (ps *PolicyStore) Start() error {
 }
 
 func (ps *PolicyStore) ifritMembersAddress() []string {
-	memMap := ps.memCache.DatasetNodes()
+	memMap := ps.memCache.Nodes()
 	members := make([]string, 0)
 	for _, n := range memMap {
 		members = append(members, n.GetIfritAddress())
@@ -306,7 +306,7 @@ func (ps *PolicyStore) Stop() {
 func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := ps.memCache.DatasetNodes()[node.GetName()]; !ok {
 		ps.memCache.AddNode(node.GetName(), node)
-		log.Infoln("Policy store added %s to map with Ifrit IP %s and HTTPS adrress %s\n",
+		log.Infof("Policy store added %s to map with Ifrit IP %s and HTTPS adrress %s\n",
 			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
 	} else {
 		return nil, fmt.Errorf("Policy store: node '%s' already exists in network\n", node.GetName())

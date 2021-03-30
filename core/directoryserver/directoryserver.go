@@ -47,10 +47,6 @@ type DirectoryServer struct {
 
 	cu *comm.CryptoUnit
 
-	// Dataset nodes
-	datasetNodesMap     map[string]*pb.Node // Dataset identifier mapped to storage node
-	datasetNodesMapLock sync.RWMutex
-
 	// HTTP-related stuff. Used by the demonstrator using cURL
 	httpListener net.Listener
 	httpServer   *http.Server
@@ -61,6 +57,7 @@ type DirectoryServer struct {
 	grpcs        *gRPCServer
 
 	// Datasets that have been checked out
+	// TODO move me to memcache?
 	clientCheckoutMap     map[string][]string //datase id -> list of client who have checked out the data
 	clientCheckoutMapLock sync.RWMutex
 
@@ -110,18 +107,13 @@ func NewDirectoryServer(config *Config) (*DirectoryServer, error) {
 		// HTTP
 		cu: cu,
 
-		// Network nodes
-		nodeMap:     make(map[string]*pb.Node),
-		nodeMapLock: sync.RWMutex{},
-
-		// Dataset nodes
-		datasetNodesMap:     make(map[string]*pb.Node),
-		datasetNodesMapLock: sync.RWMutex{},
-
 		// gRPC server
 		grpcs: s,
 
 		memCache: cache.NewCache(ifritClient),
+
+		clientCheckoutMap: make(map[string][]string, 0),
+		invalidatedDatasets: list.New(),
 	}
 
 	ds.grpcs.Register(ds)
@@ -191,6 +183,9 @@ func (d *DirectoryServer) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
 		d.memCache.AddDatasetNode(msg.GetStringValue(), msg.GetSender())
 
+	case message.MSG_POLICY_REVOKE:
+		d.addRevokedDataset(msg.GetStringValue())
+
 	default:
 		log.Warnln("Unknown message type at DirectoryServer handler: %s\n", msg.GetType())
 	}
@@ -203,6 +198,19 @@ func (d *DirectoryServer) messageHandler(data []byte) ([]byte, error) {
 
 	return resp, nil
 }
+
+func (d *DirectoryServer) addRevokedDataset(dataset string) {
+	d.invalidatedDatasetsLock.Lock()
+	defer d.invalidatedDatasetsLock.Unlock()
+	d.invalidatedDatasets.PushBack(dataset)
+}
+
+func (d *DirectoryServer) revokedDatasets() *list.List {
+	d.invalidatedDatasetsLock.RLock()
+	defer d.invalidatedDatasetsLock.RUnlock()
+	return d.invalidatedDatasets
+}
+
 
 func (d *DirectoryServer) streamHandler(input chan []byte, output chan []byte) {
 
@@ -249,12 +257,6 @@ func (d *DirectoryServer) verifyMessageSignature(msg *pb.Message) error {
 	}
 
 	return nil
-}
-
-func (d *DirectoryServer) revokedDatasets() *list.List {
-	d.invalidatedDatasetsLock.RLock()
-	defer d.invalidatedDatasetsLock.RUnlock()
-	return d.invalidatedDatasets
 }
 
 func (d *DirectoryServer) pbNode() *pb.Node {
