@@ -45,7 +45,6 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Copy the configuration files
 COPY ./cmd/dataverse/policy_store/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/dataverse/policy_store/lohpi_config.yaml .
-COPY ./cmd/dataverse/policy_store/BaltimoreCyberTrustRoot.crt.pem .
 
 # Command to run the executable
 ENTRYPOINT ["/policy_store"]

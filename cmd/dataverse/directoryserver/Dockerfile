@@ -19,37 +19,37 @@ COPY go.sum .
 RUN go mod download
 
 # Local dependencies
-COPY ./core/mux ./core/mux
+COPY ./core/directoryserver ./core/directoryserver
 COPY ./core/cache ./core/cache
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
 COPY ./core/comm ./core/comm
 COPY ./protobuf ./protobuf
-COPY ./cmd/dataverse/mux/main.go ./cmd/dataverse/mux/main.go
-COPY ./cmd/dataverse/mux/lohpi_config.yaml ./cmd/dataverse/mux/lohpi_config.yaml
-COPY ./cmd/dataverse/mux/ifrit_config.yaml ./cmd/dataverse/mux/ifrit_config.yaml
+COPY ./cmd/dataverse/directoryserver/main.go .
+COPY ./cmd/dataverse/directoryserver/lohpi_config.yaml .
+COPY ./cmd/dataverse/directoryserver/ifrit_config.yaml .
 
 # Run test
 #RUN go test ./...
 
 # Build the application
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-RUN go build -o mux ./cmd/dataverse/mux/main.go
+RUN go build -o directoryserver 
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
 
 # Copy binary from build to main folder
-RUN cp /build/mux .
+RUN cp /build/directoryserver .
 
 ############################
 # STEP 2 build a small image
 ############################
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /dist/mux /
-COPY ./cmd/dataverse/mux/ifrit_config.yaml /var/tmp/ifrit_config.yaml
-COPY ./cmd/dataverse/mux/lohpi_config.yaml /lohpi_config.yaml
+COPY --from=builder /dist/directoryserver /
+COPY ./cmd/dataverse/directoryserver/ifrit_config.yaml /var/tmp/ifrit_config.yaml
+COPY ./cmd/dataverse/directoryserver/lohpi_config.yaml .
 
 # Command to run the executable
-ENTRYPOINT ["/mux"]
+ENTRYPOINT ["/directoryserver"]
