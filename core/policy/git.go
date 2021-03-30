@@ -1,7 +1,8 @@
 package policy
 
 import (
-	//"path"
+	"io/ioutil"
+	"fmt"
 	"strings"
 	"errors"
 	"path/filepath"
@@ -21,7 +22,7 @@ func initializeGitRepository(path string) (*git.Repository, error) {
 
 	ok, err := exists(path)
 	if err != nil {
-		log.Fatalf(err.Error())
+		log.Errorln(err.Error())
 		return nil, err
 	}
 
@@ -30,18 +31,29 @@ func initializeGitRepository(path string) (*git.Repository, error) {
 			return nil, err
 		}
 
-		log.Infof("Initializing a plain Git repository at '%s'\n", path)
+		log.Infoln("Initializing a plain Git repository at", path)
 		return git.PlainInit(path, false)
-	} else {
-		log.Infoln("Policies directory in Git repository already exists at", path)
 	}
 
-	log.Infof("Opening a plain Git repository at %s\n", path)
+	log.Infoln("Opening a plain Git repository at", path)
 	return git.PlainOpen(path)
 }
 
+func (ps *PolicyStore) gitStorePolicy(nodeIdentifier, datasetIdentifier string, policy *pb.Policy) error {
+	if err := ps.gitWritePolicy(policy, nodeIdentifier); err != nil {
+		log.Errorln(err.Error())
+		return err
+	}
+
+	if err := ps.gitCommitPolicy(policy, nodeIdentifier); err != nil {
+		log.Errorln(err.Error())
+		return err
+	}
+	return nil
+}
+
 // Writes the given policy store 
-func (ps *PolicyStore) writePolicy(p *pb.Policy) error {
+func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error {
 	// Check if directory exists for the given study and subject
 	// Use "git-repo/study/subject/policy/policy.conf" paths 
 	ok, err := exists(ps.config.PolicyStoreGitRepository)
@@ -61,14 +73,24 @@ func (ps *PolicyStore) writePolicy(p *pb.Policy) error {
 	// Change cwd to gir repo
 	err = os.Chdir(ps.config.PolicyStoreGitRepository)
 	if err != nil {
-    	panic(err)
+		log.Fatalf(err.Error())
+    	return err
+	}
+
+	// Create new directory for the node. We  require the tree structure 
+	// to be in the form <storage node>/<dataset identifer>.
+	if err := os.MkdirAll(nodeIdentifier, os.ModePerm); err != nil {
+		log.Errorln(err.Error())
+		return err
 	}
 
 	// Special case: replace '/' by '_'
 	s := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
-	
+
+	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
+
 	// If the file exists, overwrite the contents of it. If it doesn not, create and write
-	ok, err = exists(s)
+	ok, err = exists(fPath)
 	if err != nil {
 		log.Fatalf(err.Error())
 		return err
@@ -77,23 +99,27 @@ func (ps *PolicyStore) writePolicy(p *pb.Policy) error {
 	var f *os.File
 
 	if ok {
-		f, err = os.OpenFile(s, os.O_WRONLY, 0644)
+		f, err = os.OpenFile(fPath, os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
-			panic(err)
 	    	log.Errorln(err.Error())
 			return err
 		}
 
 		_, err = f.WriteString(p.GetContent())
+		if err != nil {
+			return err
+		}
 	} else {
-		f, err = os.OpenFile(s, os.O_CREATE|os.O_WRONLY, 0644)
+		f, err = os.OpenFile(fPath, os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			panic(err)
 	    	log.Errorln(err.Error())
 			return err
 		}
 
 		_, err = f.WriteString(p.GetContent())
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -105,7 +131,7 @@ func (ps *PolicyStore) getFilePath(p *pb.Policy) string {
 }
 
 // Commit the policy model to the Git repository
-func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
+func (ps *PolicyStore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) error {
 	// Change cwd to gir repo
 	err := os.Chdir(ps.config.PolicyStoreGitRepository)
 	if err != nil {
@@ -118,7 +144,9 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 		panic(err)
 	}
 
-	fPath := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
+	s := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
+	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
+
 	// Add the file to the staging area
 	_, err = worktree.Add(fPath)
 	if err != nil {
@@ -168,7 +196,75 @@ func (ps *PolicyStore) commitPolicy(p *pb.Policy) error {
 	return nil
 }
 
-func (ps *PolicyStore) remoteGitSync() error {
-	return nil
+func (ps *PolicyStore) gitDatasetExists(nodeIdentifier, datasetId string) bool {
+	ok, err := exists(ps.config.PolicyStoreGitRepository)
+	if err != nil {
+		log.Errorln(err.Error())
+		return false
+	}
+
+	if !ok {
+		log.Errorln("Git directory does not exist at", ps.config.PolicyStoreGitRepository)
+		return false
+	}
+
+	// Change cwd to git repo
+	err = os.Chdir(ps.config.PolicyStoreGitRepository)
+	if err != nil {
+		log.Errorln(err.Error())
+    	return false
+	}
+
+	// Special case: replace '/' by '_'
+	s := strings.ReplaceAll(datasetId, "/", "_")
+
+	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
+
+	// If the file exists, overwrite the contents of it. If it doesn not, create and write
+	ok, err = exists(fPath)
+	if err != nil {
+		log.Errorln(err.Error())
+		return false
+	}
+
+	return ok
 }
 
+func (ps *PolicyStore) gitGetDatasetPolicy(nodeIdentifier, datasetId string) (string, error) {
+	ok, err := exists(ps.config.PolicyStoreGitRepository)
+	if err != nil {
+		log.Errorln(err.Error())
+		return "", err
+	}
+
+	if !ok {
+		log.Errorln("Git directory does not exist at", ps.config.PolicyStoreGitRepository)
+		return "", err
+	}
+
+	// Change cwd to git repo
+	err = os.Chdir(ps.config.PolicyStoreGitRepository)
+	if err != nil {
+		log.Errorln(err.Error())
+    	return "", err
+	}
+
+	// Special case: replace '/' by '_'
+	s := strings.ReplaceAll(datasetId, "/", "_")
+
+	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
+
+	// If the file exists, overwrite the contents of it. If it doesn not, create and write
+	ok, err = exists(fPath)
+	if err != nil {
+		log.Errorln(err.Error())
+		return "", err
+	}
+
+	str, err := ioutil.ReadFile(fPath)
+	if err != nil {
+		return "", err
+	}
+
+	return string(str), nil
+}

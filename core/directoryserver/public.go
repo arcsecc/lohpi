@@ -1,4 +1,5 @@
-package mux
+package directoryserver
+
 
 /* This file contains methods that use the Lohpi network for queries */
 import (
@@ -24,7 +25,7 @@ _	"os"
 )
 
 // Fetches the information about a dataset
-func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, ctx context.Context) ([]byte, error) {
+func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, ctx context.Context) ([]byte, error) {
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -44,7 +45,7 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset,
 	}
 
 	// Sign it
-	r, s, err := m.ifritClient.Sign(data)
+	r, s, err := d.ifritClient.Sign(data)
 	if err != nil {
 		return nil, err
 	}
@@ -55,28 +56,29 @@ func (m *Mux) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset,
 		return nil, err
 	}
 
-	ch := m.ifritClient.SendTo(nodeAddr, data)
+	ch := d.ifritClient.SendTo(nodeAddr, data)
 
 	select {
 	case resp := <-ch:
 		respMsg := &pb.Message{}
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			panic(err)
+			return nil, err
 		}
 		
-		if err := m.verifyMessageSignature(respMsg); err != nil {
-			panic(err)
+		if err := d.verifyMessageSignature(respMsg); err != nil {
+			return nil, err
 		}
 
-		return m.getMetadata(w, req, respMsg.GetStringValue(), newCtx)
+		return d.getMetadata(w, req, respMsg.GetStringValue(), newCtx)
 	case <-newCtx.Done():
-		log.Println("Timeout in 'func (m *Mux) datasetMetadata()'")
+		log.Debugln("Timeout in 'func (d *DirectoryServer) datasetMetadata()'")
+		return nil, errors.New("Timeout while fetching ")
 	}
 
-	return nil, err
+	return nil, nil
 }
 
-func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
+func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
 	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second * 15)) // set proper time to wait
 	defer cancel()
 
@@ -98,7 +100,7 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAdd
 	}
 
 	// Sign it
-	r, s, err := m.ifritClient.Sign(data)
+	r, s, err := d.ifritClient.Sign(data)
 	if err != nil {
 		log.Fatalln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -113,7 +115,7 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAdd
 		return
 	}
 
-	ch := m.ifritClient.SendTo(nodeAddr, data)
+	ch := d.ifritClient.SendTo(nodeAddr, data)
 
 	select {
 	case resp := <-ch:
@@ -124,16 +126,17 @@ func (m *Mux) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAdd
 			return
 		}
 		
-		if err := m.verifyMessageSignature(respMsg); err != nil {
+		if err := d.verifyMessageSignature(respMsg); err != nil {
 			log.Fatalln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
+		// If dataset is available, send it to the client
 		if respMsg.GetDatasetResponse().GetIsAllowed() {
 			// If we tried to fetch the dataset but it failed, rollback on checking it out
-			if err := m.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx); err != nil {
-				if err := m.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
+			if err := d.datasetRequest(w, req, respMsg.GetDatasetResponse().GetURL(), ctx); err != nil {
+				if err := d.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
 					log.Errorln(err.Error())
 				}
 				return
@@ -187,7 +190,7 @@ func (m *Mux) getClientIdentifier(token []byte) (string, string, error) {
 }
 
 // TODO: use context and refine me otherwise
-func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl string, ctx context.Context) ([]byte, error) {
+func (d *DirectoryServer) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl string, ctx context.Context) ([]byte, error) {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		return nil, err
@@ -202,20 +205,23 @@ func (m *Mux) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl stri
         return nil, err
     }
 
+	buf := new(bytes.Buffer)
+	_, err = buf.ReadFrom(response.Body)
+	if err != nil {
+		return nil, err
+	}
+
 	if response.StatusCode == http.StatusOK {
-		buf := new(bytes.Buffer)
-		_, err := buf.ReadFrom(response.Body)
-		if err != nil {
-			return nil, err
-		}
 		return buf.Bytes(), nil
+	} else {
+		log.Errorf("Response from remote data repository: %s\n", string(buf.Bytes()))
 	}
 
 	return nil, errors.New("Could not fetch metadata from host")
 }
 
 // TODO: use context request
-func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) error {
+func (d *DirectoryServer) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) error {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		log.Println(err.Error())
@@ -261,61 +267,11 @@ func (m *Mux) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUr
 	return nil
 }
 
-// Returns true if the dataset identifier exists at the node, returns false otherwise. 
-func (m *Mux) datasetExistsAtNode(node, dataset string, ctx context.Context) (bool, error) {
-	newCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	msg := &pb.Message{
-		Type:        message.MSG_TYPE_DATASET_EXISTS,
-		Sender:      m.pbNode(),
-		StringValue: dataset,
-	}
-
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		return false, err
-	}
-
-	r, s, err := m.ifritClient.Sign(data)
-	if err != nil {
-		return false, err
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		return false, err
-	}
-
-	ch := m.ifritClient.SendTo(node, data)
-	select {
-	case resp := <-ch:
-		respMsg := &pb.Message{}
-		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			return false, err
-		}
-		
-		if err := m.verifyMessageSignature(respMsg); err != nil {
-			return false, err
-		}
-		
-		if respMsg.GetBoolValue() {
-			return true, nil
-		}
-	case <-newCtx.Done():
-		log.Println("Timeout in func '(m *Mux) datasetExistsAtNode()'")
-		return false, errors.New("Timeout in func '(m *Mux) datasetExistsAtNode()'")
-	}
-
-	return false, nil
-}
-
 // TODO: handle ctx
-func (m *Mux) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
+func (d *DirectoryServer) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_ROLLBACK_CHECKOUT,
-		Sender:      m.pbNode(),
+		Sender:      d.pbNode(),
 		StringValue: dataset,
 	}
 
@@ -324,7 +280,7 @@ func (m *Mux) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) er
 		return err
 	}
 
-	r, s, err := m.ifritClient.Sign(data)
+	r, s, err := d.ifritClient.Sign(data)
 	if err != nil {
 		return err
 	}
@@ -335,7 +291,7 @@ func (m *Mux) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) er
 		return err
 	}
 
-	ch := m.ifritClient.SendTo(nodeAddr, data)
+	ch := d.ifritClient.SendTo(nodeAddr, data)
 	select {
 	case resp := <-ch:
 		respMsg := &pb.Message{}
@@ -343,7 +299,7 @@ func (m *Mux) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) er
 			return err
 		}
 		
-		if err := m.verifyMessageSignature(respMsg); err != nil {
+		if err := d.verifyMessageSignature(respMsg); err != nil {
 			return err
 		}
 		

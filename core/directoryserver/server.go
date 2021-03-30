@@ -1,4 +1,4 @@
-package mux
+package directoryserver
 
 import (
 	"log"
@@ -28,7 +28,7 @@ type gRPCServer struct {
 	listenAddr string
 }
 
-func newMuxGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey, l net.Listener) (*gRPCServer, error) {
+func newDirectoryGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey, l net.Listener) (*gRPCServer, error) {
 	var serverOpts []grpc.ServerOption
 	if cert == nil {
 		return nil, errNilCert
@@ -57,8 +57,8 @@ func newMuxGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey, l 
 	}, nil
 }
 
-func (s *gRPCServer) Register(p pb.MuxServer) {
-	pb.RegisterMuxServer(s.rpcServer, p)
+func (s *gRPCServer) Register(p pb.DirectoryServerServer) {
+	pb.RegisterDirectoryServerServer(s.rpcServer, p)
 }
 
 func (s *gRPCServer) Start() {

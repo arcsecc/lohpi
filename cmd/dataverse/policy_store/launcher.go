@@ -37,11 +37,11 @@ func main() {
 	var createNew bool
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&psConfigFile, "c", "config.yml", `Configuration file for policy store. If not set, use default configuration values.`)
+	args.StringVar(&psConfigFile, "c", "lohpi_config.yaml", `Configuration file for policy store. If not set, use default configuration values.`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Policy store instance")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&psConfig, psConfigFile, "./config.yaml")
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&psConfig, psConfigFile, "./lohpi_config.yaml")
 
 	var policyStore *ps.PolicyStore
 
@@ -64,10 +64,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		if err := policyStore.Start(); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
-		}
+		go policyStore.Start()
 	} else {
 		log.Fatalln("Need to set the 'new' flag to true. Exiting")
 		os.Exit(1)

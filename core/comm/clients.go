@@ -12,13 +12,13 @@ import (
 
 // TODO: clean up this mess
 
-type MuxGRPCClient struct {
+type DirectoryGRPCClient struct {
 	dialOptions []grpc.DialOption
-	pb.MuxClient
+	pb.DirectoryServerClient
 }
 
-type MuxConn struct {
-	pb.MuxClient
+type DirectoryServerConn struct {
+	pb.DirectoryServerClient
 	cc *grpc.ClientConn
 }
 
@@ -42,7 +42,7 @@ type PolicyStoreConn struct {
 	cc *grpc.ClientConn
 }*/
 
-func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*MuxGRPCClient, error) {
+func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*DirectoryGRPCClient, error) {
 	var dialOptions []grpc.DialOption
 	// check paramters here
 	config := ClientConfig(cert, caCert, priv)
@@ -51,26 +51,26 @@ func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*
 	dialOptions = append(dialOptions, grpc.WithTransportCredentials(creds))
 	dialOptions = append(dialOptions, grpc.WithBackoffMaxDelay(time.Minute * 1))
 
-	return &MuxGRPCClient{
+	return &DirectoryGRPCClient{
 		dialOptions:    dialOptions,
 	}, nil
 }
 
-func (c *MuxGRPCClient) Dial(addr string) (*MuxConn, error) {
+func (c *DirectoryGRPCClient) Dial(addr string) (*DirectoryServerConn, error) {
 	cc, err := grpc.Dial(addr, c.dialOptions...)
 	if err != nil {
 		return nil, err
 	} else {
-		connection := &MuxConn{
-			MuxClient: 		pb.NewMuxClient(cc),
-			cc:          	 cc,
+		connection := &DirectoryServerConn{
+			DirectoryServerClient: 		pb.NewDirectoryServerClient(cc),
+			cc:				          	cc,
 		}
 		
 		return connection, nil
 	}
 }
 
-func (c *MuxConn) CloseConn() {
+func (c *DirectoryServerConn) CloseConn() {
 	c.cc.Close()
 }
 

@@ -280,7 +280,10 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 		Content: strconv.FormatBool(reqBody.Policy),
 	}
 
-	if err := ps.storePolicy(context.Background(), datasetEntry.node, datasetId, policy); err != nil {
+	// Store the dataset entry
+	ps.addDatasetPolicy(datasetId, &datasetPolicyMapEntry{policy, datasetEntry.node})
+	
+	if err := ps.gitStorePolicy(datasetEntry.node, datasetId, policy); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return

@@ -1,5 +1,5 @@
 ca_addr: 127.0.1.1:8300
-gossip_interval: 3
+gossip_interval: 1
 max_concurrent_messages: 5
 monitor_interval: 10
 ping_limit: 3

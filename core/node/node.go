@@ -152,6 +152,8 @@ func NewNode(name string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
+	go ifritClient.Start()
+	
 	httpListener, err := netutil.GetListener()
 	if err != nil {
 		return nil, err
@@ -263,7 +265,7 @@ func (n *Node) IndexDataset(id string, ctx context.Context) error {
 
 	// Send policy request to policy store
 	// ctx too...
-	if err := n.requestPolicy(id); err != nil {
+	if err := n.pbRequestPolicy(id); err != nil {
 		log.Errorln(err.Error())
 		return err
 	}
@@ -278,7 +280,7 @@ func (n *Node) IndexDataset(id string, ctx context.Context) error {
 }
 
 // Requests the newest policy from the policy store
-func (n *Node) requestPolicy(id string) error {
+func (n *Node) pbRequestPolicy(id string) error {
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_POLICY,
 		Sender: n.pbNode(),
@@ -422,7 +424,6 @@ func (n *Node) JoinNetwork() error {
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
 //	n.ifritClient.RegisterStreamHandler(n.streamHandler)
-	go n.ifritClient.Start()
 
 	return nil
 }
@@ -944,6 +945,8 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 }
 
 func (n *Node) pbNode() *pb.Node {
+	log.Printf("Node ID: %s\n", string(n.ifritClient.Id()))
+
 	return &pb.Node{
 		Name:    n.NodeName(),
 		IfritAddress: n.ifritClient.Addr(),

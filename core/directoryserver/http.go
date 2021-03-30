@@ -1,4 +1,4 @@
-package mux
+package directoryserver
 
 import (
 	"context"
@@ -28,9 +28,9 @@ type azureConfig struct {
 	roles []string
 }
 
-func (m *Mux) startHttpServer(addr string) error {
+func (d *DirectoryServer) startHttpServer(addr string) error {
 	r := mux.NewRouter()
-	log.Printf("MUX: Started HTTP server on port %d\n", m.config.HttpPort)
+	log.Infoln("Started directory server on port", d.config.HttpPort)
 
 	// Main dataset router exposed to the clients
 	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
@@ -40,37 +40,37 @@ func (m *Mux) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/verify/{id:.*}", m.getDatasetPolicyVerification).Methods("GET")
 
 	// Middlewares used for validation
-	//dRouter.Use(m.middlewareValidateTokenSignature)
-	//dRouter.Use(m.middlewareValidateTokenClaims)
+	//dRouter.Use(d.middlewareValidateTokenSignature)
+	//dRouter.Use(d.middlewareValidateTokenClaims)
 
-	m.httpServer = &http.Server{
+	d.httpServer = &http.Server{
 		Addr: 		  	addr,
 		Handler:      	r,
 		WriteTimeout: 	time.Second * 30,
 		ReadTimeout:  	time.Second * 30,
 		IdleTimeout:  	time.Second * 60,
-		TLSConfig: 		comm.ServerConfig(m.cu.Certificate(), m.cu.CaCertificate(), m. cu.Priv()),
+		TLSConfig: 		comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d. cu.Priv()),
 	}
 
-	if err := m.setPublicKeyCache(); err != nil {
+	if err := d.setPublicKeyCache(); err != nil {
 		log.Errorln(err.Error())
 		return err
 	}
 
-	return m.httpServer.ListenAndServe()
+	return d.httpServer.ListenAndServe()
 }
 
-func (m *Mux) setPublicKeyCache() error {
+func (d *DirectoryServer) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	m.ar = jwk.NewAutoRefresh(ctx)
+	d.ar = jwk.NewAutoRefresh(ctx)
 	const msCerts = "https://login.microsoftonline.com/common/discovery/v2.0/keys" // TODO: config me
 
-	m.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
+	d.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
 
 	// Keep the cache warm
-	_, err := m.ar.Refresh(ctx, msCerts)
+	_, err := d.ar.Refresh(ctx, msCerts)
 	if err != nil {
 		log.Println("Failed to refresh Microsoft Azure JWKS")
 		return err
@@ -78,7 +78,7 @@ func (m *Mux) setPublicKeyCache() error {
 	return nil 
 }
 
-func (m *Mux) middlewareValidateTokenSignature(next http.Handler) http.Handler {
+func (d *DirectoryServer) middlewareValidateTokenSignature(next http.Handler) http.Handler {
 	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
@@ -86,7 +86,7 @@ func (m *Mux) middlewareValidateTokenSignature(next http.Handler) http.Handler {
 			return
 		}
 		
-		if err := m.validateTokenSignature(token); err != nil {
+		if err := d.validateTokenSignature(token); err != nil {
 			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -95,7 +95,7 @@ func (m *Mux) middlewareValidateTokenSignature(next http.Handler) http.Handler {
 	})
 }
 
-func (m *Mux) middlewareValidateTokenClaims(next http.Handler) http.Handler {
+func (d *DirectoryServer) middlewareValidateTokenClaims(next http.Handler) http.Handler {
 	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
 		// TODO: parse the claims in the access token
 		// Return error if there are any mismatches. Call next.ServeHTTP(w, r) otherwise
@@ -105,13 +105,13 @@ func (m *Mux) middlewareValidateTokenClaims(next http.Handler) http.Handler {
 	})
 }
 
-func (m *Mux) validateTokenSignature(token []byte) error {
+func (d *DirectoryServer) validateTokenSignature(token []byte) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// TODO: fetch keys again if it fails
 	// TODO: add clock skew. Use jwt.WithAcceptableSkew
-	set, err := m.ar.Fetch(ctx, "https://login.microsoftonline.com/common/discovery/v2.0/keys")
+	set, err := d.ar.Fetch(ctx, "https://login.microsoftonline.com/common/discovery/v2.0/keys")
 	if err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func (m *Mux) validateTokenSignature(token []byte) error {
 	
 	// This doesn't work!
 	// TODO: this doesn't work
-	set, err := m.ar.Refresh(ctx, msCerts)
+	set, err := d.ar.Refresh(ctx, msCerts)
 	if err != nil {
 		log.Println("Failed to refresh Microsoft Azure JWKS")
 		return err
@@ -150,10 +150,6 @@ func (m *Mux) validateTokenSignature(token []byte) error {
 	return errors.New("Could not verify token")
 }
 
-func (m *Mux) validateTokenClaims(token []byte) error {
-	return nil	
-}
-
 func getBearerToken(r *http.Request) ([]byte, error) {
 	authHeader := r.Header.Get("Authorization")
 	authHeaderContent := strings.Split(authHeader, " ")
@@ -163,7 +159,7 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 	return []byte(authHeaderContent[1]), nil
 }
 
-func (m *Mux) shutdownHttpServer() {
+func (d *DirectoryServer) shutdownHttpServer() {
 	// The duration for which the server wait for open connections to finish
 	wait := time.Minute * 1
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
@@ -171,7 +167,7 @@ func (m *Mux) shutdownHttpServer() {
 
 	// Doesn't block if no connections, but will otherwise wait
 	// until the timeout deadline.
-	m.httpServer.Shutdown(ctx)
+	d.httpServer.Shutdown(ctx)
 
 	// Optionally, you could run srv.Shutdown in a goroutine and block on
 	// <-ctx.Done() if your application should wait for other services
@@ -180,7 +176,7 @@ func (m *Mux) shutdownHttpServer() {
 }
 
 // Lazily fetch objects from all the nodes
-func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServer) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 //	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
@@ -193,7 +189,7 @@ func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Reques
 		Identifiers: make([]string, 0),
 	}
 
-	for id := range m.datasetNodes() {
+	for id := range d.memCache.DatasetNodes() {
 		resp.Identifiers = append(resp.Identifiers, id)
 	}
 	
@@ -217,7 +213,7 @@ func (m *Mux) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Reques
 }
 
 // Fetches the information about a dataset
-func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
+func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
 	dataset := mux.Vars(req)["id"]
@@ -231,9 +227,10 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	defer cancel()
 
 	doneChan := make(chan bool)
+	defer close(doneChan)
 
 	// Check if dataset is known to network
-	node := m.datasetNode(dataset)
+	node := d.memCache.DatasetNodes()[dataset]
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -242,10 +239,8 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	}
 
 	go func() {
-		defer close(doneChan)
-
 		// Fetch the node address that stores the dataset
-		md, err := m.datasetMetadata(w, req, dataset, node.GetIfritAddress(), ctx)
+		md, err := d.datasetMetadata(w, req, dataset, node.GetIfritAddress(), ctx)
 		if err != nil {
 			log.Errorln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -270,7 +265,7 @@ func (m *Mux) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 }
 
 // Handler used to fetch an entire dataset. Writes a zip file to the client
-func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
+func (d *DirectoryServer) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute * 5))
@@ -289,7 +284,7 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	node := m.datasetNode(dataset)
+	node := d.memCache.DatasetNodes()[dataset]
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -297,7 +292,7 @@ func (m *Mux) getDataset(w http.ResponseWriter, req *http.Request) {
 		return
 	}	
 
-	m.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
+	d.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
 }
 
 func (m *Mux) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {

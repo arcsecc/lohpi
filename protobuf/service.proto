@@ -2,9 +2,9 @@ syntax = "proto3";
 import "google/protobuf/timestamp.proto";
 package proto;
 
-service Mux {
+service DirectoryServer {
     rpc Handshake (Node) returns (HandshakeResponse) {}
-    rpc IgnoreIP (Node) returns (Node) {}
+    //rpc IgnoreIP (Node) returns (Node) {}
 }
 
 service PolicyStore {

@@ -7,6 +7,6 @@ pings_per_interval: 3
 removal_timeout: 3
 use_ca: true
 use_compression: true
+use_viz: false
 view_update_interval: 3
 viz_update_interval: 10
-use_viz: false

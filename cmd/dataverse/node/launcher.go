@@ -144,7 +144,7 @@ func (sn *StorageNode) initializePolicies() error {
 
 	for _, id := range ids {
 		if err := sn.node.IndexDataset(id, context.Background()); err != nil {
-			panic(err)
+			return err
 		}
 	}
 

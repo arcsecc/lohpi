@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/jinzhu/configor"
-	"github.com/arcsecc/lohpi/core/mux"
+	ds "github.com/arcsecc/lohpi/core/directoryserver"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -27,21 +27,19 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi mux instance")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "MUX"}).Load(&config, configFile)
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "DIRECTORYSERVER"}).Load(&config, configFile)
 
-	var m *mux.Mux
+	var d *ds.DirectoryServer
 	var err error
 	
 	if createNew {
-		c := &mux.Config{
+		c := &ds.Config{
 			HttpPort: config.HttpPort,
 			GRPCPort: config.GRPCPort,
 			LohpiCaAddr: config.LohpiCaAddr,
 		}
 
-		log.Println("Config:", c)
-
-		m, err = mux.NewMux(c)
+		d, err = ds.NewDirectoryServer(c)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
@@ -51,13 +49,13 @@ func main() {
 	}
 	//m.InitializeLogfile(logging)
 
-	go m.Start()
+	go d.Start()
 
 	channel := make(chan os.Signal, 2)
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel
 
-	m.Stop()
+	d.Stop()
 }
 
 func loadConfiguration(configFile string) error {

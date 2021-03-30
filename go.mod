@@ -3,15 +3,10 @@ module github.com/arcsecc/lohpi
 go 1.15
 
 require (
-	github.com/Azure/azure-sdk-for-go v52.5.0+incompatible
-	github.com/Azure/go-autorest/autorest v0.11.18
-	github.com/Azure/go-autorest/autorest/azure/auth v0.5.7
-	github.com/Azure/go-autorest/autorest/to v0.4.0 // indirect
-	github.com/Azure/go-autorest/autorest/validation v0.3.1 // indirect
 	github.com/buger/jsonparser v1.1.1
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/go-git/go-git/v5 v5.2.0
-	github.com/golang/protobuf v1.4.3
+	github.com/golang/protobuf v1.5.1
 	github.com/gorilla/mux v1.8.0
 	github.com/inconshreveable/log15 v0.0.0-20201112154412-8562bdadbbac
 	github.com/jinzhu/configor v1.2.1
@@ -31,6 +26,7 @@ require (
 	github.com/spf13/jwalterweatherman v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/spf13/viper v1.7.1 // indirect
+	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
 	golang.org/x/net v0.0.0-20210119194325-5f4716e94777
 	golang.org/x/sys v0.0.0-20210309074719-68d13333faf2 // indirect
 	golang.org/x/text v0.3.5 // indirect

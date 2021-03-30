@@ -134,7 +134,7 @@ func (n *Node) dbSetObjectPolicy(datasetId, allowed string) error {
 
 	_, err := n.policyDB.Exec(q, datasetId, allowed)
 	if err != nil {
-  		log.Warnln("Insert error:", err.Error())
+  		log.Warnln("SQL insert error:", err.Error())
 	}
 	return nil
 }
