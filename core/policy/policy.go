@@ -320,11 +320,12 @@ func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.Handsh
 func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		return nil, err
 	}
 
 	if err := ps.verifyMessageSignature(msg); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
 		return nil, err
 	}
 
