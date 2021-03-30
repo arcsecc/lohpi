@@ -1,7 +1,0 @@
-nodeconfig:
-    muxip: 127.0.1.1:8081
-    policystoreip: 127.0.1.1:8082
-    lohpicaaddr: 127.0.1.1:8301
-    recip: 127.0.1.1:8084
-    fuseconfig:
-        mountdirectory: "/home/thomas/go/src/github.com/tomcat-bit/lohpi/fs_mount"

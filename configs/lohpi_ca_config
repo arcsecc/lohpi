@@ -1,3 +1,0 @@
-key_filepath: /var/tmp/lohpi_ca_key
-certificate_filepath: /var/tmp/lohpi_ca_certificate
-port: 8301

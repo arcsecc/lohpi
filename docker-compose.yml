@@ -16,12 +16,12 @@ services:
       - "8301"
   
   # Lohpi-DV 
-  dv-mux:
-    container_name: lohpi-mux
-    image: lohpi.azurecr.io/lohpi-mux
+  dv-directoryserver:
+    container_name: lohpi-directoryserver
+    image: lohpi.azurecr.io/lohpi-directoryserver
     build: 
       context: .
-      dockerfile: "./cmd/dataverse/mux/Dockerfile"
+      dockerfile: "./cmd/dataverse/directoryserver/Dockerfile"
     network_mode: host
     command: --new
     restart: unless-stopped
@@ -44,7 +44,7 @@ services:
       - "8083"
     depends_on:
       - dv-ca
-      - dv-mux
+      - dv-directoryserver
 
   # Lohpi-DV     
   dv-node:
@@ -58,7 +58,5 @@ services:
     command: -name "node_0" -new=true
     depends_on: 
     - dv-ca
-    - dv-mux
+    - dv-directoryserver
     - dv-policy_store
-    environment:
-      NODE_DB_CONNECTION_STRING: ${NODE_DB_CONNECTION_STRING}
