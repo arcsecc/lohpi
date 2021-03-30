@@ -5,24 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	"github.com/lestrrat-go/jwx/jws"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	log "github.com/sirupsen/logrus"
+	"github.com/lestrrat-go/jwx/jws"
 	_ "github.com/lib/pq"
+	log "github.com/sirupsen/logrus"
 )
 
 // TODO: change oid to something else? OID comes from Azure AD
 type Client struct {
-	Name string		`json:"name"`
-	Oid string		`json:"oid"`
+	Name string `json:"name"`
+	Oid  string `json:"oid"`
 }
 
 type CheckoutInfo struct {
-	ClientId string `json:"client_id"`
+	ClientId   string `json:"client_id"`
 	ClientName string `json:"client_name"`
-	DatasetId string `json:"dataset_id"`
-	Timestamp string `json:"timestamp"`
+	DatasetId  string `json:"dataset_id"`
+	Timestamp  string `json:"timestamp"`
 }
 
 /* MAJOR TODO: use db.Prepare and friends to prevent SQL injection!!1! */
@@ -30,7 +29,7 @@ type CheckoutInfo struct {
 
 // Main entry point for initializing the database schema and its tables on Microsoft Azure
 func (n *Node) initializePostgreSQLdb(connectionString string) error {
-	// Create schema 
+	// Create schema
 	if err := n.createSchema(connectionString); err != nil {
 		return err
 	}
@@ -39,13 +38,13 @@ func (n *Node) initializePostgreSQLdb(connectionString string) error {
 	if err := n.initializePolicyTable(connectionString); err != nil {
 		return err
 	}
-	
+
 	// Client table
 	if err := n.initializeDatasetCheckoutTable(connectionString); err != nil {
 		return err
 	}
 
-	return nil 
+	return nil
 }
 
 // Creates the table in the database that assigns policies to datasets
@@ -101,7 +100,7 @@ func (n *Node) initializeDatasetCheckoutTable(connectionString string) error {
 	return nil
 }
 
-// Creates the schema, given the connection string 
+// Creates the schema, given the connection string
 func (n *Node) createSchema(connectionString string) error {
 	log.Println("connectionString:", connectionString)
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
@@ -134,7 +133,7 @@ func (n *Node) dbSetObjectPolicy(datasetId, allowed string) error {
 
 	_, err := n.policyDB.Exec(q, datasetId, allowed)
 	if err != nil {
-  		log.Warnln("SQL insert error:", err.Error())
+		log.Warnln("SQL insert error:", err.Error())
 	}
 	return nil
 }
@@ -145,15 +144,15 @@ func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetPolicyTable + ` WHERE dataset_id = $1;`
 
 	var id, dataset_id, allowed string
-	
+
 	row := n.policyDB.QueryRow(q, datasetId)
 	switch err := row.Scan(&id, &dataset_id, &allowed); err {
-		case sql.ErrNoRows:
-			fmt.Println("No rows were returned!")
-		case nil:
-			return allowed, nil
-		default:
-		  	return "", err
+	case sql.ErrNoRows:
+		fmt.Println("No rows were returned!")
+	case nil:
+		return allowed, nil
+	default:
+		return "", err
 	}
 	return "", nil
 }
@@ -172,7 +171,7 @@ func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
 }*/
 
 /* Returns true if the dataset is publicly available, returns false otherwise.
- * Note: this function looks for the "allowed" attribute only. We need to find a better way to specify policies. 
+ * Note: this function looks for the "allowed" attribute only. We need to find a better way to specify policies.
  */
 func (n *Node) dbDatasetIsAvailable(id string) bool {
 	var allowed bool
@@ -186,7 +185,7 @@ func (n *Node) dbDatasetIsAvailable(id string) bool {
 	return allowed
 }
 
-// Returns true if the given data object is registered in the database, 
+// Returns true if the given data object is registered in the database,
 // returns false otherwise.
 func (n *Node) dbDatasetExists(id string) bool {
 	var exists bool
@@ -198,19 +197,19 @@ func (n *Node) dbDatasetExists(id string) bool {
 	return exists
 }
 
-// Returns a (client, dataset, timestamp) tuple that shows the name of the client that checked out 
+// Returns a (client, dataset, timestamp) tuple that shows the name of the client that checked out
 // the daataset at the timestamp (point in time)
 /*func (n *Node) dbGetDatasetCheckout(id string) (string, string, string, error) {
-	
+
 }*/
 
-// Returns a list of records displaying the dataset being checked out and 
+// Returns a list of records displaying the dataset being checked out and
 func (n *Node) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE dataset_id='` + id + `';`
 
 	rows, err := n.clientCheckoutTable.Query(q)
 	if err != nil {
-  		log.Errorln(err.Error())
+		log.Errorln(err.Error())
 		return nil, err
 	}
 	defer rows.Close()
@@ -218,25 +217,25 @@ func (n *Node) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 	arr := make([]CheckoutInfo, 0)
 
 	for rows.Next() {
-    	var id, clientId, clientName, datasetId, timestamp string
-    	if err := rows.Scan(&id, &clientId, &clientName, &datasetId, &timestamp); err != nil {
+		var id, clientId, clientName, datasetId, timestamp string
+		if err := rows.Scan(&id, &clientId, &clientName, &datasetId, &timestamp); err != nil {
 			panic(err)
 			log.Errorln(err.Error())
-            return nil, err
-    	}
+			return nil, err
+		}
 
 		c := CheckoutInfo{
-			ClientId: clientId,
+			ClientId:   clientId,
 			ClientName: clientName,
-			DatasetId: datasetId,
-			Timestamp: timestamp,
+			DatasetId:  datasetId,
+			Timestamp:  timestamp,
 		}
 
 		arr = append(arr, c)
 	}
 	if err := rows.Err(); err != nil {
 		log.Errorln(err.Error())
-	    return nil, err
+		return nil, err
 	}
 	return arr, nil
 }
@@ -252,7 +251,7 @@ func (n *Node) dbDatasetIsCheckedOutByClient(id string) bool {
 	return exists
 }
 
-// TODO: create a table for past checkouts and checkins 
+// TODO: create a table for past checkouts and checkins
 func (n *Node) dbCheckinDataset(id string) error {
 	q := `DELETE FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE
 		dataset_id='` + id + `';`
@@ -280,9 +279,9 @@ func (n *Node) dbCheckoutDataset(r *pb.DatasetRequest) error {
 
 	c := Client{}
 	if err := json.Unmarshal(s, &c); err != nil {
-    	return err
+		return err
 	}
-	
+
 	clientID := c.Oid
 	clientName := c.Name
 	doi := r.GetIdentifier()
@@ -303,7 +302,7 @@ func (n *Node) dbGetDatasetIdentifiers() ([]string, error) {
 
 	rows, err := n.clientCheckoutTable.Query(q)
 	if err != nil {
-  		log.Errorln(err.Error())
+		log.Errorln(err.Error())
 		return nil, err
 	}
 	defer rows.Close()
@@ -311,20 +310,20 @@ func (n *Node) dbGetDatasetIdentifiers() ([]string, error) {
 	arr := make([]string, 0)
 
 	for rows.Next() {
-    	var id, datasetId, allowed string
-    	if err := rows.Scan(&id, &datasetId, &allowed); err != nil {
+		var id, datasetId, allowed string
+		if err := rows.Scan(&id, &datasetId, &allowed); err != nil {
 			panic(err)
 			log.Errorln(err.Error())
-            return nil, err
-    	}
+			return nil, err
+		}
 
 		arr = append(arr, datasetId)
 	}
 	if err := rows.Err(); err != nil {
 		log.Errorln(err.Error())
-	    return nil, err
+		return nil, err
 	}
-	
+
 	return arr, nil
 }
 
@@ -339,7 +338,7 @@ func (n *Node) dbResetDatasetIdentifiers() error {
 	}
 
 	// Reset squence counter
-	q = `ALTER SEQUENCE ` + schemaName + `.policy_table_id_seq RESTART WITH 1;`// UPDATE ` + schemaName + `.` + datasetPolicyTable + ` SET id = DEFAULT;`
+	q = `ALTER SEQUENCE ` + schemaName + `.policy_table_id_seq RESTART WITH 1;` // UPDATE ` + schemaName + `.` + datasetPolicyTable + ` SET id = DEFAULT;`
 	_, err = n.policyDB.Exec(q)
 	if err != nil {
 		log.Errorln(err.Error())

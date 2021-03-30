@@ -1,31 +1,28 @@
 package directoryserver
 
 import (
-	"context"
-	"strconv"
 	"bytes"
-	"fmt"
-	"net/http"
-	"time"
-	"errors"
-	"strings"
+	"context"
 	"encoding/json"
-
-	"github.com/gorilla/mux"
+	"errors"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
-	//"github.com/dgrijalva/jwt-go"
+	"github.com/gorilla/mux"
+	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jws"
-	"github.com/lestrrat-go/jwx/jwa"
-
 	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type azureConfig struct {
-	appId string // Validate me!
+	appId  string // Validate me!
 	issuer string // Validate me?
-	nonce string // Validate me!
-	roles []string
+	nonce  string // Validate me!
+	roles  []string
 }
 
 func (d *DirectoryServer) startHttpServer(addr string) error {
@@ -34,22 +31,22 @@ func (d *DirectoryServer) startHttpServer(addr string) error {
 
 	// Main dataset router exposed to the clients
 	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
-	dRouter.HandleFunc("/ids", m.getNetworkDatasetIdentifiers).Methods("GET")
-	dRouter.HandleFunc("/metadata/{id:.*}", m.getDatasetMetadata).Methods("GET")
-	dRouter.HandleFunc("/data/{id:.*}", m.getDataset).Methods("GET")
-	dRouter.HandleFunc("/verify/{id:.*}", m.getDatasetPolicyVerification).Methods("GET")
+	dRouter.HandleFunc("/ids", d.getNetworkDatasetIdentifiers).Methods("GET")
+	dRouter.HandleFunc("/metadata/{id:.*}", d.getDatasetMetadata).Methods("GET")
+	dRouter.HandleFunc("/data/{id:.*}", d.getDataset).Methods("GET")
+	dRouter.HandleFunc("/verify/{id:.*}", d.getDatasetPolicyVerification).Methods("GET")
 
 	// Middlewares used for validation
 	//dRouter.Use(d.middlewareValidateTokenSignature)
 	//dRouter.Use(d.middlewareValidateTokenClaims)
 
 	d.httpServer = &http.Server{
-		Addr: 		  	addr,
-		Handler:      	r,
-		WriteTimeout: 	time.Second * 30,
-		ReadTimeout:  	time.Second * 30,
-		IdleTimeout:  	time.Second * 60,
-		TLSConfig: 		comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d. cu.Priv()),
+		Addr:         addr,
+		Handler:      r,
+		WriteTimeout: time.Second * 30,
+		ReadTimeout:  time.Second * 30,
+		IdleTimeout:  time.Second * 60,
+		TLSConfig:    comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
 	}
 
 	if err := d.setPublicKeyCache(); err != nil {
@@ -64,30 +61,30 @@ func (d *DirectoryServer) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	d.ar = jwk.NewAutoRefresh(ctx)
+	d.pubKeyCache = jwk.NewAutoRefresh(ctx)
 	const msCerts = "https://login.microsoftonline.com/common/discovery/v2.0/keys" // TODO: config me
 
-	d.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
+	d.pubKeyCache.Configure(msCerts, jwk.WithRefreshInterval(time.Minute*5))
 
 	// Keep the cache warm
-	_, err := d.ar.Refresh(ctx, msCerts)
+	_, err := d.pubKeyCache.Refresh(ctx, msCerts)
 	if err != nil {
 		log.Println("Failed to refresh Microsoft Azure JWKS")
 		return err
 	}
-	return nil 
+	return nil
 }
 
 func (d *DirectoryServer) middlewareValidateTokenSignature(next http.Handler) http.Handler {
-	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		
+
 		if err := d.validateTokenSignature(token); err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -96,7 +93,7 @@ func (d *DirectoryServer) middlewareValidateTokenSignature(next http.Handler) ht
 }
 
 func (d *DirectoryServer) middlewareValidateTokenClaims(next http.Handler) http.Handler {
-	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// TODO: parse the claims in the access token
 		// Return error if there are any mismatches. Call next.ServeHTTP(w, r) otherwise
 		log.Println("in middlewareValidateTokenClaims")
@@ -111,7 +108,7 @@ func (d *DirectoryServer) validateTokenSignature(token []byte) error {
 
 	// TODO: fetch keys again if it fails
 	// TODO: add clock skew. Use jwt.WithAcceptableSkew
-	set, err := d.ar.Fetch(ctx, "https://login.microsoftonline.com/common/discovery/v2.0/keys")
+	set, err := d.pubKeyCache.Fetch(ctx, "https://login.microsoftonline.com/common/discovery/v2.0/keys")
 	if err != nil {
 		return err
 	}
@@ -129,7 +126,7 @@ func (d *DirectoryServer) validateTokenSignature(token []byte) error {
 	// Fetching it again will guarantee a best-effort to verify the request.
 	/*ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// This doesn't work!
 	// TODO: this doesn't work
 	set, err := d.ar.Refresh(ctx, msCerts)
@@ -179,11 +176,11 @@ func (d *DirectoryServer) shutdownHttpServer() {
 func (d *DirectoryServer) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
-//	defer cancel()
+	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
+	//	defer cancel()
 
 	// Destination struct
-	resp := struct  {
+	resp := struct {
 		Identifiers []string
 	}{
 		Identifiers: make([]string, 0),
@@ -192,7 +189,7 @@ func (d *DirectoryServer) getNetworkDatasetIdentifiers(w http.ResponseWriter, r 
 	for id := range d.memCache.DatasetNodes() {
 		resp.Identifiers = append(resp.Identifiers, id)
 	}
-	
+
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
 		log.Errorln(err.Error())
@@ -205,9 +202,9 @@ func (d *DirectoryServer) getNetworkDatasetIdentifiers(w http.ResponseWriter, r 
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
-	if err != nil { 
+	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -219,11 +216,11 @@ func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Re
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
 		errMsg := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + errMsg.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
 		return
 	}
-	
-	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second * 10))
+
+	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second*10))
 	defer cancel()
 
 	doneChan := make(chan bool)
@@ -234,7 +231,7 @@ func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Re
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
@@ -251,7 +248,7 @@ func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Re
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Length", strconv.Itoa(len(md)))
 		w.Write(md)
-		doneChan <-true
+		doneChan <- true
 	}()
 
 	select {
@@ -268,19 +265,19 @@ func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Re
 func (d *DirectoryServer) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute * 5))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute*5))
 	defer cancel()
 
 	token, err := getBearerToken(req)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	dataset := mux.Vars(req)["id"]
 	if dataset == "" {
 		err := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -288,29 +285,29 @@ func (d *DirectoryServer) getDataset(w http.ResponseWriter, req *http.Request) {
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
-	}	
+	}
 
 	d.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
 }
 
-func (m *Mux) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServer) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
 		err := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	isInvalidated:= m.datasetIsInvalidated(dataset)
+	isInvalidated := d.datasetIsInvalidated(dataset)
 	b := new(bytes.Buffer)
-	c := struct{
+	c := struct {
 		IsInvalidated bool
 	}{
-		IsInvalidated: isInvalidated,	
+		IsInvalidated: isInvalidated,
 	}
 
 	if err := json.NewEncoder(b).Encode(c); err != nil {
@@ -324,10 +321,9 @@ func (m *Mux) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Reques
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
-	if err != nil { 
+	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
-

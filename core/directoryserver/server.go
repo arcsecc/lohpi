@@ -1,19 +1,17 @@
 package directoryserver
 
 import (
-	"log"
 	"crypto/ecdsa"
 	"crypto/x509"
 	"errors"
+	"github.com/arcsecc/lohpi/core/comm"
+	pb "github.com/arcsecc/lohpi/protobuf"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
+	"log"
 	"net"
 	"time"
-
-
-	"github.com/arcsecc/lohpi/core/comm"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/credentials"
-	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 var (

@@ -1,24 +1,24 @@
 package policy
 
 import (
-	"fmt"
 	"bytes"
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"errors"
-	log "github.com/sirupsen/logrus"
-	pb "github.com/arcsecc/lohpi/protobuf"
-	"net/http"
-	"github.com/arcsecc/lohpi/core/util"
-	"time"
-	"github.com/lestrrat-go/jwx/jws"
-	"github.com/lestrrat-go/jwx/jwa"
-	"github.com/gorilla/mux"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/util"
+	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/gorilla/mux"
+	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwk"
-	"strconv"
+	"github.com/lestrrat-go/jwx/jws"
 	"github.com/rs/cors"
+	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func (ps *PolicyStore) startHttpServer(addr string) error {
@@ -33,12 +33,12 @@ func (ps *PolicyStore) startHttpServer(addr string) error {
 	handler := cors.AllowAll().Handler(m)
 
 	ps.httpServer = &http.Server{
-		Addr: 		  	addr,
-		Handler:      	handler,
-		WriteTimeout: 	time.Second * 30,
-		ReadTimeout:  	time.Second * 30,
-		IdleTimeout:  	time.Second * 60,
-		TLSConfig: 		comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.Priv()),
+		Addr:         addr,
+		Handler:      handler,
+		WriteTimeout: time.Second * 30,
+		ReadTimeout:  time.Second * 30,
+		IdleTimeout:  time.Second * 60,
+		TLSConfig:    comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.Priv()),
 	}
 
 	//router.Use(ps.middlewareValidateTokenSignature)
@@ -59,7 +59,7 @@ func (ps *PolicyStore) setPublicKeyCache() error {
 	ps.ar = jwk.NewAutoRefresh(ctx)
 	const msCerts = "https://login.microsoftonline.com/common/discovery/v2.0/keys" // TODO: config me
 
-	ps.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
+	ps.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute*5))
 
 	// Keep the cache warm
 	_, err := ps.ar.Refresh(ctx, msCerts)
@@ -67,26 +67,25 @@ func (ps *PolicyStore) setPublicKeyCache() error {
 		log.Println("Failed to refresh Microsoft Azure JWKS")
 		return err
 	}
-	return nil 
+	return nil
 }
 
 func (ps *PolicyStore) middlewareValidateTokenSignature(next http.Handler) http.Handler {
-	return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		
+
 		if err := ps.validateTokenSignature(token); err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
 }
-
 
 func (ps *PolicyStore) validateTokenSignature(token []byte) error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,7 +111,7 @@ func (ps *PolicyStore) validateTokenSignature(token []byte) error {
 	// Fetching it again will guarantee a best-effort to verify the request.
 	/*ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	// This doesn't work!
 	// TODO: this doesn't work
 	set, err := m.ar.Refresh(ctx, msCerts)
@@ -133,7 +132,6 @@ func (ps *PolicyStore) validateTokenSignature(token []byte) error {
 	return errors.New("Could not verify token")
 }
 
-
 func getBearerToken(r *http.Request) ([]byte, error) {
 	authHeader := r.Header.Get("Authorization")
 	authHeaderContent := strings.Split(authHeader, " ")
@@ -145,11 +143,11 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 
 // Returns the dataset identifiers stored in the network
 func (ps *PolicyStore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
-	log.Infoln("Got request to", r.URL.String())	
+	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
 	respBody := struct {
-		Identifiers []string 
+		Identifiers []string
 	}{
 		Identifiers: make([]string, 0),
 	}
@@ -170,23 +168,23 @@ func (ps *PolicyStore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Requ
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
-	if err != nil { 
+	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
 // Returns the policy associated with the dataset
 func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
-	log.Infoln("Got request to", r.URL.String())	
+	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
 	datasetId := mux.Vars(r)["id"]
 	if datasetId == "" {
 		err := errors.New("Missing dataset identifier")
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -195,12 +193,12 @@ func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
 	// Destination struct
-	resp := struct  {
+	resp := struct {
 		Policy string
 	}{}
 
@@ -218,9 +216,9 @@ func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
-	if err != nil { 
+	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -229,22 +227,22 @@ func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 func (ps *PolicyStore) getDatasetMetadata(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
-	
+
 	err := errors.New("getDatasetMetadata is not implemented")
 	log.Warnln(err.Error())
-	http.Error(w, http.StatusText(http.StatusNotImplemented) + ": " + err.Error(), http.StatusNotImplemented)
+	http.Error(w, http.StatusText(http.StatusNotImplemented)+": "+err.Error(), http.StatusNotImplemented)
 }
 
 // Assigns a new policy to the dataset
 func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
-	log.Infoln("Got request to", r.URL.String())	
+	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
 	datasetId := mux.Vars(r)["id"]
 	if datasetId == "" {
 		err := errors.New("Missing dataset identifier")
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -253,12 +251,12 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
 	// Destination struct. Require only booleans for now
-	reqBody := struct  {
+	reqBody := struct {
 		Policy bool
 	}{}
 
@@ -275,17 +273,17 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policy := &pb.Policy{
-		Issuer: ps.name,
+		Issuer:           ps.name,
 		ObjectIdentifier: datasetId,
-		Content: strconv.FormatBool(reqBody.Policy),
+		Content:          strconv.FormatBool(reqBody.Policy),
 	}
 
 	// Store the dataset entry
 	ps.addDatasetPolicy(datasetId, &datasetPolicyMapEntry{policy, datasetEntry.node})
-	
+
 	if err := ps.gitStorePolicy(datasetEntry.node, datasetId, policy); err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 

@@ -2,16 +2,16 @@ package cauth
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
-	"fmt"
 	"crypto/rsa"
-	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math/big"
@@ -169,7 +169,7 @@ func (c *Ca) Start(port int) error {
 
 func (c *Ca) Shutdown() {
 	log.Info("Shuting down Lohpi certificate authority")
-	
+
 	idleConnsClosed := make(chan struct{})
 	go func() {
 		// We received an interrupt signal, shut down.
@@ -189,9 +189,9 @@ func (c *Ca) httpHandler(addr string) error {
 	r.HandleFunc("/clientCertificateRequest", c.clientCertificateSigning).Methods("POST")
 
 	c.httpServer = &http.Server{
-		Addr: 			addr,
-		Handler:     	r,
-		ReadTimeout: 	time.Second * 10,
+		Addr:        addr,
+		Handler:     r,
+		ReadTimeout: time.Second * 10,
 	}
 
 	return c.httpServer.ListenAndServe()

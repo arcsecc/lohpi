@@ -50,6 +50,7 @@ func main() {
 			Name: psConfig.Name,
 			Host: psConfig.Host,
 			Port: psConfig.Port,
+			GossipInterval: psConfig.GossipInterval,
 			GRPCPort: psConfig.GRPCPort,
 			MulticastAcceptanceLevel: psConfig.MulticastAcceptanceLevel,
 			MuxAddress: psConfig.MuxAddress,

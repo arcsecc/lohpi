@@ -1,29 +1,29 @@
 package session
 
 import (
-	"errors"
-	"encoding/base64"
 	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	"io"
 	"sync"
-	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 type Manager struct {
-	clients 	map[string]*Entry
-	lock        sync.RWMutex // protects session
+	clients map[string]*Entry
+	lock    sync.RWMutex // protects session
 }
 
 // Entry used to keep track of who accesses what
 type Entry struct {
-	Client *pb.Client
+	Client    *pb.Client
 	sessionId string
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		clients: make(map[string]*Entry),
-		lock:	sync.RWMutex{},
+		lock:    sync.RWMutex{},
 	}
 }
 
@@ -38,7 +38,7 @@ func (m *Manager) CheckoutObjct(objectId string, e *Entry) error {
 
 	e.sessionId = sessionId()
 	m.clients[objectId] = e
-	return nil 
+	return nil
 }
 
 func (m *Manager) AddClient(clientId string, c *pb.Client) error {

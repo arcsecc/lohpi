@@ -1,17 +1,17 @@
 package policy
 
 import (
-	"io/ioutil"
-	"fmt"
-	"strings"
 	"errors"
-	"path/filepath"
-	"os"
-	log "github.com/sirupsen/logrus"
+	"fmt"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	log "github.com/sirupsen/logrus"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
-	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 // Sets up the Git resources in an already-existing Git repository
@@ -52,10 +52,10 @@ func (ps *PolicyStore) gitStorePolicy(nodeIdentifier, datasetIdentifier string, 
 	return nil
 }
 
-// Writes the given policy store 
+// Writes the given policy store
 func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error {
 	// Check if directory exists for the given study and subject
-	// Use "git-repo/study/subject/policy/policy.conf" paths 
+	// Use "git-repo/study/subject/policy/policy.conf" paths
 	ok, err := exists(ps.config.PolicyStoreGitRepository)
 	if err != nil {
 		log.Fatalf(err.Error())
@@ -74,10 +74,10 @@ func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error
 	err = os.Chdir(ps.config.PolicyStoreGitRepository)
 	if err != nil {
 		log.Fatalf(err.Error())
-    	return err
+		return err
 	}
 
-	// Create new directory for the node. We  require the tree structure 
+	// Create new directory for the node. We  require the tree structure
 	// to be in the form <storage node>/<dataset identifer>.
 	if err := os.MkdirAll(nodeIdentifier, os.ModePerm); err != nil {
 		log.Errorln(err.Error())
@@ -101,7 +101,7 @@ func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error
 	if ok {
 		f, err = os.OpenFile(fPath, os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
-	    	log.Errorln(err.Error())
+			log.Errorln(err.Error())
 			return err
 		}
 
@@ -112,7 +112,7 @@ func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error
 	} else {
 		f, err = os.OpenFile(fPath, os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-	    	log.Errorln(err.Error())
+			log.Errorln(err.Error())
 			return err
 		}
 
@@ -135,7 +135,7 @@ func (ps *PolicyStore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) erro
 	// Change cwd to gir repo
 	err := os.Chdir(ps.config.PolicyStoreGitRepository)
 	if err != nil {
-    	panic(err)
+		panic(err)
 	}
 
 	// Get the current worktree
@@ -173,12 +173,12 @@ func (ps *PolicyStore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) erro
 		Author: &object.Signature{
 			Name: p.GetIssuer(),
 			//Email: "john@doe.org",
-			When:  time.Now(),
+			When: time.Now(),
 		},
 		Committer: &object.Signature{
 			Name: "Policy store",
 			//Email: "john@doe.org",
-			When:  time.Now(),
+			When: time.Now(),
 		},
 	})
 
@@ -212,7 +212,7 @@ func (ps *PolicyStore) gitDatasetExists(nodeIdentifier, datasetId string) bool {
 	err = os.Chdir(ps.config.PolicyStoreGitRepository)
 	if err != nil {
 		log.Errorln(err.Error())
-    	return false
+		return false
 	}
 
 	// Special case: replace '/' by '_'
@@ -246,7 +246,7 @@ func (ps *PolicyStore) gitGetDatasetPolicy(nodeIdentifier, datasetId string) (st
 	err = os.Chdir(ps.config.PolicyStoreGitRepository)
 	if err != nil {
 		log.Errorln(err.Error())
-    	return "", err
+		return "", err
 	}
 
 	// Special case: replace '/' by '_'

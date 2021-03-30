@@ -2,25 +2,23 @@ package node
 
 import (
 	"context"
-	"database/sql"
 	"crypto/x509/pkix"
-	"os"
-_	"net/url"
+	"database/sql"
 	"fmt"
-	"net"
-	"net/http"
-	"sync"
-	"time"
-
+	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/keyvault"
+	"github.com/arcsecc/lohpi/core/message"
+	"github.com/arcsecc/lohpi/core/netutil"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
 	"github.com/pkg/errors"
-	"github.com/arcsecc/lohpi/core/comm"
-	"github.com/arcsecc/lohpi/core/message"
-	"github.com/arcsecc/lohpi/core/netutil"
-	"github.com/arcsecc/lohpi/core/keyvault"
-	pb "github.com/arcsecc/lohpi/protobuf"
 	log "github.com/sirupsen/logrus"
+	"net"
+	"net/http"
+	"os"
+	"sync"
+	"time"
 )
 
 var (
@@ -28,16 +26,16 @@ var (
 )
 
 type Config struct {
-	Port				int 		`default:"8090"`
-	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
-	MuxAddr				string		`default:"127.0.1.1:8081"`
-	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	AzureKeyVaultName 	string 		`required:true`
-	AzureKeyVaultSecret	string		`required:true`
-	AzureClientSecret	string 		`required:true`
-	AzureClientId		string		`required:true`
-	AzureTenantId		string		`required:true`
-	AzureKeyVaultBaseURL string		`required:true`
+	Port                 int    `default:"8090"`
+	PolicyStoreAddr      string `default:"127.0.1.1:8084"`
+	MuxAddr              string `default:"127.0.1.1:8081"`
+	LohpiCaAddr          string `default:"127.0.1.1:8301"`
+	AzureKeyVaultName    string `required:true`
+	AzureKeyVaultSecret  string `required:true`
+	AzureClientSecret    string `required:true`
+	AzureClientId        string `required:true`
+	AzureTenantId        string `required:true`
+	AzureKeyVaultBaseURL string `required:true`
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -59,14 +57,14 @@ type ExternalDataset struct {
 
 type ObjectPolicy struct {
 	Attribute string
-	Value string
+	Value     string
 }
 
 // Used to configure the time intervals between each fetching of the identifiers of the dataset.
-// You really should use this config to enable a push-based approach. 
+// You really should use this config to enable a push-based approach.
 type RefreshConfig struct {
 	RefreshInterval time.Duration
-	URL string
+	URL             string
 }
 
 // Policy assoicated with metadata
@@ -94,7 +92,7 @@ type Node struct {
 	config *Config
 
 	// gRPC client towards the Mux
-	muxClient *comm.MuxGRPCClient
+	muxClient *comm.DirectoryGRPCClient
 
 	// Policy store
 	psClient *comm.PolicyStoreGRPCClient
@@ -119,20 +117,20 @@ type Node struct {
 	externalMetadataHandlerLock sync.RWMutex
 
 	refreshConfigLock sync.RWMutex
-	refreshConfig RefreshConfig
+	refreshConfig     RefreshConfig
 
 	// If true, callbaks used for remote resources are invoked.
 	// If false, only in-memory maps are used for query processing.
 	useRemoteURL bool
 
-	// If true, use in-memory maps. Only use remote URL when absolutely 
+	// If true, use in-memory maps. Only use remote URL when absolutely
 	// nescessary (ie. missing results)
 	useCache bool
 
 	// Azure database
 	clientCheckoutTable *sql.DB
-	policyDB *sql.DB
-	policyIdentifier string
+	policyDB            *sql.DB
+	policyIdentifier    string
 
 	// Key vault manager
 	kvClient *keyvault.KeyVaultClient
@@ -140,9 +138,9 @@ type Node struct {
 
 // Database-related consts
 var (
-	dbName = "nodepolicydb" // change me to nodedb
-	schemaName = "nodedbschema" 
-	datasetPolicyTable = "policy_table"
+	dbName               = "nodepolicydb" // change me to nodedb
+	schemaName           = "nodedbschema"
+	datasetPolicyTable   = "policy_table"
 	datasetCheckoutTable = "dataset_checkout_table"
 )
 
@@ -153,7 +151,7 @@ func NewNode(name string, config *Config) (*Node, error) {
 	}
 
 	go ifritClient.Start()
-	
+
 	httpListener, err := netutil.GetListener()
 	if err != nil {
 		return nil, err
@@ -180,45 +178,45 @@ func NewNode(name string, config *Config) (*Node, error) {
 	}
 
 	kvClientConfig := keyvault.KeyVaultClientConfig{
-		ClientID: config.AzureClientId,
+		ClientID:     config.AzureClientId,
 		ClientSecret: config.AzureClientSecret,
-		TenantID: config.AzureTenantId,
-		BaseURL: config.AzureKeyVaultBaseURL,
-		SecretName: config.AzureKeyVaultSecret,
+		TenantID:     config.AzureTenantId,
+		BaseURL:      config.AzureKeyVaultBaseURL,
+		SecretName:   config.AzureKeyVaultSecret,
 	}
 
 	keyClient, err := keyvault.NewKeyVaultClient(kvClientConfig)
 	if err != nil {
 		log.Errorf(err.Error())
-		return nil, err 
+		return nil, err
 	}
 
 	node := &Node{
-		name:        		name,
-		ifritClient: 		ifritClient,
-		muxClient:   		muxClient,
-		config:      		config,
-		psClient:    		psClient,
-		httpListener:      	httpListener,
-		cu: cu,
+		name:         name,
+		ifritClient:  ifritClient,
+		muxClient:    muxClient,
+		config:       config,
+		psClient:     psClient,
+		httpListener: httpListener,
+		cu:           cu,
 
-		datasetMap:     	make(map[string]struct{}),
-		datasetMapLock: 	sync.RWMutex{},
-		kvClient: 			keyClient,
+		datasetMap:     make(map[string]struct{}),
+		datasetMapLock: sync.RWMutex{},
+		kvClient:       keyClient,
 	}
 
 	// Create the database if needed
 	if err := node.initializePolicyDb(); err != nil {
 		log.Errorf(err.Error())
-		return nil, err 
+		return nil, err
 	}
 
-	// Remove all stale identifiers since the last run. This will remove all the identifiers 
-	// from the table. The node cannot host datasets that have been removed from the remote location 
-	// since it last ran. 
+	// Remove all stale identifiers since the last run. This will remove all the identifiers
+	// from the table. The node cannot host datasets that have been removed from the remote location
+	// since it last ran.
 	if err := node.dbResetDatasetIdentifiers(); err != nil {
 		log.Errorf(err.Error())
-		return nil, err 
+		return nil, err
 	}
 
 	return node, nil
@@ -243,14 +241,14 @@ func (n *Node) InitializeLogfile(logToFile bool) error {
 		log.Infoln("Setting logs to standard output")
 		log.SetOutput(os.Stdout)
 	}
-	
+
 	return nil
 }
 
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
-// All policies have a default value of nil, which leads to client requests being rejected. You must call this method to 
-// make the dataset available to the clients by fetching the latest dataset. The call will block until a context timeout or 
+// All policies have a default value of nil, which leads to client requests being rejected. You must call this method to
+// make the dataset available to the clients by fetching the latest dataset. The call will block until a context timeout or
 // the policy is applied to the dataset. Dataset identifiers that have not been passed to this method will not
 // be available to clients.
 func (n *Node) IndexDataset(id string, ctx context.Context) error {
@@ -282,7 +280,7 @@ func (n *Node) IndexDataset(id string, ctx context.Context) error {
 // Requests the newest policy from the policy store
 func (n *Node) pbRequestPolicy(id string) error {
 	msg := &pb.Message{
-		Type: message.MSG_TYPE_GET_DATASET_POLICY,
+		Type:   message.MSG_TYPE_GET_DATASET_POLICY,
 		Sender: n.pbNode(),
 		PolicyRequest: &pb.PolicyRequest{
 			Identifier: id,
@@ -344,8 +342,8 @@ func (n *Node) pbRequestPolicy(id string) error {
 
 func (n *Node) sendDatsetIdentifier(id, recipient string) error {
 	msg := &pb.Message{
-		Type: message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
-		Sender: n.pbNode(),
+		Type:        message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
+		Sender:      n.pbNode(),
 		StringValue: id,
 	}
 
@@ -395,7 +393,6 @@ func (n *Node) initializePolicyDb() error {
 		return errors.New("Connection string from Azure Key Vault is empty")
 	}
 
-
 	return n.initializePostgreSQLdb(resp.Value)
 }
 
@@ -420,10 +417,10 @@ func (n *Node) JoinNetwork() error {
 	}
 
 	go n.startHttpServer(fmt.Sprintf(":%d", n.config.Port))
-	
+
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
-//	n.ifritClient.RegisterStreamHandler(n.streamHandler)
+	//	n.ifritClient.RegisterStreamHandler(n.streamHandler)
 
 	return nil
 }
@@ -460,10 +457,10 @@ func (n *Node) muxHandshake() error {
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
-		Name:    n.name,
+		Name:         n.name,
 		IfritAddress: n.ifritClient.Addr(),
-		Role:    "Storage node",
-		Id:      []byte(n.ifritClient.Id()),
+		Role:         "Storage node",
+		Id:           []byte(n.ifritClient.Id()),
 	})
 	if err != nil {
 		log.Fatalln(err)
@@ -487,10 +484,10 @@ func (n *Node) policyStoreHandshake() error {
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
-		Name:    n.name,
+		Name:         n.name,
 		IfritAddress: n.ifritClient.Addr(),
-		Role:    "Storage node",
-		Id:      []byte(n.ifritClient.Id()),
+		Role:         "Storage node",
+		Id:           []byte(n.ifritClient.Id()),
 	})
 	if err != nil {
 		return err
@@ -561,7 +558,7 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 		// gossip
 		log.Infoln("Got new policy batch from policy store")
 		return n.processPolicyBatch(msg)
-	
+
 	case message.MSG_TYPE_ROLLBACK_CHECKOUT:
 		n.rollbackCheckout(msg)
 
@@ -590,8 +587,8 @@ func (n *Node) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 		return nil, err
 	}
 
-	gspMsg := msg.GetGossipMessage() 
-	
+	gspMsg := msg.GetGossipMessage()
+
 	if gspMsg.GetGossipMessageBody() == nil {
 		err := errors.New("Gossip message body is nil")
 		log.Fatalln(err.Error())
@@ -619,10 +616,10 @@ func (n *Node) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 // Only disallow permissions for now
 func (n *Node) notifyPolicyChangeToDirectoryServer(dataset string) {
 	msg := &pb.Message{
-		Type: message.MSG_POLICY_REVOKE,
-		Sender: n.pbNode(),
+		Type:        message.MSG_POLICY_REVOKE,
+		Sender:      n.pbNode(),
 		StringValue: dataset,
-		BoolValue: false,
+		BoolValue:   false,
 	}
 
 	data, err := proto.Marshal(msg)
@@ -657,8 +654,8 @@ func (n *Node) isCheckedOutByClient(dataset string) bool {
 	return n.dbDatasetIsCheckedOutByClient(dataset)
 }
 
-// TODO: match the required access credentials of the dataset to the 
-// access attributes of the client. Return true if the client can access the data, 
+// TODO: match the required access credentials of the dataset to the
+// access attributes of the client. Return true if the client can access the data,
 // return false otherwise. Also, verify that all the fields are present
 func (n *Node) clientIsAllowed(r *pb.DatasetRequest) bool {
 	if r == nil {
@@ -669,11 +666,11 @@ func (n *Node) clientIsAllowed(r *pb.DatasetRequest) bool {
 	return n.dbDatasetIsAvailable(r.GetIdentifier())
 }
 
-// Returns a message notifying the recipient that the data request was unauthorized. 
+// Returns a message notifying the recipient that the data request was unauthorized.
 func (n *Node) unauthorizedAccess(errorMsg string) ([]byte, error) {
 	respMsg := &pb.Message{
 		DatasetResponse: &pb.DatasetResponse{
-			IsAllowed: false,
+			IsAllowed:    false,
 			ErrorMessage: errorMsg,
 		},
 	}
@@ -706,7 +703,7 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 
 		respMsg := &pb.Message{
 			DatasetResponse: &pb.DatasetResponse{
-				URL: externalArchive.URL,
+				URL:       externalArchive.URL,
 				IsAllowed: true,
 			},
 		}
@@ -729,7 +726,7 @@ func (n *Node) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
 		log.Println("Dataset archive handler not registered")
 	}
 
-	return nil, nil 
+	return nil, nil
 }
 
 // TODO: consider abandoning fetchting the metadata url at each request and index it at the node instead
@@ -745,7 +742,7 @@ func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 
 		respMsg := &pb.Message{
 			StringValue: metadataUrl.URL,
-			Sender: n.pbNode(),
+			Sender:      n.pbNode(),
 		}
 
 		data, err := proto.Marshal(respMsg)
@@ -758,22 +755,22 @@ func (n *Node) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
 		if err != nil {
 			log.Errorln(err.Error())
 			return nil, err
-		
+
 		}
-	
+
 		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
 		return proto.Marshal(respMsg)
 	} else {
 		log.Warnln("ExternalMetadataHandler is not set")
 	}
 
-	return nil, nil 
+	return nil, nil
 }
 
 func (n *Node) pbDatasetExists(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{}
 	respMsg.BoolValue = n.datasetExists(msg.GetStringValue())
-	
+
 	data, err := proto.Marshal(respMsg)
 	if err != nil {
 		log.Errorln(err.Error())
@@ -794,7 +791,7 @@ func (n *Node) pbDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{
 		StringSlice: n.datasetIdentifiers(),
 	}
-	
+
 	data, err := proto.Marshal(respMsg)
 	if err != nil {
 		log.Errorln(err.Error())
@@ -836,10 +833,9 @@ func (n *Node) gossipHandler(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Might need to move this one? check type!
-	/*if err := n.verifyPolicyStoreMessage(msg); err != nil {
-		log.Fatalf(err.Error())
-	}*/
+	if err := n.verifyPolicyStoreMessage(msg); err != nil {
+		log.Warnln(err.Error())
+	}
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_PROBE:
@@ -884,10 +880,10 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	resp := &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
 		Sender: &pb.Node{
-			Name:    n.name,
+			Name:         n.name,
 			IfritAddress: n.ifritClient.Addr(),
-			Role:    "Storage node",
-			Id:      []byte(n.ifritClient.Id()),
+			Role:         "Storage node",
+			Id:           []byte(n.ifritClient.Id()),
 		},
 		Probe: msg.GetProbe(),
 	}
@@ -915,6 +911,7 @@ func (n *Node) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	return nil, nil
 }
 
+// TODO remove me and use pbNode in ps gossip message instead
 func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
@@ -926,8 +923,6 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 		log.Errorln(err.Error())
 		return err
 	}
-
-	log.Println("string(n.policyStoreID);", string(n.policyStoreID))
 
 	if !n.ifritClient.VerifySignature(r, s, data, string(n.policyStoreID)) {
 		err := errors.New("Could not securely verify the integrity of the policy store message")
@@ -945,20 +940,17 @@ func (n *Node) verifyPolicyStoreMessage(msg *pb.Message) error {
 }
 
 func (n *Node) pbNode() *pb.Node {
-	log.Printf("Node ID: %s\n", string(n.ifritClient.Id()))
-
 	return &pb.Node{
-		Name:    n.NodeName(),
+		Name:         n.NodeName(),
 		IfritAddress: n.ifritClient.Addr(),
-		HttpAddress: n.httpListener.Addr().String(),
-		Role:    "storage node",
+		HttpAddress:  n.httpListener.Addr().String(),
+		Role:         "storage node",
 		//ContactEmail
 		Id: []byte(n.ifritClient.Id()),
 	}
 }
 
 func (n *Node) verifyMessageSignature(msg *pb.Message) error {
-	return nil
 	// Verify the integrity of the node
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()

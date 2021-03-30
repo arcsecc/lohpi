@@ -1,61 +1,54 @@
 package policy
 
 import (
-	"errors"
-	"time"
-	"fmt"
-_	"io/ioutil"
-	
-	log "github.com/sirupsen/logrus"
-	"os"
-	"sync"
-//	"math/rand"
 	"context"
-	"net"
-	"net/http"
-	"strconv"
-
 	"crypto"
 	"crypto/rsa"
 	"crypto/x509/pkix"
-
-	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/arcsecc/lohpi/core/comm"
+	"errors"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/cache"
+	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
-	"github.com/arcsecc/lohpi/core/policy/multicast"
 	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/policy/multicast"
 	pb "github.com/arcsecc/lohpi/protobuf"
-_	"google.golang.org/grpc/peer"
-
-	"github.com/golang/protobuf/proto"
 	"github.com/go-git/go-git/v5"
+	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
+	"github.com/lestrrat-go/jwx/jwk"
+	log "github.com/sirupsen/logrus"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"sync"
+	"time"
 )
 
 type Config struct {
 	// Policy store specific
-	Name						string 		`default:"Policy store"`
-	Host						string      `default:"127.0.1.1"`
-	BatchSize 					int 		`default:10`
-	GossipInterval				int 		`default:10`
-	Port						int 		`default:8083`
-	GRPCPort					int 		`default:8084`
-	MulticastAcceptanceLevel	float64		`default:0.5`
-	NumDirectRecipients			int			`default:"1"`
+	Name                     string  `default:"Policy store"`
+	Host                     string  `default:"127.0.1.1"`
+	BatchSize                int     `default:10`
+	GossipInterval           uint32  `default:10`
+	Port                     int     `default:8083`
+	GRPCPort                 int     `default:8084`
+	MulticastAcceptanceLevel float64 `default:0.5`
+	NumDirectRecipients      int     `default:"1"`
 
 	// Other parameters
-	MuxAddress					string		`default:"127.0.1.1:8081"`
-	LohpiCaAddr 				string		`default:"127.0.1.1:8301"`
-	RecIP 						string 		`default:"127.0.1.1:8084"`
-	PolicyStoreGitRepository  	string 		`required:"true`
+	MuxAddress               string `default:"127.0.1.1:8081"`
+	LohpiCaAddr              string `default:"127.0.1.1:8301"`
+	RecIP                    string `default:"127.0.1.1:8084"`
+	PolicyStoreGitRepository string `required:"true`
 }
 
 type PolicyStore struct {
 	name string
 
 	// Policy store's configuration
-	config Config
+	config     Config
 	configLock sync.RWMutex
 
 	// The underlying Fireflies client
@@ -70,9 +63,9 @@ type PolicyStore struct {
 	// Go-git
 	repository *git.Repository
 
-	// Sync 
-	exitChan 	chan bool
-	networkLock	sync.Mutex
+	// Sync
+	exitChan    chan bool
+	networkLock sync.Mutex
 
 	// Crypto
 	cu         *comm.CryptoUnit
@@ -89,9 +82,9 @@ type PolicyStore struct {
 	httpListener net.Listener
 	httpServer   *http.Server
 
-	// Datasets in the network 
+	// Datasets in the network
 	datasetPolicyMapLock sync.RWMutex
-	datasetPolicyMap map[string]*datasetPolicyMapEntry
+	datasetPolicyMap     map[string]*datasetPolicyMapEntry
 
 	// Fetch the JWK
 	ar *jwk.AutoRefresh
@@ -99,7 +92,7 @@ type PolicyStore struct {
 
 type datasetPolicyMapEntry struct {
 	policy *pb.Policy
-	node string
+	node   string
 }
 
 func NewPolicyStore(config Config) (*PolicyStore, error) {
@@ -124,7 +117,7 @@ func NewPolicyStore(config Config) (*PolicyStore, error) {
 
 	// Setup X509 parameters
 	pk := pkix.Name{
-		Locality: []string{listener.Addr().String()},
+		Locality:   []string{listener.Addr().String()},
 		CommonName: "Policy Store",
 	}
 
@@ -148,17 +141,17 @@ func NewPolicyStore(config Config) (*PolicyStore, error) {
 
 	// TODO: remove some of the variables into other interfaces/packages?
 	ps := &PolicyStore{
-		name:			"policy store", // TODO: more refined name. See X509 common name
-		ifritClient:  		ifritClient,
-		repository:   		repository,
-		exitChan:     		make(chan bool, 1),
-		memCache:        	memCache,
-		cu:           		cu,
-		grpcs:		  		s,
-		config: 			config,
-		configLock:			sync.RWMutex{},
+		name:             "policy store", // TODO: more refined name. See X509 common name
+		ifritClient:      ifritClient,
+		repository:       repository,
+		exitChan:         make(chan bool, 1),
+		memCache:         memCache,
+		cu:               cu,
+		grpcs:            s,
+		config:           config,
+		configLock:       sync.RWMutex{},
 		datasetPolicyMap: make(map[string]*datasetPolicyMapEntry),
-		multicastManager:	multicastManager,
+		multicastManager: multicastManager,
 	}
 
 	ps.grpcs.Register(ps)
@@ -176,28 +169,28 @@ func (ps *PolicyStore) Start() error {
 	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
 
 	log.Println("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
-	
-	multicastInterval := time.Duration(ps.config.GossipInterval)
+
+	multicastInterval := time.Duration(time.Duration(ps.config.GossipInterval) * time.Second)
 	mcTimer := time.NewTimer(multicastInterval)
 
-	// Main event loop for multicasting messages 
+	// Main event loop for multicasting messages
 	for {
 		select {
 		// When a probing session starts, it blocks the multicast timer from being reset.
 		// This allows us to run policy updates and probing in an orderly fashion
 		case <-mcTimer.C:
-			func (){
+			func() {
 				defer mcTimer.Reset(multicastInterval)
 
 				if ps.multicastManager.IsProbing() {
-					return				
+					return
 				}
-					
+
 				if err := ps.multicastManager.Multicast(
-						&multicast.Config{
-						Mode: multicast.RandomMembers, 
+					&multicast.Config{
+						Mode:    multicast.RandomMembers,
 						Members: ps.ifritMembersAddress(),
-				}); err != nil {
+					}); err != nil {
 					log.Println(err.Error())
 				}
 			}()
@@ -231,7 +224,7 @@ func (ps *PolicyStore) verifyMessageSignature(msg *pb.Message) error {
 	if err != nil {
 		log.Println(err.Error())
 		return err
-	}	
+	}
 
 	if !ps.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
 		return errors.New("Policy store could not securely verify the integrity of the message")
@@ -259,7 +252,7 @@ func (ps *PolicyStore) verifyPolicyStoreGossipSignature(msg *pb.Message) error {
 	if err != nil {
 		log.Println(err.Error())
 		return err
-	}	
+	}
 
 	if !ps.ifritClient.VerifySignature(r, s, data, string(ps.ifritClient.Id())) {
 		return errors.New("Policy store could not securely verify the gossip of the message")
@@ -274,9 +267,9 @@ func (ps *PolicyStore) verifyPolicyStoreGossipSignature(msg *pb.Message) error {
 	return nil
 }
 
-// Initializes a probing procedures that awaits for n acknowledgements 
+// Initializes a probing procedures that awaits for n acknowledgements
 // using the current network settings
-// TODO: fix queuing 
+// TODO: fix queuing
 func (ps *PolicyStore) probeHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if ps.multicastManager.IsProbing() {
@@ -312,7 +305,7 @@ func (ps *PolicyStore) Stop() {
 func (ps *PolicyStore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := ps.memCache.DatasetNodes()[node.GetName()]; !ok {
 		ps.memCache.AddNode(node.GetName(), node)
-		log.Infoln("Policy store added %s to map with Ifrit IP %s and HTTPS adrress %s\n", 
+		log.Infoln("Policy store added %s to map with Ifrit IP %s and HTTPS adrress %s\n",
 			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
 	} else {
 		return nil, fmt.Errorf("Policy store: node '%s' already exists in network\n", node.GetName())
@@ -342,7 +335,7 @@ func (ps *PolicyStore) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_PROBE_ACK:
 		//log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
 		//log.Println("MSG HANDLER IN PS:", msg)
-//		ps.multicastManager.RegisterProbeMessage(msg)
+		//		ps.multicastManager.RegisterProbeMessage(msg)
 
 	default:
 		fmt.Printf("Unknown message at policy store: %s\n", msgType)
@@ -366,7 +359,7 @@ func (ps *PolicyStore) gossipHandler(data []byte) ([]byte, error) {
 	if err := ps.verifyPolicyStoreGossipSignature(msg); err != nil {
 		return []byte{}, nil
 	}
-	
+
 	switch msgType := msg.GetType(); msgType {
 	case message.MSG_TYPE_PROBE:
 		ps.ifritClient.SetGossipContent(data)
@@ -386,7 +379,7 @@ func (ps *PolicyStore) pbRespondDatasetPolicy(nodeIdentifier string, policyReq *
 	}
 
 	resp := &pb.Message{
-		Sender: ps.pbNode(),
+		Sender:         ps.pbNode(),
 		PolicyResponse: &pb.PolicyResponse{},
 	}
 
@@ -402,21 +395,21 @@ func (ps *PolicyStore) pbRespondDatasetPolicy(nodeIdentifier string, policyReq *
 				panic(err)
 			}
 
-			policy = &pb.Policy {
-				Issuer: ps.name,
+			policy = &pb.Policy{
+				Issuer:           ps.name,
 				ObjectIdentifier: policyReq.GetIdentifier(),
-				Content: policyText,
+				Content:          policyText,
 			}
-			ps.gitStorePolicy(nodeIdentifier, policyReq.GetIdentifier(), policy)	
+			ps.gitStorePolicy(nodeIdentifier, policyReq.GetIdentifier(), policy)
 		}
 		ps.addDatasetPolicy(policyReq.GetIdentifier(), &datasetPolicyMapEntry{policy, nodeIdentifier})
 		policy = ps.getDatasetPolicy(policyReq.GetIdentifier()).policy
 	} else {
-		policy = &pb.Policy {
-			Issuer: ps.name,
+		policy = &pb.Policy{
+			Issuer:           ps.name,
 			ObjectIdentifier: policyReq.GetIdentifier(),
-			Content: strconv.FormatBool(false),
-		}	
+			Content:          strconv.FormatBool(false),
+		}
 		// Store the policy in the in-memory map and in the git log
 		ps.gitStorePolicy(nodeIdentifier, policyReq.GetIdentifier(), policy)
 		ps.addDatasetPolicy(policyReq.GetIdentifier(), &datasetPolicyMapEntry{policy, nodeIdentifier})
@@ -484,10 +477,10 @@ func (ps *PolicyStore) Shutdown() {
 
 func (ps *PolicyStore) pbNode() *pb.Node {
 	return &pb.Node{
-		Name:    		ps.name,
-		IfritAddress: 	ps.ifritClient.Addr(),
-		Role:    		"policy store",
-		Id: 			[]byte(ps.ifritClient.Id()),
+		Name:         ps.name,
+		IfritAddress: ps.ifritClient.Addr(),
+		Role:         "policy store",
+		Id:           []byte(ps.ifritClient.Id()),
 	}
 }
 

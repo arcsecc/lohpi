@@ -115,21 +115,3 @@ func LocalIP() (string, error) {
 
 	return addrs[0].String(), nil
 }
-
-func ValidatePortNumber(portNum *int) {
-	if *portNum == -1 {
-		*portNum = GetOpenPort()
-		log.Info("Port number not set. Picking %d as port num...\n", *portNum)
-	} else {
-		host := ":0" + strconv.Itoa(*portNum)
-		l, err := net.Listen("tcp4", host)
-		if err != nil {
-			*portNum = GetOpenPort()
-			return
-		}
-		if err := l.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "Can't close connection on port %d: %s", *portNum, err)
-			panic(err)
-		}
-	}
-}

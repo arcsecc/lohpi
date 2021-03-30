@@ -2,13 +2,12 @@ package multicast
 
 import (
 	"errors"
-	"time"
-	log "github.com/sirupsen/logrus"
-	"sort"
-	"math/rand"
-	"sync"
-
 	"github.com/joonnna/ifrit"
+	log "github.com/sirupsen/logrus"
+	"math/rand"
+	"sort"
+	"sync"
+	"time"
 )
 
 type membershipManager struct {
@@ -16,20 +15,20 @@ type membershipManager struct {
 	ifritClient *ifrit.Client
 
 	// List of recipients
-	lruNodesMap map[string]int				
-	lruLock	sync.RWMutex
+	lruNodesMap map[string]int
+	lruLock     sync.RWMutex
 
 	// Multicast stuff
 	ignoredIPAddresses map[string]string
-	ignoredIPLock sync.RWMutex
+	ignoredIPLock      sync.RWMutex
 }
 
 func newMembershipManager(ifritClient *ifrit.Client) *membershipManager {
 	return &membershipManager{
-		ifritClient:	ifritClient,
-		lruNodesMap:	make(map[string]int),	// Ifrit IP -> number of invocations
-		lruLock:		sync.RWMutex{},
-		ignoredIPLock:	sync.RWMutex{},
+		ifritClient:   ifritClient,
+		lruNodesMap:   make(map[string]int), // Ifrit IP -> number of invocations
+		lruLock:       sync.RWMutex{},
+		ignoredIPLock: sync.RWMutex{},
 	}
 }
 
@@ -47,7 +46,7 @@ func (m *membershipManager) lruNodes() map[string]int {
 func (m *membershipManager) lruMembers(members []string, numDirectRecipients int) ([]string, error) {
 	log.Debugln("Implement lruMembers!")
 	return nil, nil
-	
+
 	m.updateLruMembers()
 
 	// BUG HERE!
@@ -77,7 +76,7 @@ func (m *membershipManager) lruMembers(members []string, numDirectRecipients int
 	// List of counts fetched from the LRU map. Sort it in ascending order so that
 	// the members that have sent the least number of times will be used as recipients
 	counts := make([]int, 0)
-	for  _, value := range m.lruNodes() {
+	for _, value := range m.lruNodes() {
 		counts = append(counts, value)
 	}
 
@@ -96,7 +95,7 @@ func (m *membershipManager) lruMembers(members []string, numDirectRecipients int
 	for k, v := range m.lruNodesMap {
 		if v <= lowest {
 			lowest = v
-			
+
 			recipients = append(recipients, k)
 			iterations += 1
 			m.lruNodesMap[k] += 1
@@ -122,7 +121,7 @@ func (m *membershipManager) AllMembers() []string {
 }
 
 // Sets the given list as a black-list for Ifrit IP addresses that receive
-// multicast messages. If the internal black-list is empty, all nodes can 
+// multicast messages. If the internal black-list is empty, all nodes can
 // possibly receive a message.
 func (m *membershipManager) setIgnoredIfritNodes(ignoredIPs map[string]string) {
 	m.ignoredIPLock.Lock()
@@ -183,11 +182,11 @@ func (m *membershipManager) randomMembers(members []string, numDirectRecipients 
 	result := make([]string, 0, numDirectRecipients)
 
 	rand.Seed(time.Now().UnixNano())
-    p := rand.Perm(numDirectRecipients)
-    for i := range p {
+	p := rand.Perm(numDirectRecipients)
+	for i := range p {
 		result = append(result, members[i])
 	}
-	
+
 	log.Println("result:", result)
 	return result, nil
 }

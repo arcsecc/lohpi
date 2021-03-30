@@ -1,17 +1,17 @@
 package keyvault
 
 import (
+	"encoding/json"
 	"fmt"
-	"strings"
+	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
-	"net"
+	"strings"
 	"time"
-	"io/ioutil"
-	"encoding/json"
 )
 
-// Describes configuration to communicate with 
+// Describes configuration to communicate with
 type KeyVaultClientConfig struct {
 	ClientID     string `required_true`
 	ClientSecret string `required_true`
@@ -32,8 +32,8 @@ type KeyvaultSecretResponse struct {
 }
 
 type KeyVaultClient struct {
-	Token 	string
-	config	KeyVaultClientConfig
+	Token  string
+	config KeyVaultClientConfig
 }
 
 func NewKeyVaultClient(config KeyVaultClientConfig) (*KeyVaultClient, error) {
@@ -70,7 +70,6 @@ func NewKeyVaultClient(config KeyVaultClientConfig) (*KeyVaultClient, error) {
 		return nil, err
 	}
 
-
 	var tr TokenResponse
 	errUnMarshal := json.Unmarshal(body, &tr)
 	if errUnMarshal != nil {
@@ -78,11 +77,10 @@ func NewKeyVaultClient(config KeyVaultClientConfig) (*KeyVaultClient, error) {
 	}
 
 	return &KeyVaultClient{
-		Token: 	tr.AccessToken,
-		config:   config,
+		Token:  tr.AccessToken,
+		config: config,
 	}, nil
 }
-
 
 // GetSecret retrieves a secret from keyvault
 func (k *KeyVaultClient) GetSecret(vaultBaseURL, secretName string) (*KeyvaultSecretResponse, error) {

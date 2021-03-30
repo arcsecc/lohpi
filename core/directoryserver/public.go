@@ -1,27 +1,20 @@
 package directoryserver
 
-
 /* This file contains methods that use the Lohpi network for queries */
 import (
-_	"io"
-_	"archive/zip"
-	"context"
 	"bytes"
-_	"net/url"
-	"errors"
-	"time"
-	log "github.com/sirupsen/logrus"
-	"github.com/lestrrat-go/jwx/jws"
-	"strconv"
-	"fmt"
-	"net/http"
+	"context"
 	"encoding/json"
-_	"os"
-
-	"github.com/golang/protobuf/proto"
-	//log "github.com/sirupsen/logrus"
+	"errors"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
+	"github.com/lestrrat-go/jwx/jws"
+	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strconv"
+	"time"
 )
 
 // Fetches the information about a dataset
@@ -33,8 +26,8 @@ func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Reque
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_METADATA_URL,
 		DatasetRequest: &pb.DatasetRequest{
-			Identifier: dataset, 
-    		ClientToken: nil,
+			Identifier:  dataset,
+			ClientToken: nil,
 		},
 	}
 
@@ -64,7 +57,7 @@ func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Reque
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
 			return nil, err
 		}
-		
+
 		if err := d.verifyMessageSignature(respMsg); err != nil {
 			return nil, err
 		}
@@ -79,14 +72,14 @@ func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Reque
 }
 
 func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
-	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second * 15)) // set proper time to wait
+	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second*15)) // set proper time to wait
 	defer cancel()
 
 	// Create dataset request
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_URL,
 		DatasetRequest: &pb.DatasetRequest{
-			Identifier: dataset,
+			Identifier:  dataset,
 			ClientToken: clientToken,
 		},
 	}
@@ -125,7 +118,7 @@ func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, data
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		
+
 		if err := d.verifyMessageSignature(respMsg); err != nil {
 			log.Fatalln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -143,30 +136,30 @@ func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, data
 			}
 
 			// Get client-related fiels
-			_, oid, err := m.getClientIdentifier(clientToken)
+			_, oid, err := d.getClientIdentifier(clientToken)
 			if err != nil {
-				if err := m.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
+				if err := d.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
 					log.Errorln(err.Error())
 				}
 				return
 			}
-			
-			m.insertCheckedOutDataset(dataset, oid)
+
+			d.insertCheckedOutDataset(dataset, oid)
 
 		} else {
 			err := fmt.Errorf(respMsg.GetDatasetResponse().GetErrorMessage())
 			log.Errorln(err.Error())
-			http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
-			return 
+			http.Error(w, http.StatusText(http.StatusUnauthorized)+": "+err.Error(), http.StatusUnauthorized)
+			return
 		}
 	case <-newCtx.Done():
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
-		return 
+		return
 	}
 }
 
-func (m *Mux) getClientIdentifier(token []byte) (string, string, error) {
+func (d *DirectoryServer) getClientIdentifier(token []byte) (string, string, error) {
 	msg, err := jws.ParseString(string(token))
 	if err != nil {
 		return "", "", err
@@ -177,15 +170,15 @@ func (m *Mux) getClientIdentifier(token []byte) (string, string, error) {
 		return "", "", errors.New("Payload was nil")
 	}
 
-	c := struct{
-		Name string		`json:"name"`
-		Oid string		`json:"oid"`
+	c := struct {
+		Name string `json:"name"`
+		Oid  string `json:"oid"`
 	}{}
 
 	if err := json.Unmarshal(s, &c); err != nil {
-    	return "", "", err
+		return "", "", err
 	}
-	
+
 	return c.Name, c.Oid, nil
 }
 
@@ -201,9 +194,9 @@ func (d *DirectoryServer) getMetadata(w http.ResponseWriter, r *http.Request, re
 	}
 
 	response, err := httpClient.Do(request)
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 
 	buf := new(bytes.Buffer)
 	_, err = buf.ReadFrom(response.Body)
@@ -221,7 +214,7 @@ func (d *DirectoryServer) getMetadata(w http.ResponseWriter, r *http.Request, re
 }
 
 // TODO: use context request
-func (d *DirectoryServer) datasetRequest(w http.ResponseWriter,  req *http.Request, remoteUrl string, ctx context.Context) error {
+func (d *DirectoryServer) datasetRequest(w http.ResponseWriter, req *http.Request, remoteUrl string, ctx context.Context) error {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		log.Println(err.Error())
@@ -234,11 +227,11 @@ func (d *DirectoryServer) datasetRequest(w http.ResponseWriter,  req *http.Reque
 	}
 
 	response, err := httpClient.Do(request)
-    if err != nil {
+	if err != nil {
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return err
-    }
+	}
 
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(response.Body)
@@ -247,7 +240,7 @@ func (d *DirectoryServer) datasetRequest(w http.ResponseWriter,  req *http.Reque
 	if response.StatusCode != http.StatusOK {
 		log.Errorf("Error from remote archive: %s\n", buf.Bytes())
 		err := fmt.Errorf("Could not checkout dataset from the node")
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return err
 	}
 
@@ -298,11 +291,11 @@ func (d *DirectoryServer) rollbackCheckout(nodeAddr, dataset string, ctx context
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
 			return err
 		}
-		
+
 		if err := d.verifyMessageSignature(respMsg); err != nil {
 			return err
 		}
-		
+
 	case <-ctx.Done():
 		err := errors.New("Could not verify dataset checkout rollback")
 		return err
@@ -311,23 +304,23 @@ func (d *DirectoryServer) rollbackCheckout(nodeAddr, dataset string, ctx context
 	return nil
 }
 
-func (m *Mux) insertCheckedOutDataset(dataset, clientId string) {
-	m.clientCheckoutMapLock.Lock()
-	defer m.clientCheckoutMapLock.Unlock()
-	if m.clientCheckoutMap[dataset] == nil {
-		m.clientCheckoutMap[dataset] = make([]string, 0)
+func (d *DirectoryServer) insertCheckedOutDataset(dataset, clientId string) {
+	d.clientCheckoutMapLock.Lock()
+	defer d.clientCheckoutMapLock.Unlock()
+	if d.clientCheckoutMap[dataset] == nil {
+		d.clientCheckoutMap[dataset] = make([]string, 0)
 	}
-	m.clientCheckoutMap[dataset] = append(m.clientCheckoutMap[dataset], clientId)
+	d.clientCheckoutMap[dataset] = append(d.clientCheckoutMap[dataset], clientId)
 }
 
-func (m *Mux) getCheckedOutDatasetMap() map[string][]string {
-	m.clientCheckoutMapLock.RLock()
-	defer m.clientCheckoutMapLock.RUnlock()
-	return m.clientCheckoutMap
+func (d *DirectoryServer) getCheckedOutDatasetMap() map[string][]string {
+	d.clientCheckoutMapLock.RLock()
+	defer d.clientCheckoutMapLock.RUnlock()
+	return d.clientCheckoutMap
 }
 
-func (m *Mux) datasetIsInvalidated(dataset string) bool {
-	l := m.revokedDatasets()
+func (d *DirectoryServer) datasetIsInvalidated(dataset string) bool {
+	l := d.revokedDatasets()
 
 	for e := l.Front(); e != nil; e = e.Next() {
 		if e.Value == dataset {

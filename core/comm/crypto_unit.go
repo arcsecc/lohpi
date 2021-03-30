@@ -22,9 +22,9 @@ import (
 )
 
 var (
-	errNoIp      = errors.New("No ip present in received identity")
-	errNoAddrs   = errors.New("Not enough addresses present in identity")
-	errNoCa 	 = errors.New("No Lohpi ca address supplied")
+	errNoIp    = errors.New("No ip present in received identity")
+	errNoAddrs = errors.New("Not enough addresses present in identity")
+	errNoCa    = errors.New("No Lohpi ca address supplied")
 )
 
 type CryptoUnit struct {
@@ -32,21 +32,21 @@ type CryptoUnit struct {
 	pk     pkix.Name
 	caAddr string
 
-	self       *x509.Certificate
-	ca         *x509.Certificate
-	trusted    bool
+	self    *x509.Certificate
+	ca      *x509.Certificate
+	trusted bool
 }
 
 type certResponse struct {
-	OwnCert    []byte
-	CaCert     []byte
-	Trusted    bool
+	OwnCert []byte
+	CaCert  []byte
+	Trusted bool
 }
 
 type certSet struct {
-	ownCert    *x509.Certificate
-	caCert     *x509.Certificate
-	trusted		bool
+	ownCert *x509.Certificate
+	caCert  *x509.Certificate
+	trusted bool
 }
 
 func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
@@ -78,11 +78,11 @@ func NewCu(identity pkix.Name, caAddr string) (*CryptoUnit, error) {
 	}
 
 	return &CryptoUnit{
-		ca:         certs.caCert,
-		self:       certs.ownCert,
-		caAddr:     caAddr,
-		pk:         identity,
-		priv:       priv,
+		ca:     certs.caCert,
+		self:   certs.ownCert,
+		caAddr: caAddr,
+		pk:     identity,
+		priv:   priv,
 	}, nil
 }
 
@@ -113,29 +113,29 @@ func (cu *CryptoUnit) EncodePublicKey() ([]byte, error) {
 	}
 
 	return pem.EncodeToMemory(&pem.Block{
-	    Type:  "ECDSA PUBLIC KEY",
-	    Bytes: pubASN1,
-	}), nil	
+		Type:  "ECDSA PUBLIC KEY",
+		Bytes: pubASN1,
+	}), nil
 }
 
 func (cu *CryptoUnit) DecodePublicKey(key []byte) (*ecdsa.PublicKey, error) {
 	block, _ := pem.Decode(key)
-    if block == nil {
-        return nil, errors.New("failed to parse PEM block containing the key")
-    }
+	if block == nil {
+		return nil, errors.New("failed to parse PEM block containing the key")
+	}
 
-    pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-    if err != nil {
-        return nil, err
-    }
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
 
-    switch pub := pub.(type) {
-    case *ecdsa.PublicKey:
-        return pub, nil
+	switch pub := pub.(type) {
+	case *ecdsa.PublicKey:
+		return pub, nil
 	default:
 		break
-    }
-    return nil, errors.New("Key type is not valid")
+	}
+	return nil, errors.New("Key type is not valid")
 }
 
 func (cu *CryptoUnit) Verify(data, r, s []byte, pub *ecdsa.PublicKey) bool {

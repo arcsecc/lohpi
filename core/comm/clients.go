@@ -1,13 +1,12 @@
 package comm
 
 import (
-	"crypto/x509"
 	"crypto/ecdsa"
-	"time"
-
+	"crypto/x509"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	pb "github.com/arcsecc/lohpi/protobuf"
+	"time"
 )
 
 // TODO: clean up this mess
@@ -32,16 +31,6 @@ type PolicyStoreConn struct {
 	cc *grpc.ClientConn
 }
 
-/*type RecGRPCClient struct {
-	dialOptions []grpc.DialOption
-	pb.RecClient
-}*/
-
-/*type RecConn struct {
-	pb.RecClient
-	cc *grpc.ClientConn
-}*/
-
 func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*DirectoryGRPCClient, error) {
 	var dialOptions []grpc.DialOption
 	// check paramters here
@@ -49,10 +38,10 @@ func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*
 	creds := credentials.NewTLS(config)
 
 	dialOptions = append(dialOptions, grpc.WithTransportCredentials(creds))
-	dialOptions = append(dialOptions, grpc.WithBackoffMaxDelay(time.Minute * 1))
+	dialOptions = append(dialOptions, grpc.WithBackoffMaxDelay(time.Minute*1))
 
 	return &DirectoryGRPCClient{
-		dialOptions:    dialOptions,
+		dialOptions: dialOptions,
 	}, nil
 }
 
@@ -62,10 +51,10 @@ func (c *DirectoryGRPCClient) Dial(addr string) (*DirectoryServerConn, error) {
 		return nil, err
 	} else {
 		connection := &DirectoryServerConn{
-			DirectoryServerClient: 		pb.NewDirectoryServerClient(cc),
-			cc:				          	cc,
+			DirectoryServerClient: pb.NewDirectoryServerClient(cc),
+			cc:                    cc,
 		}
-		
+
 		return connection, nil
 	}
 }
@@ -81,10 +70,10 @@ func NewPolicyStoreClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey
 	creds := credentials.NewTLS(config)
 
 	dialOptions = append(dialOptions, grpc.WithTransportCredentials(creds))
-	dialOptions = append(dialOptions, grpc.WithBackoffMaxDelay(time.Minute * 1))
+	dialOptions = append(dialOptions, grpc.WithBackoffMaxDelay(time.Minute*1))
 
 	return &PolicyStoreGRPCClient{
-		dialOptions:    dialOptions,
+		dialOptions: dialOptions,
 	}, nil
 }
 
@@ -94,10 +83,10 @@ func (c *PolicyStoreGRPCClient) Dial(addr string) (*PolicyStoreConn, error) {
 		return nil, err
 	} else {
 		connection := &PolicyStoreConn{
-			PolicyStoreClient: 	pb.NewPolicyStoreClient(cc),
-			cc:          		cc,
+			PolicyStoreClient: pb.NewPolicyStoreClient(cc),
+			cc:                cc,
 		}
-		
+
 		return connection, nil
 	}
 }
@@ -105,35 +94,3 @@ func (c *PolicyStoreGRPCClient) Dial(addr string) (*PolicyStoreConn, error) {
 func (c *PolicyStoreConn) CloseConn() {
 	c.cc.Close()
 }
-
-/*func NewRecClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*RecGRPCClient, error) {
-	var dialOptions []grpc.DialOption
-	// check paramters here
-	config := ClientConfig(cert, caCert, priv)
-	creds := credentials.NewTLS(config)
-
-	dialOptions = append(dialOptions, grpc.WithTransportCredentials(creds))
-	dialOptions = append(dialOptions, grpc.WithBackoffMaxDelay(time.Minute * 1))
-
-	return &RecGRPCClient{
-		dialOptions:    dialOptions,
-	}, nil
-}
-
-func (c *RecGRPCClient) Dial(addr string) (*RecConn, error) {
-	cc, err := grpc.Dial(addr, c.dialOptions...)
-	if err != nil {
-		return nil, err
-	} else {
-		connection := &RecConn{
-			RecClient:	pb.NewRecClient(cc),
-			cc:         cc,
-		}
-		
-		return connection, nil
-	}
-}
-
-func (c *RecConn) CloseConn() {
-	c.cc.Close()
-}*/

@@ -1,28 +1,25 @@
 package directoryserver
 
 import (
+	"container/list"
 	"crypto/tls"
+	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"github.com/golang/protobuf/proto"
-	_ "github.com/arcsecc/lohpi/core/cache"
+	"github.com/arcsecc/lohpi/core/cache"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
-	"github.com/arcsecc/lohpi/core/cache"
 	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
+	"github.com/joonnna/ifrit"
 	"github.com/lestrrat-go/jwx/jwk"
+	log "github.com/sirupsen/logrus"
+	"golang.org/x/net/context"
 	"net"
 	"net/http"
 	"os"
 	"sync"
-
-	"crypto/x509/pkix"
-
-	log "github.com/sirupsen/logrus"
-	"golang.org/x/net/context"
-
-	"github.com/joonnna/ifrit"
 )
 
 var (
@@ -30,15 +27,9 @@ var (
 )
 
 type Config struct {
-	HttpPort   			int    `default:"8080"`
-	GRPCPort    		int    `default:"8081"`
-	LohpiCaAddr 				string 	`default:"127.0.1.1:8301"`
-}
-
-type service interface {
-	Register(pb.DirectoryServerServer)
-	StudyList()
-	Handshake()
+	HttpPort    int    `default:"8080"`
+	GRPCPort    int    `default:"8081"`
+	LohpiCaAddr string `default:"127.0.1.1:8301"`
 }
 
 type DirectoryServer struct {
@@ -48,14 +39,14 @@ type DirectoryServer struct {
 
 	// Underlying Ifrit client
 	ifritClient *ifrit.Client
-	memCache *cache.Cache
+	memCache    *cache.Cache
 
 	// In-memory cache structures
 	nodeMapLock sync.RWMutex
 	nodeMap     map[string]*pb.Node
-	//cache        *cache.Cache
 
 	cu *comm.CryptoUnit
+
 	// Dataset nodes
 	datasetNodesMap     map[string]*pb.Node // Dataset identifier mapped to storage node
 	datasetNodesMapLock sync.RWMutex
@@ -68,11 +59,16 @@ type DirectoryServer struct {
 	listener     net.Listener
 	serverConfig *tls.Config
 	grpcs        *gRPCServer
-	s            service
 
+	// Datasets that have been checked out
+	clientCheckoutMap     map[string][]string //datase id -> list of client who have checked out the data
+	clientCheckoutMapLock sync.RWMutex
+
+	invalidatedDatasets     *list.List
+	invalidatedDatasetsLock sync.RWMutex
 
 	// Fetch the JWK
-	ar *jwk.AutoRefresh
+	pubKeyCache *jwk.AutoRefresh
 }
 
 // Returns a new DirectoryServer using the given configuration and HTTP port number. Returns a non-nil error, if any
@@ -107,12 +103,11 @@ func NewDirectoryServer(config *Config) (*DirectoryServer, error) {
 	}
 
 	ds := &DirectoryServer{
-		config:     config,
-		configLock: sync.RWMutex{},
+		config:      config,
+		configLock:  sync.RWMutex{},
 		ifritClient: ifritClient,
 
 		// HTTP
-		//httpListener: httpListener,
 		cu: cu,
 
 		// Network nodes
@@ -175,7 +170,7 @@ func (d *DirectoryServer) InitializeLogfile(logToFile bool) error {
 		log.Infoln("Setting logs to standard output")
 		log.SetOutput(os.Stdout)
 	}
-	
+
 	return nil
 }
 
@@ -195,7 +190,7 @@ func (d *DirectoryServer) messageHandler(data []byte) ([]byte, error) {
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
 		d.memCache.AddDatasetNode(msg.GetStringValue(), msg.GetSender())
-		
+
 	default:
 		log.Warnln("Unknown message type at DirectoryServer handler: %s\n", msg.GetType())
 	}
@@ -217,7 +212,7 @@ func (d *DirectoryServer) streamHandler(input chan []byte, output chan []byte) {
 func (d *DirectoryServer) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := d.memCache.Nodes()[node.GetName()]; !ok {
 		d.memCache.AddNode(node.GetName(), node)
-		log.Infof("DirectoryServer added '%s' to map with Ifrit IP %s and HTTPS adrress %s\n", 
+		log.Infof("DirectoryServer added '%s' to map with Ifrit IP %s and HTTPS adrress %s\n",
 			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
 	} else {
 		return nil, fmt.Errorf("DirectoryServer: node '%s' already exists in network\n", node.GetName())
@@ -230,7 +225,6 @@ func (d *DirectoryServer) Handshake(ctx context.Context, node *pb.Node) (*pb.Han
 
 // Invoked by ifrit message handler
 func (d *DirectoryServer) verifyMessageSignature(msg *pb.Message) error {
-	return nil
 	// Verify the integrity of the node
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
@@ -256,11 +250,17 @@ func (d *DirectoryServer) verifyMessageSignature(msg *pb.Message) error {
 	return nil
 }
 
+func (d *DirectoryServer) revokedDatasets() *list.List {
+	d.invalidatedDatasetsLock.RLock()
+	defer d.invalidatedDatasetsLock.RUnlock()
+	return d.invalidatedDatasets
+}
+
 func (d *DirectoryServer) pbNode() *pb.Node {
 	return &pb.Node{
-		Name:    		"Lohpi directory server",
-		IfritAddress: 	d.ifritClient.Addr(),
-		Role:    		"Directory server",
-		Id: 			[]byte(d.ifritClient.Id()),
+		Name:         "Lohpi directory server",
+		IfritAddress: d.ifritClient.Addr(),
+		Role:         "Directory server",
+		Id:           []byte(d.ifritClient.Id()),
 	}
 }

@@ -3,17 +3,16 @@ package node
 import (
 	"bytes"
 	"encoding/json"
-	"strconv"
 	"errors"
-	log "github.com/sirupsen/logrus"
-	"net/http"
 	"fmt"
-	"time"
-	
+	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/util"
 	"github.com/gorilla/mux"
-	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/rs/cors"
+	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strconv"
+	"time"
 )
 
 const PROJECTS_DIRECTORY = "projects"
@@ -37,12 +36,12 @@ func (n *Node) startHttpServer(addr string) error {
 	handler := cors.AllowAll().Handler(router)
 
 	n.httpServer = &http.Server{
-		Addr: 		  	addr,
-		Handler:      	handler,
-		WriteTimeout: 	time.Second * 30,
-		ReadTimeout:  	time.Second * 30,
-		IdleTimeout:  	time.Second * 60,
-		TLSConfig: 		comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.Priv()),
+		Addr:         addr,
+		Handler:      handler,
+		WriteTimeout: time.Second * 30,
+		ReadTimeout:  time.Second * 30,
+		IdleTimeout:  time.Second * 60,
+		TLSConfig:    comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.Priv()),
 	}
 
 	/*if err := m.setPublicKeyCache(); err != nil {
@@ -68,7 +67,7 @@ func (n *Node) startHttpServer(addr string) error {
 		log.Println("Failed to refresh Microsoft Azure JWKS")
 		return err
 	}
-	return nil 
+	return nil
 }*/
 
 // Returns the dataset identifiers stored at this node
@@ -89,9 +88,9 @@ func (n *Node) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	r.Header.Add("Content-Length", strconv.Itoa(len(ids)))
 
 	_, err := w.Write(b.Bytes())
-	if err != nil { 
+	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -105,15 +104,15 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	if dataset == "" {
 		err := errors.New("Missing dataset identifier")
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if !n.dbDatasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", dataset)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
-		return 
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
 	}
 
 	// Fetch the policy
@@ -121,7 +120,7 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return 
+		return
 	}
 
 	// Fetch the clients that have checked out the dataset
@@ -133,13 +132,13 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Destination struct
-	resp := struct  {
-		Dataset string
-		Policy string
+	resp := struct {
+		Dataset   string
+		Policy    string
 		Checkouts []CheckoutInfo
 	}{
-		Dataset: dataset,
-		Policy: policy,
+		Dataset:   dataset,
+		Policy:    policy,
 		Checkouts: checkouts,
 	}
 
@@ -155,28 +154,28 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err = w.Write(b.Bytes())
-	if err != nil { 
+	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
 
 /* Assigns a new policy to the dataset. The request body must be a JSON object with a string similar to this:
  *{
- *	"policy": true/false	
+ *	"policy": true/false
  *}
  */
 // TODO: restrict this function only to be used to set the initial dataset policy.
 // SHOULD NOT BE USED
-func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) { 
+func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
 	// Enforce application/json MIME type
 	if r.Header.Get("Content-Type") != "application/json" {
-        msg := "Content-Type header is not application/json"
-        http.Error(w, http.StatusText(http.StatusUnsupportedMediaType) + ": " + msg, http.StatusUnsupportedMediaType)
+		msg := "Content-Type header is not application/json"
+		http.Error(w, http.StatusText(http.StatusUnsupportedMediaType)+": "+msg, http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -185,7 +184,7 @@ func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	if dataset == "" {
 		err := errors.New("Missing dataset identifier")
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -193,12 +192,12 @@ func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	if !n.datasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in this node", dataset)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
-		return 
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
 	}
-	
+
 	// Destination struct
-	reqBody := struct  {
+	reqBody := struct {
 		Policy string
 	}{}
 
@@ -206,10 +205,10 @@ func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 		var e *util.MalformedParserReponse
 		if errors.As(err, &e) {
 			log.Errorln(err.Error())
-            http.Error(w, e.Msg, e.Status)
+			http.Error(w, e.Msg, e.Status)
 		} else {
 			log.Errorln(err.Error())
-            http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		}
 		return
 	}
@@ -224,4 +223,3 @@ func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(respMsg)))
 	w.Write([]byte(respMsg))
 }
-

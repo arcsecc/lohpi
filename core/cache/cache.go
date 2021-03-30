@@ -1,11 +1,10 @@
 package cache
 
 import (
+	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/joonnna/ifrit"
 	"sync"
 	"time"
-
-	"github.com/joonnna/ifrit"
-	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 // Cache is the internal overview of objects and nodes
@@ -13,31 +12,31 @@ type Cache struct {
 	ifritClient *ifrit.Client
 
 	// Node's identifier maps to its Iffrit IP address
-	nodeMap map[string]*pb.Node
+	nodeMap      map[string]*pb.Node
 	nodesMapLock sync.RWMutex
 
 	// Dataset collection
-	datasetNodesMap map[string]*pb.Node
+	datasetNodesMap     map[string]*pb.Node
 	datasetNodesMapLock sync.RWMutex
 
 	// Datasets that have been checked out
-	datasetCheckoutMap map[string]*ClientCheckout
+	datasetCheckoutMap     map[string]*ClientCheckout
 	datasetCheckoutMapLock sync.RWMutex
 
 	// Datasets that are due for revocation
-	invalidDatasetMap map[string]*InvalidDataset
+	invalidDatasetMap     map[string]*InvalidDataset
 	invalidDatasetMapLock sync.RWMutex
 }
 
-// Describes a dataset that has been checked out 
+// Describes a dataset that has been checked out
 type ClientCheckout struct {
-	dataset string
-	clientId string
+	dataset   string
+	clientId  string
 	timestamp time.Time
 }
 
 type InvalidDataset struct {
-	dataset string
+	dataset   string
 	timestamp time.Time
 }
 
@@ -46,16 +45,16 @@ type InvalidDataset struct {
 // If the cache size is exceeded, LRU study is evicted.
 func NewCache(client *ifrit.Client) *Cache {
 	return &Cache{
-		nodeMap:     			make(map[string]*pb.Node),
-		datasetNodesMap:		make(map[string]*pb.Node),
-		datasetCheckoutMap:		make(map[string]*ClientCheckout),
-		invalidDatasetMap:		make(map[string]*InvalidDataset),
-		ifritClient: 			client,
+		nodeMap:            make(map[string]*pb.Node),
+		datasetNodesMap:    make(map[string]*pb.Node),
+		datasetCheckoutMap: make(map[string]*ClientCheckout),
+		invalidDatasetMap:  make(map[string]*InvalidDataset),
+		ifritClient:        client,
 	}
 }
 
 func NewClientCheckout(dataset, clientId string) *ClientCheckout {
-	return &ClientCheckout{dataset,	clientId, time.Now()}
+	return &ClientCheckout{dataset, clientId, time.Now()}
 }
 
 // Returns the storage node that stores the given object header
