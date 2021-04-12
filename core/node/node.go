@@ -78,7 +78,7 @@ type Node struct {
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
 
-	// Stringy identifier of this node
+	// String identifier of this node
 	name string
 
 	// The IP address of the Lohpi mux. Used when invoking ifrit.Client.SendTo()
@@ -116,33 +116,17 @@ type Node struct {
 	externalMetadataHandler     ExternalMetadataHandler
 	externalMetadataHandlerLock sync.RWMutex
 
+	// Config for fetching data from remote source. Remove me?
 	refreshConfigLock sync.RWMutex
 	refreshConfig     RefreshConfig
 
-	// If true, callbaks used for remote resources are invoked.
-	// If false, only in-memory maps are used for query processing.
-	useRemoteURL bool
-
-	// If true, use in-memory maps. Only use remote URL when absolutely
-	// nescessary (ie. missing results)
-	useCache bool
-
 	// Azure database
-	clientCheckoutTable *sql.DB
-	policyDB            *sql.DB
-	policyIdentifier    string
+	datasetCheckoutDB *sql.DB
+	datasetPolicyDB   *sql.DB
 
 	// Key vault manager
-	kvClient *keyvault.KeyVaultClient
+	keyVaultClient *keyvault.KeyVaultClient
 }
-
-// Database-related consts
-var (
-	dbName               = "nodepolicydb" // change me to nodedb
-	schemaName           = "nodedbschema"
-	datasetPolicyTable   = "policy_table"
-	datasetCheckoutTable = "dataset_checkout_table"
-)
 
 func NewNode(name string, config *Config) (*Node, error) {
 	ifritClient, err := ifrit.NewClient()
@@ -177,7 +161,8 @@ func NewNode(name string, config *Config) (*Node, error) {
 		return nil, err
 	}
 
-	kvClientConfig := keyvault.KeyVaultClientConfig{
+	// TODO: change me to handle multiple secrets
+	keyVaultClientConfig := keyvault.KeyVaultClientConfig{
 		ClientID:     config.AzureClientId,
 		ClientSecret: config.AzureClientSecret,
 		TenantID:     config.AzureTenantId,
@@ -185,7 +170,7 @@ func NewNode(name string, config *Config) (*Node, error) {
 		SecretName:   config.AzureKeyVaultSecret,
 	}
 
-	keyClient, err := keyvault.NewKeyVaultClient(kvClientConfig)
+	keyVaultClient, err := keyvault.NewKeyVaultClient(keyVaultClientConfig)
 	if err != nil {
 		log.Errorf(err.Error())
 		return nil, err
@@ -200,12 +185,13 @@ func NewNode(name string, config *Config) (*Node, error) {
 		httpListener: httpListener,
 		cu:           cu,
 
+		// TODO: revise me
 		datasetMap:     make(map[string]struct{}),
 		datasetMapLock: sync.RWMutex{},
-		kvClient:       keyClient,
+		keyVaultClient: keyVaultClient,
 	}
 
-	// Create the database if needed
+	// Initialize the correct database
 	if err := node.initializePolicyDb(); err != nil {
 		log.Errorf(err.Error())
 		return nil, err
@@ -214,11 +200,15 @@ func NewNode(name string, config *Config) (*Node, error) {
 	// Remove all stale identifiers since the last run. This will remove all the identifiers
 	// from the table. The node cannot host datasets that have been removed from the remote location
 	// since it last ran.
+	// TODO: can we do something better?
 	if err := node.dbResetDatasetIdentifiers(); err != nil {
 		log.Errorf(err.Error())
 		return nil, err
 	}
 
+	// MAJOR TODO: refine large parts of the system by moving low-level message passing logic to low-level modules.
+	// It should be clear which parts of the system is talking!
+	 
 	return node, nil
 }
 
@@ -384,12 +374,10 @@ func (n *Node) RemoveDataset(id string) error {
 
 // Initializes the underlying node database using 'id' as the unique identifier for the relation.
 func (n *Node) initializePolicyDb() error {
-	resp, err := n.kvClient.GetSecret(n.config.AzureKeyVaultBaseURL, n.config.AzureKeyVaultSecret)
+	resp, err := n.keyVaultClient.GetSecret(n.config.AzureKeyVaultBaseURL, n.config.AzureKeyVaultSecret)
 	if err != nil {
 		return err
 	}
-
-	log.Println("Resp:", resp)
 
 	if resp.Value == "" {
 		return errors.New("Connection string from Azure Key Vault is empty")
@@ -433,11 +421,6 @@ func (n *Node) Address() string {
 
 func (n *Node) NodeName() string {
 	return n.name
-}
-
-// If set to true, the node will use the in-memory caches before performing lookups in external sources.
-func (n *Node) UseCache(use bool) {
-	n.useCache = use
 }
 
 // Function type used to fetch compressed archives from external sources.
@@ -536,15 +519,15 @@ func (n *Node) messageHandler(data []byte) ([]byte, error) {
 			return n.unauthorizedAccess("Client has already checked out this dataset")
 		}*/
 
-		//if n.clientIsAllowed(msg.GetDatasetRequest()) {
-		if err := n.dbCheckoutDataset(msg.GetDatasetRequest()); err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-		return n.fetchDatasetURL(msg)
-		/*} else {
+		if n.clientIsAllowed(msg.GetDatasetRequest()) {
+			if err := n.dbCheckoutDataset(msg.GetDatasetRequest()); err != nil {
+				log.Errorln(err.Error())
+				return nil, err
+			}
+			return n.fetchDatasetURL(msg)
+		} else {
 			return n.unauthorizedAccess("Client has invalid access attributes")
-		}*/
+		}
 
 	//	case message.MSG_TYPE_GET_DATASET:
 	//	return n.marshalledStorageObjectContent(msg)s

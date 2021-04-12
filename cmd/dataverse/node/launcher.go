@@ -27,12 +27,14 @@ var config = struct {
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	AzureKeyVaultName 	string 		`required:true`
-	AzureKeyVaultSecret	string		`required:true`
-	AzureClientSecret	string 		`required:true`
-	AzureClientId		string		`required:true`
-	AzureKeyVaultBaseURL string		`required:true`
-	AzureTenantId		string		`required:true`
+	RemoteBaseURL		string 		`required:"true"`
+	RemotePort			string 		`required:"true"`
+	AzureKeyVaultName 	string 		`required:"true"`
+	AzureKeyVaultSecret	string		`required:"true"`
+	AzureClientSecret	string 		`required:"true"`
+	AzureClientId		string		`required:"true"`
+	AzureKeyVaultBaseURL string		`required:"true"`
+	AzureTenantId		string		`required:"true"`
 }{}
 
 type StorageNode struct {
@@ -44,20 +46,26 @@ func main() {
 	var createNew bool
 	var nodeName string
 
+	
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// Logfile and name flags
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	args.StringVar(&configFile, "c", "lohpi_config.yaml", `Configuration file for the node. If not set, use default configuration values.`)
+	args.StringVar(&configFile, "c", "", `Configuration file for the node`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&config, configFile, "./lohpi_config.yaml")
+	if configFile == "" {
+		log.Errorln("Configuration file needs to be set. Exiting.")
+		os.Exit(2)
+	}
+
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
 
 	// Require node identifier
 	if nodeName == "" {
-		fmt.Fprintf(os.Stderr, "Missing node identifier\n")
+		log.Errorln("Missing node identifier. Exiting.")
 		os.Exit(2)
 	}
 
@@ -65,7 +73,7 @@ func main() {
 	var err error
 
 	if createNew {
-		c := &node.Config{
+		nodeConfig := &node.Config{
 			Port: config.Port,
 			PolicyStoreAddr: config.PolicyStoreAddr,
 			MuxAddr: config.MuxAddr,
@@ -78,18 +86,30 @@ func main() {
 			AzureTenantId: config.AzureTenantId,
 		}
 
-		// Create the new node and let it live its own life
-		sn, err = newNodeStorage(nodeName, c)
+		env := os.Getenv("LOHPI_ENV")
+		if env == "" {
+			log.Errorln("LOHPI_ENV must be set. Exiting.")
+			os.Exit(1)
+		} else if env == "production" {
+			log.Infoln("Production environment set")
+		} else if env == "development" {
+			log.Infoln("Development environment set")
+		} else {
+			log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
+			os.Exit(1)
+		}
+		log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
+
+		sn, err = newNodeStorage(nodeName, nodeConfig)
 		if err != nil {
-			log.Fatalln(os.Stderr, err.Error())
+			log.Errorln(err.Error())
 			os.Exit(1)
 		}
 	} else {
-		log.Fatalln("Need to set the 'new' flag to true. Exiting")
+		log.Errorln("Need to set the 'new' flag to true. Exiting.")
 		os.Exit(1)
 	}
 	
-	log.Println("Running node")
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -99,6 +119,7 @@ func main() {
 
 	// Clean-up
 	sn.Shutdown()
+	os.Exit(0)
 }
 
 func exists(name string) bool {
@@ -168,7 +189,7 @@ func (s *StorageNode) identifierExistsHandler(id string) bool {
 
 func (s *StorageNode) metadataHandler(id string) (*node.ExternalMetadata, error) {
 	return &node.ExternalMetadata{
-		URL: "http://diggi-4.cs.uit.no:8085/api/datasets/export?exporter=dataverse_json&persistentId=" + id,
+		URL: config.RemoteBaseURL + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id,
 	}, nil 
 }
 
@@ -178,14 +199,14 @@ func (s *StorageNode) Shutdown() {
 
 func remoteDataset(id string) (*node.ExternalDataset, error) {
 	return &node.ExternalDataset{
-		URL: "http://diggi-4.cs.uit.no:8085/api/access/dataset/:persistentId/?persistentId=" + id,
+		URL: config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id,
 	}, nil
 }
 
 // TODO: remove me and broadcast a request to all nodes at the mux. Might 
 // need to device a smart solution into how the datasets are looked up
 func identifierExists(id string) bool {
-	url := "http://diggi-4.cs.uit.no:8085/api/datasets/:persistentId/?persistentId=" + id
+	url := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/:persistentId/?persistentId=" + id
 	client := http.Client{
 		Timeout: time.Duration(30 * time.Second),
 	}
@@ -245,7 +266,7 @@ func identifierExists(id string) bool {
 }
 
 func remoteDatasetIdentifiers() ([]string, error) {
-	url := "http://diggi-4.cs.uit.no:8085/api/search?q=*&type=dataset"
+	url := config.RemoteBaseURL + ":" + config.RemotePort + "/api/search?q=*&type=dataset"
 	client := http.Client{
 		Timeout: time.Duration(30 * time.Second),
 	}

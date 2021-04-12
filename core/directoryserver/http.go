@@ -43,7 +43,7 @@ func (d *DirectoryServer) startHttpServer(addr string) error {
 	d.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      r,
-		WriteTimeout: time.Second * 30,
+		WriteTimeout: time.Hour * 1,
 		ReadTimeout:  time.Second * 30,
 		IdleTimeout:  time.Second * 60,
 		TLSConfig:    comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
@@ -265,7 +265,7 @@ func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Re
 func (d *DirectoryServer) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute*5))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Hour * 5))
 	defer cancel()
 
 	token, err := getBearerToken(req)

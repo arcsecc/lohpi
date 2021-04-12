@@ -24,6 +24,14 @@ type CheckoutInfo struct {
 	Timestamp  string `json:"timestamp"`
 }
 
+// Database-related consts
+var (
+	dbName               = "dataset_policy_db"
+	schemaName           = "nodedbschema"
+	datasetPolicyTable   = "policy_table"
+	datasetCheckoutTable = "dataset_checkout_table"
+)
+
 /* MAJOR TODO: use db.Prepare and friends to prevent SQL injection!!1! */
 // Also: make db columns into config variables
 
@@ -69,7 +77,7 @@ func (n *Node) initializePolicyTable(connectionString string) error {
 		return err
 	}
 
-	n.policyDB = db
+	n.datasetPolicyDB = db
 	return nil
 }
 
@@ -96,7 +104,7 @@ func (n *Node) initializeDatasetCheckoutTable(connectionString string) error {
 		return err
 	}
 
-	n.clientCheckoutTable = db
+	n.datasetCheckoutDB = db
 	return nil
 }
 
@@ -131,7 +139,7 @@ func (n *Node) dbSetObjectPolicy(datasetId, allowed string) error {
 	DO
 		UPDATE SET allowed = $2;`
 
-	_, err := n.policyDB.Exec(q, datasetId, allowed)
+	_, err := n.datasetPolicyDB.Exec(q, datasetId, allowed)
 	if err != nil {
 		log.Warnln("SQL insert error:", err.Error())
 	}
@@ -145,7 +153,7 @@ func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
 
 	var id, dataset_id, allowed string
 
-	row := n.policyDB.QueryRow(q, datasetId)
+	row := n.datasetPolicyDB.QueryRow(q, datasetId)
 	switch err := row.Scan(&id, &dataset_id, &allowed); err {
 	case sql.ErrNoRows:
 		fmt.Println("No rows were returned!")
@@ -163,7 +171,7 @@ func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
 /*func (n *Node) subjectIsAllowedAccess(clientAttribute, objectAttribute string) bool {
 	allowed := false
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + policyTable + ` WHERE ` + clientAttribute + ` = '` + objectAttribute + `');`
-	err := n.policyDB.QueryRow(q).Scan(&allowed)
+	err := n.datasetPolicyDB.QueryRow(q).Scan(&allowed)
 	if err != nil {
 		log.Warnln(err.Error())
 	}
@@ -177,7 +185,7 @@ func (n *Node) dbDatasetIsAvailable(id string) bool {
 	var allowed bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + ` 
 		WHERE dataset_id = '` + id + `' AND allowed = 't');`
-	err := n.policyDB.QueryRow(q).Scan(&allowed)
+	err := n.datasetPolicyDB.QueryRow(q).Scan(&allowed)
 	if err != nil && err != sql.ErrNoRows {
 		log.Errorln("error checking if row exists:", err.Error())
 		//log.Warnln(err.Error())
@@ -190,7 +198,7 @@ func (n *Node) dbDatasetIsAvailable(id string) bool {
 func (n *Node) dbDatasetExists(id string) bool {
 	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + ` WHERE dataset_id = '` + id + `');`
-	err := n.policyDB.QueryRow(q).Scan(&exists)
+	err := n.datasetPolicyDB.QueryRow(q).Scan(&exists)
 	if err != nil {
 		log.Warnln(err.Error())
 	}
@@ -207,7 +215,7 @@ func (n *Node) dbDatasetExists(id string) bool {
 func (n *Node) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE dataset_id='` + id + `';`
 
-	rows, err := n.clientCheckoutTable.Query(q)
+	rows, err := n.datasetCheckoutDB.Query(q)
 	if err != nil {
 		log.Errorln(err.Error())
 		return nil, err
@@ -244,7 +252,7 @@ func (n *Node) dbDatasetIsCheckedOutByClient(id string) bool {
 	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE 
 		dataset_id = '` + id + `');`
-	err := n.policyDB.QueryRow(q).Scan(&exists)
+	err := n.datasetPolicyDB.QueryRow(q).Scan(&exists)
 	if err != nil {
 		log.Warnln(err.Error())
 	}
@@ -256,7 +264,7 @@ func (n *Node) dbCheckinDataset(id string) error {
 	q := `DELETE FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE
 		dataset_id='` + id + `';`
 
-	_, err := n.clientCheckoutTable.Exec(q)
+	_, err := n.datasetCheckoutDB.Exec(q)
 	if err != nil {
 		panic(err)
 		return err
@@ -289,7 +297,7 @@ func (n *Node) dbCheckoutDataset(r *pb.DatasetRequest) error {
 	q := `INSERT INTO ` + schemaName + `.` + datasetCheckoutTable + `(
 		client_id, client_name, dataset_id, tstamp) VALUES ($1, $2, $3, current_timestamp);`
 
-	_, err = n.clientCheckoutTable.Exec(q, clientID, clientName, doi)
+	_, err = n.datasetCheckoutDB.Exec(q, clientID, clientName, doi)
 	if err != nil {
 		return err
 	}
@@ -300,7 +308,7 @@ func (n *Node) dbCheckoutDataset(r *pb.DatasetRequest) error {
 func (n *Node) dbGetDatasetIdentifiers() ([]string, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetPolicyTable + `;`
 
-	rows, err := n.clientCheckoutTable.Query(q)
+	rows, err := n.datasetCheckoutDB.Query(q)
 	if err != nil {
 		log.Errorln(err.Error())
 		return nil, err
@@ -327,11 +335,13 @@ func (n *Node) dbGetDatasetIdentifiers() ([]string, error) {
 	return arr, nil
 }
 
+// Should we acutally reset the entire database? Consider an alternative to this solution
+// TODO: remove only all fields that were not included in this execution (delete IDS from previous execution)
 func (n *Node) dbResetDatasetIdentifiers() error {
 	// Delete all records
 	q := `DELETE FROM ` + schemaName + `.` + datasetPolicyTable + `;`
 
-	_, err := n.policyDB.Exec(q)
+	_, err := n.datasetPolicyDB.Exec(q)
 	if err != nil {
 		log.Errorln(err.Error())
 		return err
@@ -339,7 +349,7 @@ func (n *Node) dbResetDatasetIdentifiers() error {
 
 	// Reset squence counter
 	q = `ALTER SEQUENCE ` + schemaName + `.policy_table_id_seq RESTART WITH 1;` // UPDATE ` + schemaName + `.` + datasetPolicyTable + ` SET id = DEFAULT;`
-	_, err = n.policyDB.Exec(q)
+	_, err = n.datasetPolicyDB.Exec(q)
 	if err != nil {
 		log.Errorln(err.Error())
 		return err
@@ -349,3 +359,12 @@ func (n *Node) dbResetDatasetIdentifiers() error {
 }
 
 // func check in data..?
+
+// DEVELOPMENT DATABASE SETUP BELOW THIS LINE
+func (n *Node) devSetupDatabase(connectionString string) error {
+	return nil
+}
+
+func (n *Node) devPopulateDatabase(connectionString string) error {
+	return nil
+}

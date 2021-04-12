@@ -72,9 +72,6 @@ func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Reque
 }
 
 func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
-	newCtx, cancel := context.WithDeadline(ctx, time.Now().Add(time.Second*15)) // set proper time to wait
-	defer cancel()
-
 	// Create dataset request
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_URL,
@@ -135,7 +132,7 @@ func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, data
 				return
 			}
 
-			// Get client-related fiels
+			// Get client-related fields
 			_, oid, err := d.getClientIdentifier(clientToken)
 			if err != nil {
 				if err := d.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
@@ -152,10 +149,10 @@ func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, data
 			http.Error(w, http.StatusText(http.StatusUnauthorized)+": "+err.Error(), http.StatusUnauthorized)
 			return
 		}
-	case <-newCtx.Done():
+	/*case <-newCtx.Done():
 		log.Println(err.Error())
 		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
-		return
+		return*/
 	}
 }
 

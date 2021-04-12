@@ -1,0 +1,71 @@
+# Creates Docker containers suited for development
+version: '3.0'
+services:
+
+  # Lohpi-DV 
+  lohpi-ca-dev:
+    environment:
+      - LOHPI_ENV=development
+    container_name: lohpi-ca-dev
+    image: lohpi-ca-dev
+    build: 
+      context: .
+      dockerfile: "./cmd/dataverse/ca/Dockerfile"
+    command: --new
+    network_mode: host
+    #restart: 
+    expose:
+      - "8300"
+      - "8301"
+  
+  # Lohpi-DV 
+  lohpi-directoryserver-dev:
+    environment:
+      - LOHPI_ENV=development
+    container_name: lohpi-directoryserver-dev
+    image: lohpi-directoryserver-dev
+    build: 
+      context: .
+      dockerfile: "./cmd/dataverse/directoryserver/Dockerfile"
+    network_mode: host
+    command: --new
+    #restart: never
+    expose:
+    - "8080"
+    depends_on: 
+    - lohpi-ca-dev
+
+  # Lohpi-DV 
+  lohpi-policy-store-dev:
+    environment:
+      - LOHPI_ENV=development
+    container_name: lohpi-policy-store-dev
+    image: lohpi-policy-store-dev
+    build:
+      context: .
+      dockerfile: "./cmd/dataverse/policy_store/Dockerfile"
+    network_mode: host
+    command: -new=true
+    #restart: never
+    expose:
+      - "8083"
+    depends_on:
+      - lohpi-ca-dev
+      - lohpi-directoryserver-dev
+
+  # Lohpi-DV     
+  lohpi-node-1-dev  :
+    environment:
+      - LOHPI_ENV=development
+    container_name: lohpi-node-1-dev
+    image: lohpi-node-1-dev
+    build: 
+      context: .
+      dockerfile: "./cmd/dataverse/node/Dockerfile"
+    network_mode: host
+    #restart: never
+    command: -name "node_0" -new=true
+    depends_on: 
+      - lohpi-ca-dev
+      - lohpi-directoryserver-dev
+      - lohpi-policy-store-dev

@@ -3,7 +3,6 @@ module github.com/arcsecc/lohpi
 go 1.15
 
 require (
-	github.com/buger/jsonparser v1.1.1
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/go-git/go-git/v5 v5.2.0
 	github.com/golang/protobuf v1.5.1
@@ -11,7 +10,6 @@ require (
 	github.com/inconshreveable/log15 v0.0.0-20201112154412-8562bdadbbac
 	github.com/jinzhu/configor v1.2.1
 	github.com/joonnna/ifrit v0.0.0-20210316144642-c84515123ba4
-	github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727
 	github.com/lestrrat-go/jwx v1.1.4
 	github.com/lib/pq v1.9.0
 	github.com/magiconair/properties v1.8.4 // indirect
