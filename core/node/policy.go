@@ -36,7 +36,13 @@ var (
 // Also: make db columns into config variables
 
 // Main entry point for initializing the database schema and its tables on Microsoft Azure
-func (n *Node) initializePostgreSQLdb(connectionString string) error {
+func (n *NodeCore) initializePostgreSQLdb(connectionString string) error {
+	if connectionString == "" {
+		log.Warnln("Connection string is empty")
+	}
+
+	log.Debugln("Connection string:", connectionString)
+	
 	// Create schema
 	if err := n.createSchema(connectionString); err != nil {
 		return err
@@ -57,7 +63,7 @@ func (n *Node) initializePostgreSQLdb(connectionString string) error {
 
 // Creates the table in the database that assigns policies to datasets
 // TODO: refine this to perform boolean operations as a temp fix
-func (n *Node) initializePolicyTable(connectionString string) error {
+func (n *NodeCore) initializePolicyTable(connectionString string) error {
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetPolicyTable + ` (
 		id SERIAL PRIMARY KEY,
 		dataset_id VARCHAR(200) NOT NULL UNIQUE, 
@@ -82,7 +88,7 @@ func (n *Node) initializePolicyTable(connectionString string) error {
 }
 
 // Creates the table in the database that tracks which client has checked out datasets
-func (n *Node) initializeDatasetCheckoutTable(connectionString string) error {
+func (n *NodeCore) initializeDatasetCheckoutTable(connectionString string) error {
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetCheckoutTable + ` (
 		id SERIAL PRIMARY KEY, 
 		client_id VARCHAR(200) NOT NULL, 
@@ -109,7 +115,7 @@ func (n *Node) initializeDatasetCheckoutTable(connectionString string) error {
 }
 
 // Creates the schema, given the connection string
-func (n *Node) createSchema(connectionString string) error {
+func (n *NodeCore) createSchema(connectionString string) error {
 	log.Println("connectionString:", connectionString)
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
 	db, err := sql.Open("postgres", connectionString)
@@ -131,7 +137,7 @@ func (n *Node) createSchema(connectionString string) error {
 
 // Sets the policy for the dataset given by the datasetId. The objectAttribute is the policy
 // associated with the dataset.
-func (n *Node) dbSetObjectPolicy(datasetId, allowed string) error {
+func (n *NodeCore) dbSetObjectPolicy(datasetId, allowed string) error {
 	//q := `INSERT INTO ` + schemaName + `.` + datasetPolicyTable + `(` + n.policyIdentifier + `, policyAttributes) VALUES ($1, $2)`
 	q := `INSERT INTO ` + schemaName + `.` + datasetPolicyTable + `
 	(dataset_id, allowed) VALUES ($1, $2)
@@ -148,7 +154,7 @@ func (n *Node) dbSetObjectPolicy(datasetId, allowed string) error {
 
 // Returns the policy assoicated with the dataset. If the dataset identifier is not stored in the database,
 // it returns an empty string and a nil error.
-func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
+func (n *NodeCore) dbGetObjectPolicy(datasetId string) (string, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetPolicyTable + ` WHERE dataset_id = $1;`
 
 	var id, dataset_id, allowed string
@@ -168,7 +174,7 @@ func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
 // Returns true if the given subjectAttribute (the attributes that are associated with the clients)
 // matches the objectAttribute (the attributes that are assoicated with ) Should be called from ifrit handler
 // THIS FUNCTION IS NOT USED
-/*func (n *Node) subjectIsAllowedAccess(clientAttribute, objectAttribute string) bool {
+/*func (n *NodeCore) subjectIsAllowedAccess(clientAttribute, objectAttribute string) bool {
 	allowed := false
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + policyTable + ` WHERE ` + clientAttribute + ` = '` + objectAttribute + `');`
 	err := n.datasetPolicyDB.QueryRow(q).Scan(&allowed)
@@ -181,7 +187,7 @@ func (n *Node) dbGetObjectPolicy(datasetId string) (string, error) {
 /* Returns true if the dataset is publicly available, returns false otherwise.
  * Note: this function looks for the "allowed" attribute only. We need to find a better way to specify policies.
  */
-func (n *Node) dbDatasetIsAvailable(id string) bool {
+func (n *NodeCore) dbDatasetIsAvailable(id string) bool {
 	var allowed bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + ` 
 		WHERE dataset_id = '` + id + `' AND allowed = 't');`
@@ -195,7 +201,7 @@ func (n *Node) dbDatasetIsAvailable(id string) bool {
 
 // Returns true if the given data object is registered in the database,
 // returns false otherwise.
-func (n *Node) dbDatasetExists(id string) bool {
+func (n *NodeCore) dbDatasetExists(id string) bool {
 	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + ` WHERE dataset_id = '` + id + `');`
 	err := n.datasetPolicyDB.QueryRow(q).Scan(&exists)
@@ -207,12 +213,12 @@ func (n *Node) dbDatasetExists(id string) bool {
 
 // Returns a (client, dataset, timestamp) tuple that shows the name of the client that checked out
 // the daataset at the timestamp (point in time)
-/*func (n *Node) dbGetDatasetCheckout(id string) (string, string, string, error) {
+/*func (n *NodeCore) dbGetDatasetCheckout(id string) (string, string, string, error) {
 
 }*/
 
 // Returns a list of records displaying the dataset being checked out and
-func (n *Node) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
+func (n *NodeCore) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE dataset_id='` + id + `';`
 
 	rows, err := n.datasetCheckoutDB.Query(q)
@@ -248,7 +254,7 @@ func (n *Node) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 	return arr, nil
 }
 
-func (n *Node) dbDatasetIsCheckedOutByClient(id string) bool {
+func (n *NodeCore) dbDatasetIsCheckedOutByClient(id string) bool {
 	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE 
 		dataset_id = '` + id + `');`
@@ -260,7 +266,7 @@ func (n *Node) dbDatasetIsCheckedOutByClient(id string) bool {
 }
 
 // TODO: create a table for past checkouts and checkins
-func (n *Node) dbCheckinDataset(id string) error {
+func (n *NodeCore) dbCheckinDataset(id string) error {
 	q := `DELETE FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE
 		dataset_id='` + id + `';`
 
@@ -273,7 +279,7 @@ func (n *Node) dbCheckinDataset(id string) error {
 	return nil
 }
 
-func (n *Node) dbCheckoutDataset(r *pb.DatasetRequest) error {
+func (n *NodeCore) dbCheckoutDataset(r *pb.DatasetRequest) error {
 	token := r.GetClientToken()
 	msg, err := jws.ParseString(string(token))
 	if err != nil {
@@ -305,7 +311,7 @@ func (n *Node) dbCheckoutDataset(r *pb.DatasetRequest) error {
 	return nil
 }
 
-func (n *Node) dbGetDatasetIdentifiers() ([]string, error) {
+func (n *NodeCore) dbGetDatasetIdentifiers() ([]string, error) {
 	q := `SELECT * FROM ` + schemaName + `.` + datasetPolicyTable + `;`
 
 	rows, err := n.datasetCheckoutDB.Query(q)
@@ -337,7 +343,7 @@ func (n *Node) dbGetDatasetIdentifiers() ([]string, error) {
 
 // Should we acutally reset the entire database? Consider an alternative to this solution
 // TODO: remove only all fields that were not included in this execution (delete IDS from previous execution)
-func (n *Node) dbResetDatasetIdentifiers() error {
+func (n *NodeCore) dbResetDatasetIdentifiers() error {
 	// Delete all records
 	q := `DELETE FROM ` + schemaName + `.` + datasetPolicyTable + `;`
 
@@ -361,10 +367,10 @@ func (n *Node) dbResetDatasetIdentifiers() error {
 // func check in data..?
 
 // DEVELOPMENT DATABASE SETUP BELOW THIS LINE
-func (n *Node) devSetupDatabase(connectionString string) error {
+func (n *NodeCore) devSetupDatabase(connectionString string) error {
 	return nil
 }
 
-func (n *Node) devPopulateDatabase(connectionString string) error {
+func (n *NodeCore) devPopulateDatabase(connectionString string) error {
 	return nil
 }

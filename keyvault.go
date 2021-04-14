@@ -1,4 +1,4 @@
-package keyvault
+package lohpi
 
 import (
 	"encoding/json"
@@ -12,31 +12,29 @@ import (
 )
 
 // Describes configuration to communicate with
-type KeyVaultClientConfig struct {
-	ClientID     string `required_true`
-	ClientSecret string `required_true`
-	TenantID     string `required_true`
-	BaseURL      string `required_true`
-	SecretName   string `required_true`
+type AzureKeyVaultClientConfig struct {
+	AzureKeyVaultClientID     string
+	AzureKeyVaultClientSecret string
+	AzureKeyVaultTenantID     string
 }
 
-type TokenResponse struct {
+type tokenResponse struct {
 	TokenType   string `json:"token_type"`
 	AccessToken string `json:"access_token"`
 }
 
-type KeyvaultSecretResponse struct {
+type AzureKeyVaultSecretResponse struct {
 	Value string `json:"value"`
 	Id    string `json:"id"`
 	// attributes
 }
 
-type KeyVaultClient struct {
-	Token  string
-	config KeyVaultClientConfig
+type AzureKeyVaultClient struct {
+	config *AzureKeyVaultClientConfig
+	token  string
 }
 
-func NewKeyVaultClient(config KeyVaultClientConfig) (*KeyVaultClient, error) {
+func NewAzureKeyVaultClient(config *AzureKeyVaultClientConfig) (*AzureKeyVaultClient, error) {
 	const authenticationScope = "https://vault.azure.net/.default"
 
 	var keyVaultransport = &http.Transport{
@@ -51,12 +49,12 @@ func NewKeyVaultClient(config KeyVaultClientConfig) (*KeyVaultClient, error) {
 		Transport: keyVaultransport,
 	}
 
-	authenticationURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", config.TenantID)
+	authenticationURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", config.AzureKeyVaultTenantID)
 
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
-	data.Set("client_id", config.ClientID)
-	data.Set("client_secret", config.ClientSecret)
+	data.Set("client_id", config.AzureKeyVaultClientID)
+	data.Set("client_secret", config.AzureKeyVaultClientSecret)
 	data.Set("scope", authenticationScope)
 
 	resp, err := keyVaultClient.Post(authenticationURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
@@ -70,22 +68,24 @@ func NewKeyVaultClient(config KeyVaultClientConfig) (*KeyVaultClient, error) {
 		return nil, err
 	}
 
-	var tr TokenResponse
+	var tr tokenResponse
 	errUnMarshal := json.Unmarshal(body, &tr)
 	if errUnMarshal != nil {
 		return nil, errUnMarshal
 	}
 
-	return &KeyVaultClient{
-		Token:  tr.AccessToken,
+	ss := &AzureKeyVaultClient{
+		token:  tr.AccessToken,
 		config: config,
-	}, nil
+	}
+
+	return ss, nil
 }
 
 // GetSecret retrieves a secret from keyvault
-func (k *KeyVaultClient) GetSecret(vaultBaseURL, secretName string) (*KeyvaultSecretResponse, error) {
+func (k *AzureKeyVaultClient) GetSecret(vaultBaseURL, secretName string) (*AzureKeyVaultSecretResponse, error) {
 	// Create a Bearer string by appending string access token
-	var bearer = "Bearer " + k.Token
+	var bearer = "Bearer " + k.token
 
 	url := fmt.Sprintf("%s/secrets/%s/?api-version=7.0", vaultBaseURL, secretName)
 
@@ -111,7 +111,7 @@ func (k *KeyVaultClient) GetSecret(vaultBaseURL, secretName string) (*KeyvaultSe
 		return nil, err
 	}
 
-	var sr KeyvaultSecretResponse
+	var sr AzureKeyVaultSecretResponse
 	errUnMarshal := json.Unmarshal([]byte(body), &sr)
 	if errUnMarshal != nil {
 		return nil, errUnMarshal

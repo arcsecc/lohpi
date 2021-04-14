@@ -18,7 +18,7 @@ import (
 )
 
 // Fetches the information about a dataset
-func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, ctx context.Context) ([]byte, error) {
+func (d *DirectoryServerCore) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, ctx context.Context) ([]byte, error) {
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -64,14 +64,14 @@ func (d *DirectoryServer) datasetMetadata(w http.ResponseWriter, req *http.Reque
 
 		return d.getMetadata(w, req, respMsg.GetStringValue(), newCtx)
 	case <-newCtx.Done():
-		log.Debugln("Timeout in 'func (d *DirectoryServer) datasetMetadata()'")
+		log.Debugln("Timeout in 'func (d *DirectoryServerCore) datasetMetadata()'")
 		return nil, errors.New("Timeout while fetching ")
 	}
 
 	return nil, nil
 }
 
-func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
+func (d *DirectoryServerCore) dataset(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, clientToken []byte, ctx context.Context) {
 	// Create dataset request
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_GET_DATASET_URL,
@@ -156,7 +156,7 @@ func (d *DirectoryServer) dataset(w http.ResponseWriter, req *http.Request, data
 	}
 }
 
-func (d *DirectoryServer) getClientIdentifier(token []byte) (string, string, error) {
+func (d *DirectoryServerCore) getClientIdentifier(token []byte) (string, string, error) {
 	msg, err := jws.ParseString(string(token))
 	if err != nil {
 		return "", "", err
@@ -180,7 +180,7 @@ func (d *DirectoryServer) getClientIdentifier(token []byte) (string, string, err
 }
 
 // TODO: use context and refine me otherwise
-func (d *DirectoryServer) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl string, ctx context.Context) ([]byte, error) {
+func (d *DirectoryServerCore) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl string, ctx context.Context) ([]byte, error) {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func (d *DirectoryServer) getMetadata(w http.ResponseWriter, r *http.Request, re
 }
 
 // TODO: use context request
-func (d *DirectoryServer) datasetRequest(w http.ResponseWriter, req *http.Request, remoteUrl string, ctx context.Context) error {
+func (d *DirectoryServerCore) datasetRequest(w http.ResponseWriter, req *http.Request, remoteUrl string, ctx context.Context) error {
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		log.Println(err.Error())
@@ -258,7 +258,7 @@ func (d *DirectoryServer) datasetRequest(w http.ResponseWriter, req *http.Reques
 }
 
 // TODO: handle ctx
-func (d *DirectoryServer) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
+func (d *DirectoryServerCore) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_ROLLBACK_CHECKOUT,
 		Sender:      d.pbNode(),
@@ -301,7 +301,7 @@ func (d *DirectoryServer) rollbackCheckout(nodeAddr, dataset string, ctx context
 	return nil
 }
 
-func (d *DirectoryServer) insertCheckedOutDataset(dataset, clientId string) {
+func (d *DirectoryServerCore) insertCheckedOutDataset(dataset, clientId string) {
 	d.clientCheckoutMapLock.Lock()
 	defer d.clientCheckoutMapLock.Unlock()
 	if d.clientCheckoutMap[dataset] == nil {
@@ -310,13 +310,13 @@ func (d *DirectoryServer) insertCheckedOutDataset(dataset, clientId string) {
 	d.clientCheckoutMap[dataset] = append(d.clientCheckoutMap[dataset], clientId)
 }
 
-func (d *DirectoryServer) getCheckedOutDatasetMap() map[string][]string {
+func (d *DirectoryServerCore) getCheckedOutDatasetMap() map[string][]string {
 	d.clientCheckoutMapLock.RLock()
 	defer d.clientCheckoutMapLock.RUnlock()
 	return d.clientCheckoutMap
 }
 
-func (d *DirectoryServer) datasetIsInvalidated(dataset string) bool {
+func (d *DirectoryServerCore) datasetIsInvalidated(dataset string) bool {
 	l := d.revokedDatasets()
 
 	for e := l.Front(); e != nil; e = e.Next() {

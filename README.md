@@ -17,7 +17,7 @@ $ docker exec -it lohpi-postgres-dev bash
 $ psql -h localhost -U postgres -f dev-initialize.sql
 
 6. When you need to login to the database using psql, run 
-$ psql -h localhost -U lohpi_dev -d dataset_policy_db
+$ psql -h localhost -U lohpi_dev_user -d dataset_policy_db
 Now you can operate directly on the DBMS using the psql shell, if needed. 
 
 7. Tear down the database by running ```docker stop <id>``` as explained above. 

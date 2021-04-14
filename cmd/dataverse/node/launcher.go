@@ -19,8 +19,10 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/jinzhu/configor"
-	"github.com/arcsecc/lohpi/core/node"
+	"github.com/arcsecc/lohpi"
 )
+
+// TODO: find a better way to configure stuff :))
 
 var config = struct {
 	Port				int 		`default:"8090"`
@@ -32,13 +34,14 @@ var config = struct {
 	AzureKeyVaultName 	string 		`required:"true"`
 	AzureKeyVaultSecret	string		`required:"true"`
 	AzureClientSecret	string 		`required:"true"`
-	AzureClientId		string		`required:"true"`
+	AzureClientID		string		`required:"true"`
 	AzureKeyVaultBaseURL string		`required:"true"`
-	AzureTenantId		string		`required:"true"`
+	AzureTenantID		string		`required:"true"`
 }{}
 
 type StorageNode struct {
-	node *node.Node
+	node *lohpi.Node
+	//kvClient *lohpi.AzureKeyVaultClient
 }
 
 func main() {
@@ -46,7 +49,6 @@ func main() {
 	var createNew bool
 	var nodeName string
 
-	
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// Logfile and name flags
@@ -73,34 +75,7 @@ func main() {
 	var err error
 
 	if createNew {
-		nodeConfig := &node.Config{
-			Port: config.Port,
-			PolicyStoreAddr: config.PolicyStoreAddr,
-			MuxAddr: config.MuxAddr,
-			LohpiCaAddr: config.LohpiCaAddr,
-			AzureKeyVaultName: config.AzureKeyVaultName,
-			AzureKeyVaultSecret: config.AzureKeyVaultSecret,
-			AzureClientSecret: config.AzureClientSecret,
-			AzureKeyVaultBaseURL: config.AzureKeyVaultBaseURL,
-			AzureClientId: config.AzureClientId,
-			AzureTenantId: config.AzureTenantId,
-		}
-
-		env := os.Getenv("LOHPI_ENV")
-		if env == "" {
-			log.Errorln("LOHPI_ENV must be set. Exiting.")
-			os.Exit(1)
-		} else if env == "production" {
-			log.Infoln("Production environment set")
-		} else if env == "development" {
-			log.Infoln("Development environment set")
-		} else {
-			log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
-			os.Exit(1)
-		}
-		log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
-
-		sn, err = newNodeStorage(nodeName, nodeConfig)
+		sn, err = newNodeStorage()
 		if err != nil {
 			log.Errorln(err.Error())
 			os.Exit(1)
@@ -122,6 +97,25 @@ func main() {
 	os.Exit(0)
 }
 
+func InitializeLogfile(logToFile bool) error {
+	logfilePath := "node.log"
+
+	if logToFile {
+		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.SetOutput(os.Stdout)
+			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
+		}
+		log.SetOutput(file)
+		log.SetFormatter(&log.TextFormatter{})
+	} else {
+		log.Infoln("Setting logs to standard output")
+		log.SetOutput(os.Stdout)
+	}
+
+	return nil
+}
+
 func exists(name string) bool {
 	if _, err := os.Stat(name); err != nil {
 		if os.IsNotExist(err) {
@@ -131,9 +125,39 @@ func exists(name string) bool {
 	return true
 }
 
-func newNodeStorage(name string, nodeConfig *node.Config) (*StorageNode, error) {
-	n, err := node.NewNode(name, nodeConfig)
+func newNodeStorage() (*StorageNode, error) {
+	env := os.Getenv("LOHPI_ENV")
+	if env == "" {
+		log.Errorln("LOHPI_ENV must be set. Exiting.")
+		os.Exit(1)
+	} else if env == "production" {
+		log.Infoln("Production environment set")
+	} else if env == "development" {
+		log.Infoln("Development environment set")
+	} else {
+		log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
+		os.Exit(1)
+	}
+	
+	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
+	
+	kvClient, err := newAzureKeyVaultClient()
 	if err != nil {
+		panic(err)
+		return nil, err
+	}
+
+	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
+	if err != nil {
+		panic(err)
+		return nil, err
+	}
+
+	dbConnectionString := resp.Value
+	
+	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString))
+	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -144,11 +168,23 @@ func newNodeStorage(name string, nodeConfig *node.Config) (*StorageNode, error) 
 	sn.node.RegisterDatasetHandler(sn.archiveHandler)
 	sn.node.RegsiterMetadataHandler(sn.metadataHandler)
 	
+	// TODO: revise the call stack starting from here
 	if err := sn.node.JoinNetwork(); err != nil {
+		panic(err)
 		return nil, err
 	}
 
 	return sn, nil
+}
+
+func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
+	c := &lohpi.AzureKeyVaultClientConfig{
+		AzureKeyVaultClientID:     config.AzureClientID,
+		AzureKeyVaultClientSecret: config.AzureClientSecret,
+		AzureKeyVaultTenantID:     config.AzureTenantID,
+	}
+
+	return lohpi.NewAzureKeyVaultClient(c)
 }
 
 func (sn *StorageNode) Start() {
@@ -173,34 +209,16 @@ func (sn *StorageNode) initializePolicies() error {
 }
 
 // Returns nescesarry information to fetch an external archive
-func (s *StorageNode) archiveHandler(id string) (*node.ExternalDataset, error) {
-	return remoteDataset(id)
+func (s *StorageNode) archiveHandler(id string) (string, error) {
+	return config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id, nil
 }
 
-// Returns a list of avaiable identifiers
-func (s *StorageNode) datasetIdentifiersHandler() ([]string, error) {
-	return remoteDatasetIdentifiers()
-}
-
-// Returns true if the given id exists in a remote location, returns false otherwise
-func (s *StorageNode) identifierExistsHandler(id string) bool {
-	return identifierExists(id)
-}
-
-func (s *StorageNode) metadataHandler(id string) (*node.ExternalMetadata, error) {
-	return &node.ExternalMetadata{
-		URL: config.RemoteBaseURL + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id,
-	}, nil 
+func (s *StorageNode) metadataHandler(id string) (string, error) {
+	return config.RemoteBaseURL + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id, nil 
 }
 
 func (s *StorageNode) Shutdown() {
 
-}
-
-func remoteDataset(id string) (*node.ExternalDataset, error) {
-	return &node.ExternalDataset{
-		URL: config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id,
-	}, nil
 }
 
 // TODO: remove me and broadcast a request to all nodes at the mux. Might 
