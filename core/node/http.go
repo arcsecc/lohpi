@@ -19,7 +19,7 @@ const PROJECTS_DIRECTORY = "projects"
 
 func (n *NodeCore) startHttpServer(addr string) error {
 	router := mux.NewRouter()
-	log.Infof("%s: Started HTTP server on port %s\n", n.config.Name, addr)
+	log.Infof("%s: Started HTTP server on port %s\n", n.config().Name, addr)
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	dRouter.HandleFunc("/ids", n.getDatasetIdentifiers).Methods("GET")

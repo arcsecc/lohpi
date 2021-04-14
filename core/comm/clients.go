@@ -31,7 +31,7 @@ type PolicyStoreConn struct {
 	cc *grpc.ClientConn
 }
 
-func NewMuxGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*DirectoryGRPCClient, error) {
+func NewDirectoryServerGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*DirectoryGRPCClient, error) {
 	var dialOptions []grpc.DialOption
 	// check paramters here
 	config := ClientConfig(cert, caCert, priv)

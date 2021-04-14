@@ -16,7 +16,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -35,6 +34,10 @@ type Config struct {
 	LohpiCaPort					int
 	Name 						string
 	PostgresSQLConnectionString string
+	DatabaseRetentionInterval	time.Duration
+	AllowMultipleCheckouts 		bool
+	DebugEnabled 				bool
+	TLSEnabled					bool
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -44,26 +47,9 @@ type gossipMessage struct {
 	Addr    string
 }
 
-// Normally used to transfer metadata from external sources
-type ExternalMetadata struct {
-	URL string
-}
-
-// Used to describe an external archive
-type ExternalDataset struct {
-	URL string
-}
-
 type ObjectPolicy struct {
 	Attribute string
 	Value     string
-}
-
-// Used to configure the time intervals between each fetching of the identifiers of the dataset.
-// You really should use this config to enable a push-based approach.
-type RefreshConfig struct {
-	RefreshInterval time.Duration
-	URL             string
 }
 
 // Policy assoicated with metadata
@@ -73,6 +59,12 @@ type Policy struct {
 	Content          string
 }
 
+// Function type used to fetch compressed archives from external sources.
+type externalArchiveHandler = func(id string) (string, error)
+
+// Function type to fetch metadata from the external data source
+type externalMetadataHandler = func(id string) (string, error)
+
 type NodeCore struct {
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
@@ -81,7 +73,8 @@ type NodeCore struct {
 	cu *comm.CryptoUnit
 
 	// Configuration 
-	config *Config
+	conf *Config
+	configLock sync.RWMutex
 
 	// gRPC client towards the Mux
 	muxClient *comm.DirectoryGRPCClient
@@ -91,7 +84,7 @@ type NodeCore struct {
 
 	// Used for identifying data coming from policy store
 	directoryServerID []byte
-	policyStoreID []byte
+	policyStoreID []byte	// TODO: allow for any number of policy store instances :)
 
 	directoryServerIP string
 	policyStoreIP string
@@ -110,10 +103,6 @@ type NodeCore struct {
 	// Callback to fetch external metadata
 	externalMetadataCallback     externalMetadataHandler
 	externalMetadataCallbackLock sync.RWMutex
-
-	// Config for fetching data from remote source. Remove me?
-	refreshConfigLock sync.RWMutex
-	refreshConfig     RefreshConfig
 
 	// Azure database
 	datasetCheckoutDB *sql.DB
@@ -143,7 +132,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		return nil, err
 	}
 
-	muxClient, err := comm.NewMuxGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	muxClient, err := comm.NewDirectoryServerGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +145,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	node := &NodeCore{
 		ifritClient:  ifritClient,
 		muxClient:    muxClient,
-		config:       config,
+		conf:       config,
 		psClient:     psClient,
 		httpListener: httpListener,
 		cu:           cu,
@@ -168,6 +157,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	// Initialize the PostgresSQL database
 	if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -177,6 +167,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	// TODO: can we do something better?
 	if err := node.dbResetDatasetIdentifiers(); err != nil {
 		log.Errorf(err.Error())
+		panic(err)
 		return nil, err
 	}
 
@@ -186,158 +177,46 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	return node, nil
 }
 
+func (n *NodeCore) SetConfig(c *Config) {
+	n.configLock.Lock()
+	defer n.configLock.Unlock()
+	n.conf = c
+}
+
 // TODO: restore checkouts from previous runs so that we don't lose information from memory.
 // Especially for checkout datasets 
 func (n *NodeCore) IfritClient() *ifrit.Client {
 	return n.ifritClient
 }
 
-func (n *NodeCore) InitializeLogfile(logToFile bool) error {
-	logfilePath := "node.log"
-
-	if logToFile {
-		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-		if err != nil {
-			log.SetOutput(os.Stdout)
-			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
-		}
-		log.SetOutput(file)
-		log.SetFormatter(&log.TextFormatter{})
-	} else {
-		log.Infoln("Setting logs to standard output")
-		log.SetOutput(os.Stdout)
-	}
-
-	return nil
-}
-
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
-// All policies have a default value of nil, which leads to client requests being rejected. You must call this method to
-// make the dataset available to the clients by fetching the latest dataset. The call will block until a context timeout or
-// the policy is applied to the dataset. Dataset identifiers that have not been passed to this method will not
-// be available to clients.
+// You will have to call this method to make the datasets available to the clients. 
 func (n *NodeCore) IndexDataset(id string, ctx context.Context) error {
-	//TODO: handle context
-	if id == "" {
-		return errors.New("Dataset identifier must be a non-empty string")
-	}
-
 	if n.datasetExists(id) {
-		return fmt.Errorf("Dataset with identifier '%s' already exists", id)
+		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the node", id)
 	}
 
 	// Send policy request to policy store
-	// ctx too...
-	if err := n.pbRequestPolicy(id); err != nil {
-		log.Errorln(err.Error())
-		return err
-	}
-
-	// Add notify mux of the newest policy update
-	if err := n.sendDatsetIdentifier(id, n.config.DirectoryServerAddress); err != nil {
-		log.Errorln(err.Error())
-		return err
-	}
-
-	return nil
-}
-
-// Requests the newest policy from the policy store
-func (n *NodeCore) pbRequestPolicy(id string) error {
-	msg := &pb.Message{
-		Type:   message.MSG_TYPE_GET_DATASET_POLICY,
-		Sender: n.pbNode(),
-		PolicyRequest: &pb.PolicyRequest{
-			Identifier: id,
-		},
-	}
-
-	data, err := proto.Marshal(msg)
+	policyResponse, err := n.pbSendPolicyStorePolicyRequest(id, n.policyStoreIP)
 	if err != nil {
+		panic(err)
+		return err
+	}
+
+	// Apply the update from policy store to storage
+	if err := n.dbSetObjectPolicy(id, policyResponse.GetObjectPolicy().GetContent()); err != nil {
+		panic(err)
+		return err
+	}
+
+	// Notify the directory server of the newest policy update
+	if err := n.pbSendDatsetIdentifier(id, n.directoryServerIP); err != nil {
 		panic(err)
 		log.Errorln(err.Error())
 		return err
 	}
 
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		panic(err)
-		log.Errorln(err.Error())
-		return err
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		panic(err)
-		log.Errorln(err.Error())
-		return err
-	}
-
-	// TODO: use context with timeout :)
-	ch := n.ifritClient.SendTo(n.config.PolicyStoreAddress, data)
-
-	select {
-	case resp := <-ch:
-		respMsg := &pb.Message{}
-		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			log.Errorln(err.Error())
-			return err
-		}
-
-		if err := n.verifyMessageSignature(respMsg); err != nil {
-			panic(err)
-			log.Errorln(err.Error())
-			return err
-		}
-
-		// Insert into database
-		pResponse := respMsg.GetPolicyResponse()
-		if err := n.dbSetObjectPolicy(id, pResponse.GetObjectPolicy().GetContent()); err != nil {
-			log.Errorln(err.Error())
-			return err
-		}
-
-		// Insert into map too if all went well in the database transaction
-		// TODO: store other things in the struct? More complex policies?
-		n.insertDataset(id, struct{}{})
-	}
-	return nil
-}
-
-func (n *NodeCore) sendDatsetIdentifier(id, recipient string) error {
-	msg := &pb.Message{
-		Type:        message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
-		Sender:      n.pbNode(),
-		StringValue: id,
-	}
-
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		panic(err)
-		log.Errorln(err.Error())
-		return err
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		panic(err)
-		log.Errorln(err.Error())
-		return err
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		panic(err)
-		log.Errorln(err.Error())
-		return err
-	}
-
-	// TODO: use context with timeout :)
-	// No need to do anything more. The mux doesn't respond to messages
-	n.ifritClient.SendTo(recipient, data)
 	return nil
 }
 
@@ -348,9 +227,8 @@ func (n *NodeCore) RemoveDataset(id string) error {
 
 // Shuts down the node
 func (n *NodeCore) Shutdown() {
-	log.Printf("Shutting down Lohpi node\n")
+	log.Infoln("Shutting down Lohpi node")
 	n.ifritClient.Stop()
-	//	fuse.Shutdown() // might fail...
 }
 
 // Joins the network by starting the underlying Ifrit node. Further, it performs handshakes
@@ -366,11 +244,10 @@ func (n *NodeCore) JoinNetwork() error {
 		return err
 	}
 
-	go n.startHttpServer(fmt.Sprintf(":%d", n.config.HTTPPort))
+	go n.startHttpServer(fmt.Sprintf(":%d", n.config().HTTPPort))
 
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
-	//	n.ifritClient.RegisterStreamHandler(n.streamHandler)
 
 	return nil
 }
@@ -384,19 +261,13 @@ func (n *NodeCore) HTTPAddress() string {
 }
 
 func (n *NodeCore) NodeName() string {
-	return n.config.Name
+	return n.config().Name
 }
-
-// Function type used to fetch compressed archives from external sources.
-type externalArchiveHandler = func(id string) (string, error)
-
-// Function type to fetch metadata from the external data source
-type externalMetadataHandler = func(id string) (string, error)
 
 // PRIVATE METHODS BELOW
 func (n *NodeCore) directoryServerHandshake() error {
-	log.Infof("Performing handshake with directory server at address %s:%s\n", n.config.DirectoryServerAddress, strconv.Itoa(n.config.DirectoryServerGPRCPort))
-	conn, err := n.muxClient.Dial(n.config.DirectoryServerAddress + ":" + strconv.Itoa(n.config.DirectoryServerGPRCPort))
+	log.Infof("Performing handshake with directory server at address %s:%s\n", n.config().DirectoryServerAddress, strconv.Itoa(n.config().DirectoryServerGPRCPort))
+	conn, err := n.muxClient.Dial(n.config().DirectoryServerAddress + ":" + strconv.Itoa(n.config().DirectoryServerGPRCPort))
 	if err != nil {
 		return err
 	}
@@ -406,14 +277,12 @@ func (n *NodeCore) directoryServerHandshake() error {
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
-		Name:         n.config.Name,
+		Name:         n.config().Name,
 		IfritAddress: n.ifritClient.Addr(),
 		Role:         "Storage node",
 		Id:           []byte(n.ifritClient.Id()),
 	})
 	if err != nil {
-		panic(err)
-		log.Fatalln(err)
 		return err
 	}
 
@@ -423,8 +292,8 @@ func (n *NodeCore) directoryServerHandshake() error {
 }
 
 func (n *NodeCore) policyStoreHandshake() error {
-	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config.PolicyStoreAddress, n.config.PolicyStoreGRPCPport)
-	conn, err := n.psClient.Dial(n.config.PolicyStoreAddress + ":" + strconv.Itoa(n.config.PolicyStoreGRPCPport))
+	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config().PolicyStoreAddress, n.config().PolicyStoreGRPCPport)
+	conn, err := n.psClient.Dial(n.config().PolicyStoreAddress + ":" + strconv.Itoa(n.config().PolicyStoreGRPCPport))
 	if err != nil {
 		return err
 	}
@@ -434,7 +303,7 @@ func (n *NodeCore) policyStoreHandshake() error {
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, &pb.Node{
-		Name:         n.config.Name,
+		Name:         n.config().Name,
 		IfritAddress: n.ifritClient.Addr(),
 		Role:         "Storage node",
 		Id:           []byte(n.ifritClient.Id()),
@@ -447,7 +316,6 @@ func (n *NodeCore) policyStoreHandshake() error {
 
 	n.policyStoreIP = r.GetIp()
 	n.policyStoreID = r.GetId()
-
 	return nil
 }
 
@@ -455,13 +323,15 @@ func (n *NodeCore) policyStoreHandshake() error {
 func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
+		log.Errorln(err)
 		panic(err)
+		return nil, err
 	}
 
-	log.Infof("Node '%s' got message %s\n", n.config.Name, msg.GetType())
+	log.Infof("Node '%s' got message %s\n", n.config().Name, msg.GetType())
 	if err := n.verifyMessageSignature(msg); err != nil {
-		panic(err)
 		log.Errorln(err)
+		panic(err)
 		return nil, err
 	}
 
@@ -470,42 +340,15 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		return n.nodeInfo()
 
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
-		return n.pbDatasetIdentifiers(msg)
+		return n.pbMarshalDatasetIdentifiers(msg)
 
-		// Only allow one check-out at a time by the same client of the same dataset.
-		// Respond with "Unauthorized" if something fails. We might disable this feature
-		// based on certain criterias.
 	case message.MSG_TYPE_GET_DATASET_URL:
-		// Check if dataset is indexed by the policy enforcement. If it is not, reject the request (401).
-		if !n.dbDatasetExists(msg.GetDatasetRequest().GetIdentifier()) {
-			return n.unauthorizedAccess(fmt.Sprintf("Dataset '%s' is not indexed by the node", msg.GetDatasetRequest().GetIdentifier()))
-		}
-		/*if n.isCheckedOutByClient(msg.GetDatasetRequest()) {
-			return n.unauthorizedAccess("Client has already checked out this dataset")
-		}*/
-
-		if n.clientIsAllowed(msg.GetDatasetRequest()) {
-			if err := n.dbCheckoutDataset(msg.GetDatasetRequest()); err != nil {
-				log.Errorln(err.Error())
-				return nil, err
-			}
-			return n.fetchDatasetURL(msg)
-		} else {
-			return n.unauthorizedAccess("Client has invalid access attributes")
-		}
-
-	//	case message.MSG_TYPE_GET_DATASET:
-	//	return n.marshalledStorageObjectContent(msg)s
-
-	case message.MSG_TYPE_DATASET_EXISTS:
-		return n.pbDatasetExists(msg)
-
+		return n.pbMarshalDatasetURL(msg)
+		
 	case message.MSG_TYPE_GET_DATASET_METADATA_URL:
-		return n.fetchDatasetMetadataURL(msg)
-		// TODO finish me
+		return n.pbMarshalDatasetMetadataURL(msg)
 
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		// gossip
 		log.Infoln("Got new policy batch from policy store")
 		return n.processPolicyBatch(msg)
 
@@ -519,7 +362,7 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		fmt.Printf("Unknown message type: %s\n", msg.GetType())
 	}
 
-	return n.acknowledgeMessage()
+	return n.pbMarshalAcknowledgeMessage()
 }
 
 func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
@@ -563,7 +406,9 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 	return nil, nil
 }
 
+
 // Only disallow permissions for now
+// TODO more here!
 func (n *NodeCore) notifyPolicyChangeToDirectoryServer(dataset string) {
 	msg := &pb.Message{
 		Type:        message.MSG_POLICY_REVOKE,
@@ -616,166 +461,6 @@ func (n *NodeCore) clientIsAllowed(r *pb.DatasetRequest) bool {
 	return n.dbDatasetIsAvailable(r.GetIdentifier())
 }
 
-// Returns a message notifying the recipient that the data request was unauthorized.
-func (n *NodeCore) unauthorizedAccess(errorMsg string) ([]byte, error) {
-	respMsg := &pb.Message{
-		DatasetResponse: &pb.DatasetResponse{
-			IsAllowed:    false,
-			ErrorMessage: errorMsg,
-		},
-	}
-
-	data, err := proto.Marshal(respMsg)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-	return proto.Marshal(respMsg)
-}
-
-// TODO: separate internal and external data sources
-func (n *NodeCore) fetchDatasetURL(msg *pb.Message) ([]byte, error) {
-	id := msg.GetDatasetRequest().GetIdentifier()
-	if handler := n.getDatasetCallback(); handler != nil {
-		externalArchiveUrl, err := handler(id)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		respMsg := &pb.Message{
-			DatasetResponse: &pb.DatasetResponse{
-				URL:       externalArchiveUrl,
-				IsAllowed: true,
-			},
-		}
-
-		data, err := proto.Marshal(respMsg)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		r, s, err := n.ifritClient.Sign(data)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-		return proto.Marshal(respMsg)
-	} else {
-		log.Println("Dataset archive handler not registered")
-	}
-
-	return nil, nil
-}
-
-// TODO: consider abandoning fetchting the metadata url at each request and index it at the node instead
-// Use psql or in-memory map?
-func (n *NodeCore) fetchDatasetMetadataURL(msg *pb.Message) ([]byte, error) {
-	id := msg.GetDatasetRequest().GetIdentifier()
-	if handler := n.getExternalMetadataHandler(); handler != nil {
-		metadataUrl, err := handler(id)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		respMsg := &pb.Message{
-			StringValue: metadataUrl,
-			Sender:      n.pbNode(),
-		}
-
-		data, err := proto.Marshal(respMsg)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		r, s, err := n.ifritClient.Sign(data)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-
-		}
-
-		respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-		return proto.Marshal(respMsg)
-	} else {
-		log.Warnln("ExternalMetadataHandler is not set")
-	}
-
-	return nil, nil
-}
-
-func (n *NodeCore) pbDatasetExists(msg *pb.Message) ([]byte, error) {
-	respMsg := &pb.Message{}
-	respMsg.BoolValue = n.datasetExists(msg.GetStringValue())
-
-	data, err := proto.Marshal(respMsg)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-	return proto.Marshal(respMsg)
-}
-
-// TODO: create protobuf/ifrit related functions their own notation :))
-func (n *NodeCore) pbDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
-	respMsg := &pb.Message{
-		StringSlice: n.datasetIdentifiers(),
-	}
-
-	data, err := proto.Marshal(respMsg)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	respMsg.Signature = &pb.MsgSignature{R: r, S: s}
-	return proto.Marshal(respMsg)
-}
-
-func (n *NodeCore) acknowledgeMessage() ([]byte, error) {
-	msg := &pb.Message{Type: message.MSG_TYPE_OK}
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	return proto.Marshal(msg)
-}
-
 func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
@@ -808,7 +493,7 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 }
 
 func (n *NodeCore) nodeInfo() ([]byte, error) {
-	str := fmt.Sprintf("Name: %s\tIfrit address: %s", n.config.Name, n.IfritClient().Addr())
+	str := fmt.Sprintf("Name: %s\tIfrit address: %s", n.config().Name, n.IfritClient().Addr())
 	return []byte(str), nil
 }
 
@@ -830,7 +515,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	resp := &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
 		Sender: &pb.Node{
-			Name:         n.config.Name,
+			Name:         n.config().Name,
 			IfritAddress: n.ifritClient.Addr(),
 			Role:         "Storage node",
 			Id:           []byte(n.ifritClient.Id()),
@@ -856,7 +541,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	log.Println(n.config.Name, "sending ack to Policy store")
+	log.Println(n.config().Name, "sending ack to Policy store")
 	n.ifritClient.SendTo(n.policyStoreIP, data)
 	return nil, nil
 }
@@ -962,3 +647,9 @@ func (n *NodeCore) datasetIdentifiers() []string {
 	return ids
 }
 
+// Use this to refer to configuration variables
+func (n *NodeCore) config() *Config {
+	n.configLock.RLock()
+	defer n.configLock.RUnlock()
+	return n.conf
+}

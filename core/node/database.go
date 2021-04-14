@@ -40,8 +40,6 @@ func (n *NodeCore) initializePostgreSQLdb(connectionString string) error {
 	if connectionString == "" {
 		log.Warnln("Connection string is empty")
 	}
-
-	log.Debugln("Connection string:", connectionString)
 	
 	// Create schema
 	if err := n.createSchema(connectionString); err != nil {
@@ -147,7 +145,7 @@ func (n *NodeCore) dbSetObjectPolicy(datasetId, allowed string) error {
 
 	_, err := n.datasetPolicyDB.Exec(q, datasetId, allowed)
 	if err != nil {
-		log.Warnln("SQL insert error:", err.Error())
+		log.Errorln("SQL insert error:", err.Error())
 	}
 	return nil
 }
@@ -361,16 +359,5 @@ func (n *NodeCore) dbResetDatasetIdentifiers() error {
 		return err
 	}
 
-	return nil
-}
-
-// func check in data..?
-
-// DEVELOPMENT DATABASE SETUP BELOW THIS LINE
-func (n *NodeCore) devSetupDatabase(connectionString string) error {
-	return nil
-}
-
-func (n *NodeCore) devPopulateDatabase(connectionString string) error {
 	return nil
 }
