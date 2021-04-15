@@ -13,8 +13,7 @@ import (
 // TODO use context on all message passing functions. 
 
 // Requests the newest policy from the policy store
-func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP string) (*pb.PolicyResponse, error) {
-	log.Debug("recipient:", policyStoreIP)
+func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP string) (*pb.Policy, error) {
 	msg := &pb.Message{
 		Type:   message.MSG_TYPE_GET_DATASET_POLICY,
 		Sender: n.pbNode(),
@@ -29,6 +28,7 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -43,19 +43,11 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 		}
 
 		if err := n.verifyMessageSignature(respMsg); err != nil {
+			panic(err)
 			return nil, err
 		}
 
-		// Insert into database
-		return respMsg.GetPolicyResponse(), nil
-		/*if err := n.dbSetObjectPolicy(datasetId, pResponse.GetObjectPolicy().GetContent()); err != nil {
-			log.Errorln(err.Error())
-			return err
-		}*/
-
-		// Insert into map too if all went well in the database transaction
-		// TODO: store other things in the struct? More complex policies?
-		//n.insertDataset(datasetId, struct{}{})
+		return respMsg.GetPolicy(), nil
 	}
 	return nil, fmt.Errorf("Error in pbRequestPolicyStoreUpdate")
 }

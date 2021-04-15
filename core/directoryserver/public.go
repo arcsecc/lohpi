@@ -242,6 +242,7 @@ func (d *DirectoryServerCore) datasetRequest(w http.ResponseWriter, req *http.Re
 	}
 
 	w.WriteHeader(response.StatusCode)
+	// DOES NOT WORK
 	req.Header.Add("Content-Length", strconv.Itoa(len(buf.Bytes())))
 
 	// Octet stream is default

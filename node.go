@@ -112,7 +112,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		defaultDirectoryServerGPRCPort = 8081
 		defaultLohpiCaAddress = "127.0.1.1"
 		defaultLohpiCaPort = 8301
-		defaultName = ""
+		defaultName = "Node identifier"
 		defaultPostgresSQLConnectionString = ""
 		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
 	)

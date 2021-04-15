@@ -200,20 +200,18 @@ func (n *NodeCore) IndexDataset(id string, ctx context.Context) error {
 	// Send policy request to policy store
 	policyResponse, err := n.pbSendPolicyStorePolicyRequest(id, n.policyStoreIP)
 	if err != nil {
-		panic(err)
 		return err
 	}
 
+	//n.insertDataset(datasetId, struct{}{})
+	
 	// Apply the update from policy store to storage
-	if err := n.dbSetObjectPolicy(id, policyResponse.GetObjectPolicy().GetContent()); err != nil {
-		panic(err)
+	if err := n.dbSetObjectPolicy(id, policyResponse.GetContent()); err != nil {
 		return err
 	}
 
 	// Notify the directory server of the newest policy update
 	if err := n.pbSendDatsetIdentifier(id, n.directoryServerIP); err != nil {
-		panic(err)
-		log.Errorln(err.Error())
 		return err
 	}
 
@@ -235,12 +233,10 @@ func (n *NodeCore) Shutdown() {
 // with the policy store and multiplexer at known addresses.
 func (n *NodeCore) JoinNetwork() error {
 	if err := n.directoryServerHandshake(); err != nil {
-		panic(err)
 		return err
 	}
 
 	if err := n.policyStoreHandshake(); err != nil {
-		panic(err)
 		return err
 	}
 
