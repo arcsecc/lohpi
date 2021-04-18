@@ -210,7 +210,7 @@ func (n *NodeCore) IndexDataset(id string, ctx context.Context) error {
 		return err
 	}
 
-	//n.insertDataset(datasetId, struct{}{})
+	n.insertDataset(id, struct{}{})
 	
 	// Apply the update from policy store to storage
 	if err := n.dbSetObjectPolicy(id, policyResponse.GetContent()); err != nil {
@@ -604,6 +604,7 @@ func (n *NodeCore) insertDataset(id string, elem struct{}) {
 	n.datasetMapLock.Lock()
 	defer n.datasetMapLock.Unlock()
 	n.datasetMap[id] = struct{}{}
+	log.Println("datasetMap:", n.datasetMap)
 }
 
 func (n *NodeCore) datasetExists(id string) bool {
