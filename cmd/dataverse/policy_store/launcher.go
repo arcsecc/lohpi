@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	log "github.com/sirupsen/logrus"
-	ps "github.com/arcsecc/lohpi/core/policy"
+	"github.com/arcsecc/lohpi"
 	"github.com/jinzhu/configor"
 )
 
@@ -43,29 +43,17 @@ func main() {
 
 	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&psConfig, psConfigFile, "./lohpi_config.yaml")
 
-	var policyStore *ps.PolicyStore
+	var policyStore *lohpi.PolicyStore
 
 	if createNew {
-		c := ps.Config{
-			Name: psConfig.Name,
-			Host: psConfig.Host,
-			Port: psConfig.Port,
-			GossipInterval: psConfig.GossipInterval,
-			GRPCPort: psConfig.GRPCPort,
-			MulticastAcceptanceLevel: psConfig.MulticastAcceptanceLevel,
-			MuxAddress: psConfig.MuxAddress,
-			LohpiCaAddr: psConfig.LohpiCaAddr,
-			PolicyStoreGitRepository: psConfig.PolicyStoreGitRepository,
-			NumDirectRecipients: psConfig.NumDirectRecipients,
-		}
-
-		policyStore, err := ps.NewPolicyStore(c)
+		policyStore, err := lohpi.NewPolicyStore(lohpi.PolicyStoreWithGitRepository(psConfig.PolicyStoreGitRepository))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 
 		go policyStore.Start()
+		go policyStore.RunPolicyBatcher()
 	} else {
 		log.Fatalln("Need to set the 'new' flag to true. Exiting")
 		os.Exit(1)

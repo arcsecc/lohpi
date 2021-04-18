@@ -1,4 +1,4 @@
-package policy
+package policystore
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-func (ps *PolicyStore) startHttpServer(addr string) error {
+func (ps *PolicyStoreCore) startHttpServer(addr string) error {
 	m := mux.NewRouter()
 	router := m.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	router.HandleFunc("/identifiers", ps.getDatasetIdentifiers).Methods("GET")
@@ -52,7 +52,7 @@ func (ps *PolicyStore) startHttpServer(addr string) error {
 	return ps.httpServer.ListenAndServe()
 }
 
-func (ps *PolicyStore) setPublicKeyCache() error {
+func (ps *PolicyStoreCore) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -70,7 +70,7 @@ func (ps *PolicyStore) setPublicKeyCache() error {
 	return nil
 }
 
-func (ps *PolicyStore) middlewareValidateTokenSignature(next http.Handler) http.Handler {
+func (ps *PolicyStoreCore) middlewareValidateTokenSignature(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
@@ -87,7 +87,7 @@ func (ps *PolicyStore) middlewareValidateTokenSignature(next http.Handler) http.
 	})
 }
 
-func (ps *PolicyStore) validateTokenSignature(token []byte) error {
+func (ps *PolicyStoreCore) validateTokenSignature(token []byte) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -142,7 +142,7 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 }
 
 // Returns the dataset identifiers stored in the network
-func (ps *PolicyStore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
+func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
@@ -152,7 +152,7 @@ func (ps *PolicyStore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Requ
 		Identifiers: make([]string, 0),
 	}
 
-	for i := range ps.getDatasetPolicyMap() {
+	for i := range ps.memCache.DatasetNodes() {
 		respBody.Identifiers = append(respBody.Identifiers, i)
 	}
 
@@ -176,7 +176,7 @@ func (ps *PolicyStore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Requ
 }
 
 // Returns the policy associated with the dataset
-func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
+func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
@@ -189,7 +189,7 @@ func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the node that stores the dataset
-	datasetEntry, exists := ps.getDatasetPolicyMap()[datasetId]
+	policy, exists := ps.getDatasetPolicyMap()[datasetId]
 	if !exists {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
@@ -202,7 +202,7 @@ func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 		Policy string
 	}{}
 
-	resp.Policy = datasetEntry.policy.GetContent()
+	resp.Policy = policy.GetContent()
 
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
@@ -224,7 +224,7 @@ func (ps *PolicyStore) getObjectPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 // Returns the metadata assoicated with the dataset
-func (ps *PolicyStore) getDatasetMetadata(w http.ResponseWriter, r *http.Request) {
+func (ps *PolicyStoreCore) getDatasetMetadata(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
@@ -234,7 +234,7 @@ func (ps *PolicyStore) getDatasetMetadata(w http.ResponseWriter, r *http.Request
 }
 
 // Assigns a new policy to the dataset
-func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
+func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
@@ -247,7 +247,7 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the node that stores the dataset
-	datasetEntry, exists := ps.getDatasetPolicyMap()[datasetId]
+	node, exists := ps.memCache.DatasetNodes()[datasetId]
 	if !exists {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
@@ -273,15 +273,16 @@ func (ps *PolicyStore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	policy := &pb.Policy{
-		Issuer:           ps.name,
+		Issuer:           ps.PolicyStoreConfig().Name,
 		ObjectIdentifier: datasetId,
 		Content:          strconv.FormatBool(reqBody.Policy),
 	}
 
-	// Store the dataset entry
-	ps.addDatasetPolicy(datasetId, &datasetPolicyMapEntry{policy, datasetEntry.node})
+	// Store the dataset entry in map
+	ps.setDatasetPolicy(datasetId, policy)
 
-	if err := ps.gitStorePolicy(datasetEntry.node, datasetId, policy); err != nil {
+	// Store the dataset policy in Git
+	if err := ps.gitStorePolicy(node.GetName(), datasetId, policy); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return

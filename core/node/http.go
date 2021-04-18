@@ -17,9 +17,9 @@ import (
 
 const PROJECTS_DIRECTORY = "projects"
 
-func (n *Node) startHttpServer(addr string) error {
+func (n *NodeCore) startHttpServer(addr string) error {
 	router := mux.NewRouter()
-	log.Infof("%s: Started HTTP server on port %s\n", n.name, addr)
+	log.Infof("%s: Started HTTP server on port %s\n", n.config().Name, addr)
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	dRouter.HandleFunc("/ids", n.getDatasetIdentifiers).Methods("GET")
@@ -52,7 +52,7 @@ func (n *Node) startHttpServer(addr string) error {
 	return n.httpServer.ListenAndServe()
 }
 
-/*func (n *Node) setPublicKeyCache() error {
+/*func (n *NodeCore) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -71,7 +71,7 @@ func (n *Node) startHttpServer(addr string) error {
 }*/
 
 // Returns the dataset identifiers stored at this node
-func (n *Node) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
+func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
@@ -96,7 +96,7 @@ func (n *Node) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 }
 
 // Returns a JSON object containing the metadata assoicated with a dataset
-func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
+func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
@@ -168,7 +168,7 @@ func (n *Node) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
  */
 // TODO: restrict this function only to be used to set the initial dataset policy.
 // SHOULD NOT BE USED
-func (n *Node) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
+func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 

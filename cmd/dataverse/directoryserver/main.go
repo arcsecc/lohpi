@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/jinzhu/configor"
-	ds "github.com/arcsecc/lohpi/core/directoryserver"
+	"github.com/arcsecc/lohpi"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -24,22 +24,17 @@ func main() {
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&configFile, "c", "lohpi_config.yaml", "Mux's configuration file.")
+
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi mux instance")
 	args.Parse(os.Args[1:])
 
 	configor.New(&configor.Config{Debug: false, ENVPrefix: "DIRECTORYSERVER"}).Load(&config, configFile)
 
-	var d *ds.DirectoryServer
+	var d *lohpi.DirectoryServer
 	var err error
 	
 	if createNew {
-		c := &ds.Config{
-			HttpPort: config.HttpPort,
-			GRPCPort: config.GRPCPort,
-			LohpiCaAddr: config.LohpiCaAddr,
-		}
-
-		d, err = ds.NewDirectoryServer(c)
+		d, err = lohpi.NewDirectoryServer()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
@@ -66,4 +61,23 @@ func loadConfiguration(configFile string) error {
 	})
 
 	return conf.Load(&config, configFile)
+}
+
+func initializeLogging(logToFile bool) error {
+	logfilePath := "DirectoryServerCore.log"
+
+	if logToFile {
+		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.SetOutput(os.Stdout)
+			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
+		}
+		log.SetOutput(file)
+		log.SetFormatter(&log.TextFormatter{})
+	} else {
+		log.Infoln("Setting logs to standard output")
+		log.SetOutput(os.Stdout)
+	}
+
+	return nil
 }

@@ -27,7 +27,6 @@ message Message {
     DatasetRequest datasetRequest = 8;
     DatasetResponse datasetResponse = 9;
     PolicyRequest policyRequest = 10;
-    PolicyResponse policyResponse = 11;
 
     // Other fields
     string stringValue = 14;
@@ -71,12 +70,6 @@ message DatasetResponse {
 
 message PolicyRequest {
     string identifier = 1;
-}
-
-// TODO: specify policies here
-message PolicyResponse {
-    Policy objectPolicy = 1;
-    MsgSignature signature = 2;
 }
 
 message MetadataRequest {

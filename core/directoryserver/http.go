@@ -25,9 +25,9 @@ type azureConfig struct {
 	roles  []string
 }
 
-func (d *DirectoryServer) startHttpServer(addr string) error {
+func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	r := mux.NewRouter()
-	log.Infoln("Started directory server on port", d.config.HttpPort)
+	log.Infoln("Started directory server on port", d.config.HTTPPort)
 
 	// Main dataset router exposed to the clients
 	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
@@ -43,7 +43,7 @@ func (d *DirectoryServer) startHttpServer(addr string) error {
 	d.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      r,
-		WriteTimeout: time.Second * 30,
+		WriteTimeout: time.Hour * 1,
 		ReadTimeout:  time.Second * 30,
 		IdleTimeout:  time.Second * 60,
 		TLSConfig:    comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
@@ -57,7 +57,7 @@ func (d *DirectoryServer) startHttpServer(addr string) error {
 	return d.httpServer.ListenAndServe()
 }
 
-func (d *DirectoryServer) setPublicKeyCache() error {
+func (d *DirectoryServerCore) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -75,7 +75,7 @@ func (d *DirectoryServer) setPublicKeyCache() error {
 	return nil
 }
 
-func (d *DirectoryServer) middlewareValidateTokenSignature(next http.Handler) http.Handler {
+func (d *DirectoryServerCore) middlewareValidateTokenSignature(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
@@ -92,7 +92,7 @@ func (d *DirectoryServer) middlewareValidateTokenSignature(next http.Handler) ht
 	})
 }
 
-func (d *DirectoryServer) middlewareValidateTokenClaims(next http.Handler) http.Handler {
+func (d *DirectoryServerCore) middlewareValidateTokenClaims(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// TODO: parse the claims in the access token
 		// Return error if there are any mismatches. Call next.ServeHTTP(w, r) otherwise
@@ -102,7 +102,7 @@ func (d *DirectoryServer) middlewareValidateTokenClaims(next http.Handler) http.
 	})
 }
 
-func (d *DirectoryServer) validateTokenSignature(token []byte) error {
+func (d *DirectoryServerCore) validateTokenSignature(token []byte) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -156,7 +156,7 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 	return []byte(authHeaderContent[1]), nil
 }
 
-func (d *DirectoryServer) shutdownHttpServer() {
+func (d *DirectoryServerCore) shutdownHttpServer() {
 	// The duration for which the server wait for open connections to finish
 	wait := time.Minute * 1
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
@@ -173,7 +173,7 @@ func (d *DirectoryServer) shutdownHttpServer() {
 }
 
 // Lazily fetch objects from all the nodes
-func (d *DirectoryServer) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
@@ -210,7 +210,7 @@ func (d *DirectoryServer) getNetworkDatasetIdentifiers(w http.ResponseWriter, r 
 }
 
 // Fetches the information about a dataset
-func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
+func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
 	dataset := mux.Vars(req)["id"]
@@ -262,10 +262,10 @@ func (d *DirectoryServer) getDatasetMetadata(w http.ResponseWriter, req *http.Re
 }
 
 // Handler used to fetch an entire dataset. Writes a zip file to the client
-func (d *DirectoryServer) getDataset(w http.ResponseWriter, req *http.Request) {
+func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, req *http.Request) {
 	defer req.Body.Close()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute*5))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Hour * 5))
 	defer cancel()
 
 	token, err := getBearerToken(req)
@@ -292,7 +292,7 @@ func (d *DirectoryServer) getDataset(w http.ResponseWriter, req *http.Request) {
 	d.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
 }
 
-func (d *DirectoryServer) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	dataset := mux.Vars(r)["id"]

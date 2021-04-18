@@ -1,4 +1,4 @@
-package policy
+package policystore
 
 import (
 	"errors"
@@ -39,7 +39,15 @@ func initializeGitRepository(path string) (*git.Repository, error) {
 	return git.PlainOpen(path)
 }
 
-func (ps *PolicyStore) gitStorePolicy(nodeIdentifier, datasetIdentifier string, policy *pb.Policy) error {
+func (ps *PolicyStoreCore) gitStorePolicy(nodeIdentifier, datasetIdentifier string, policy *pb.Policy) error {
+	if nodeIdentifier == "" {
+		return errors.New("Node identifier must not be empty")
+	}
+
+	if datasetIdentifier == "" {
+		return errors.New("Dataset identifier must not be empty")
+	}
+
 	if err := ps.gitWritePolicy(policy, nodeIdentifier); err != nil {
 		log.Errorln(err.Error())
 		return err
@@ -53,10 +61,18 @@ func (ps *PolicyStore) gitStorePolicy(nodeIdentifier, datasetIdentifier string, 
 }
 
 // Writes the given policy store
-func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error {
+func (ps *PolicyStoreCore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error {
+	if nodeIdentifier == "" {
+		return errors.New("Node identifier must not be empty")
+	}
+
+	if p == nil {
+		return errors.New("Policy object must not be nil")
+	}
+
 	// Check if directory exists for the given study and subject
 	// Use "git-repo/study/subject/policy/policy.conf" paths
-	ok, err := exists(ps.config.PolicyStoreGitRepository)
+	ok, err := exists(ps.config.GitRepositoryPath)
 	if err != nil {
 		log.Fatalf(err.Error())
 		return err
@@ -64,14 +80,14 @@ func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error
 
 	// Create dataset directory if it doesn't exist
 	if !ok {
-		if err := os.MkdirAll(ps.config.PolicyStoreGitRepository, os.ModePerm); err != nil {
+		if err := os.MkdirAll(ps.config.GitRepositoryPath, os.ModePerm); err != nil {
 			log.Errorln(err.Error())
 			return err
 		}
 	}
 
 	// Change cwd to gir repo
-	err = os.Chdir(ps.config.PolicyStoreGitRepository)
+	err = os.Chdir(ps.config.GitRepositoryPath)
 	if err != nil {
 		log.Fatalf(err.Error())
 		return err
@@ -102,38 +118,55 @@ func (ps *PolicyStore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) error
 		f, err = os.OpenFile(fPath, os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
 			log.Errorln(err.Error())
+			panic(err)
 			return err
 		}
 
 		_, err = f.WriteString(p.GetContent())
 		if err != nil {
+			panic(err)
 			return err
 		}
 	} else {
 		f, err = os.OpenFile(fPath, os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			log.Errorln(err.Error())
+			panic(err)
 			return err
 		}
 
 		_, err = f.WriteString(p.GetContent())
 		if err != nil {
+			panic(err)
 			return err
 		}
 	}
 	return err
 }
 
-func (ps *PolicyStore) getFilePath(p *pb.Policy) string {
+func (ps *PolicyStoreCore) getFilePath(p *pb.Policy) string {
+	if p == nil {
+		log.Errorln("Policy object must not be nil")
+		return ""
+	}
+
 	// Special case: replace '/' by '_'
 	s := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
-	return filepath.Join(ps.config.PolicyStoreGitRepository, s)
+	return filepath.Join(ps.config.GitRepositoryPath, s)
 }
 
 // Commit the policy model to the Git repository
-func (ps *PolicyStore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) error {
+func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) error {
+	if p == nil {
+		return errors.New("Policy object must not be nil")
+	}
+
+	if nodeIdentifier == "" {
+		return errors.New("Node identifier must not be empty")
+	}
+
 	// Change cwd to gir repo
-	err := os.Chdir(ps.config.PolicyStoreGitRepository)
+	err := os.Chdir(ps.config.GitRepositoryPath)
 	if err != nil {
 		panic(err)
 	}
@@ -196,20 +229,31 @@ func (ps *PolicyStore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) erro
 	return nil
 }
 
-func (ps *PolicyStore) gitDatasetExists(nodeIdentifier, datasetId string) bool {
-	ok, err := exists(ps.config.PolicyStoreGitRepository)
+// Returns true if the dataset policy is stored in Git, returns false otherwise.
+func (ps *PolicyStoreCore) gitDatasetExists(nodeIdentifier, datasetId string) bool {
+	if nodeIdentifier == "" {
+		log.Errorln("Node identifier must not be empty")
+		return false
+	}
+
+	if datasetId == "" {
+		log.Errorln("Dataset identifier must not be empty")
+		return false
+	}
+
+	ok, err := exists(ps.config.GitRepositoryPath)
 	if err != nil {
 		log.Errorln(err.Error())
 		return false
 	}
 
 	if !ok {
-		log.Errorln("Git directory does not exist at", ps.config.PolicyStoreGitRepository)
+		log.Errorln("Git directory does not exist at", ps.config.GitRepositoryPath)
 		return false
 	}
 
 	// Change cwd to git repo
-	err = os.Chdir(ps.config.PolicyStoreGitRepository)
+	err = os.Chdir(ps.config.GitRepositoryPath)
 	if err != nil {
 		log.Errorln(err.Error())
 		return false
@@ -230,20 +274,31 @@ func (ps *PolicyStore) gitDatasetExists(nodeIdentifier, datasetId string) bool {
 	return ok
 }
 
-func (ps *PolicyStore) gitGetDatasetPolicy(nodeIdentifier, datasetId string) (string, error) {
-	ok, err := exists(ps.config.PolicyStoreGitRepository)
+// Returns the policy of the given dataset identifier
+func (ps *PolicyStoreCore) gitGetDatasetPolicy(nodeIdentifier, datasetId string) (string, error) {
+	if nodeIdentifier == "" {
+		err := fmt.Errorf("Node identifier must not be empty")
+		return "", err
+	}
+
+	if datasetId == "" {
+		err := fmt.Errorf("Dataset identifier must not be empty")
+		return "", err
+	}
+
+	ok, err := exists(ps.config.GitRepositoryPath)
 	if err != nil {
 		log.Errorln(err.Error())
 		return "", err
 	}
 
 	if !ok {
-		log.Errorln("Git directory does not exist at", ps.config.PolicyStoreGitRepository)
+		log.Errorln("Git directory does not exist at", ps.config.GitRepositoryPath)
 		return "", err
 	}
 
 	// Change cwd to git repo
-	err = os.Chdir(ps.config.PolicyStoreGitRepository)
+	err = os.Chdir(ps.config.GitRepositoryPath)
 	if err != nil {
 		log.Errorln(err.Error())
 		return "", err

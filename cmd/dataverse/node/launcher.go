@@ -19,24 +19,29 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"github.com/jinzhu/configor"
-	"github.com/arcsecc/lohpi/core/node"
+	"github.com/arcsecc/lohpi"
 )
+
+// TODO: find a better way to configure stuff :))
 
 var config = struct {
 	Port				int 		`default:"8090"`
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	AzureKeyVaultName 	string 		`required:true`
-	AzureKeyVaultSecret	string		`required:true`
-	AzureClientSecret	string 		`required:true`
-	AzureClientId		string		`required:true`
-	AzureKeyVaultBaseURL string		`required:true`
-	AzureTenantId		string		`required:true`
+	RemoteBaseURL		string 		`required:"true"`
+	RemotePort			string 		`required:"true"`
+	AzureKeyVaultName 	string 		`required:"true"`
+	AzureKeyVaultSecret	string		`required:"true"`
+	AzureClientSecret	string 		`required:"true"`
+	AzureClientID		string		`required:"true"`
+	AzureKeyVaultBaseURL string		`required:"true"`
+	AzureTenantID		string		`required:"true"`
 }{}
 
 type StorageNode struct {
-	node *node.Node
+	node *lohpi.Node
+	//kvClient *lohpi.AzureKeyVaultClient
 }
 
 func main() {
@@ -49,15 +54,20 @@ func main() {
 	// Logfile and name flags
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	args.StringVar(&configFile, "c", "lohpi_config.yaml", `Configuration file for the node. If not set, use default configuration values.`)
+	args.StringVar(&configFile, "c", "", `Configuration file for the node.`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&config, configFile, "./lohpi_config.yaml")
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
+
+	if configFile == "" {
+		log.Errorln("Configuration file must not be empty. Exiting.")
+		os.Exit(2)
+	}
 
 	// Require node identifier
 	if nodeName == "" {
-		fmt.Fprintf(os.Stderr, "Missing node identifier\n")
+		log.Errorln("Missing node identifier. Exiting.")
 		os.Exit(2)
 	}
 
@@ -65,31 +75,16 @@ func main() {
 	var err error
 
 	if createNew {
-		c := &node.Config{
-			Port: config.Port,
-			PolicyStoreAddr: config.PolicyStoreAddr,
-			MuxAddr: config.MuxAddr,
-			LohpiCaAddr: config.LohpiCaAddr,
-			AzureKeyVaultName: config.AzureKeyVaultName,
-			AzureKeyVaultSecret: config.AzureKeyVaultSecret,
-			AzureClientSecret: config.AzureClientSecret,
-			AzureKeyVaultBaseURL: config.AzureKeyVaultBaseURL,
-			AzureClientId: config.AzureClientId,
-			AzureTenantId: config.AzureTenantId,
-		}
-
-		// Create the new node and let it live its own life
-		sn, err = newNodeStorage(nodeName, c)
+		sn, err = newNodeStorage()
 		if err != nil {
-			log.Fatalln(os.Stderr, err.Error())
+			log.Errorln(err.Error())
 			os.Exit(1)
 		}
 	} else {
-		log.Fatalln("Need to set the 'new' flag to true. Exiting")
+		log.Errorln("Need to set the 'new' flag to true. Exiting.")
 		os.Exit(1)
 	}
 	
-	log.Println("Running node")
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -99,6 +94,26 @@ func main() {
 
 	// Clean-up
 	sn.Shutdown()
+	os.Exit(0)
+}
+
+func InitializeLogfile(logToFile bool) error {
+	logfilePath := "node.log"
+
+	if logToFile {
+		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			log.SetOutput(os.Stdout)
+			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
+		}
+		log.SetOutput(file)
+		log.SetFormatter(&log.TextFormatter{})
+	} else {
+		log.Infoln("Setting logs to standard output")
+		log.SetOutput(os.Stdout)
+	}
+
+	return nil
 }
 
 func exists(name string) bool {
@@ -110,9 +125,39 @@ func exists(name string) bool {
 	return true
 }
 
-func newNodeStorage(name string, nodeConfig *node.Config) (*StorageNode, error) {
-	n, err := node.NewNode(name, nodeConfig)
+func newNodeStorage() (*StorageNode, error) {
+	env := os.Getenv("LOHPI_ENV")
+	if env == "" {
+		log.Errorln("LOHPI_ENV must be set. Exiting.")
+		os.Exit(1)
+	} else if env == "production" {
+		log.Infoln("Production environment set")
+	} else if env == "development" {
+		log.Infoln("Development environment set")
+	} else {
+		log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
+		os.Exit(1)
+	}
+	
+	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
+	
+	kvClient, err := newAzureKeyVaultClient()
 	if err != nil {
+		panic(err)
+		return nil, err
+	}
+
+	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
+	if err != nil {
+		panic(err)
+		return nil, err
+	}
+
+	dbConnectionString := resp.Value
+	
+	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString), lohpi.NodeWithMultipleCheckouts(true))
+	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -123,11 +168,25 @@ func newNodeStorage(name string, nodeConfig *node.Config) (*StorageNode, error) 
 	sn.node.RegisterDatasetHandler(sn.archiveHandler)
 	sn.node.RegsiterMetadataHandler(sn.metadataHandler)
 	
+	// TODO: revise the call stack starting from here
 	if err := sn.node.JoinNetwork(); err != nil {
+		panic(err)
 		return nil, err
 	}
 
 	return sn, nil
+}
+
+func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
+	c := &lohpi.AzureKeyVaultClientConfig{
+		AzureKeyVaultClientID:     config.AzureClientID,
+		AzureKeyVaultClientSecret: config.AzureClientSecret,
+		AzureKeyVaultTenantID:     config.AzureTenantID,
+	}
+
+	log.Println("config.AzureTenantID:::", config.AzureTenantID)
+
+	return lohpi.NewAzureKeyVaultClient(c)
 }
 
 func (sn *StorageNode) Start() {
@@ -152,40 +211,22 @@ func (sn *StorageNode) initializePolicies() error {
 }
 
 // Returns nescesarry information to fetch an external archive
-func (s *StorageNode) archiveHandler(id string) (*node.ExternalDataset, error) {
-	return remoteDataset(id)
+func (s *StorageNode) archiveHandler(id string) (string, error) {
+	return config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id, nil
 }
 
-// Returns a list of avaiable identifiers
-func (s *StorageNode) datasetIdentifiersHandler() ([]string, error) {
-	return remoteDatasetIdentifiers()
-}
-
-// Returns true if the given id exists in a remote location, returns false otherwise
-func (s *StorageNode) identifierExistsHandler(id string) bool {
-	return identifierExists(id)
-}
-
-func (s *StorageNode) metadataHandler(id string) (*node.ExternalMetadata, error) {
-	return &node.ExternalMetadata{
-		URL: "http://diggi-4.cs.uit.no:8085/api/datasets/export?exporter=dataverse_json&persistentId=" + id,
-	}, nil 
+func (s *StorageNode) metadataHandler(id string) (string, error) {
+	return config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id, nil 
 }
 
 func (s *StorageNode) Shutdown() {
 
 }
 
-func remoteDataset(id string) (*node.ExternalDataset, error) {
-	return &node.ExternalDataset{
-		URL: "http://diggi-4.cs.uit.no:8085/api/access/dataset/:persistentId/?persistentId=" + id,
-	}, nil
-}
-
 // TODO: remove me and broadcast a request to all nodes at the mux. Might 
 // need to device a smart solution into how the datasets are looked up
 func identifierExists(id string) bool {
-	url := "http://diggi-4.cs.uit.no:8085/api/datasets/:persistentId/?persistentId=" + id
+	url := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/:persistentId/?persistentId=" + id
 	client := http.Client{
 		Timeout: time.Duration(30 * time.Second),
 	}
@@ -245,7 +286,7 @@ func identifierExists(id string) bool {
 }
 
 func remoteDatasetIdentifiers() ([]string, error) {
-	url := "http://diggi-4.cs.uit.no:8085/api/search?q=*&type=dataset"
+	url := config.RemoteBaseURL + ":" + config.RemotePort + "/api/search?q=*&type=dataset"
 	client := http.Client{
 		Timeout: time.Duration(30 * time.Second),
 	}
