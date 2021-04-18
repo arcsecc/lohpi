@@ -3,6 +3,8 @@ services:
 
   # Lohpi-DV 
   dv-ca:
+    environment:
+      - LOHPI_ENV=production
     container_name: lohpi-ca
     image: lohpi.azurecr.io/lohpi-ca
     build: 
@@ -17,13 +19,16 @@ services:
   
   # Lohpi-DV 
   dv-directoryserver:
+    environment:
+      - LOHPI_ENV=production
     container_name: lohpi-directoryserver
     image: lohpi.azurecr.io/lohpi-directoryserver
     build: 
       context: .
       dockerfile: "./cmd/dataverse/directoryserver/Dockerfile"
     network_mode: host
-    command: --new
+    command: 
+      - --new
     restart: unless-stopped
     expose:
     - "8080"
@@ -32,6 +37,8 @@ services:
 
   # Lohpi-DV 
   dv-policy_store:
+    environment:
+      - LOHPI_ENV=production
     container_name: lohpi-policy-store
     image: lohpi.azurecr.io/lohpi-policy-store
     build:
@@ -48,6 +55,8 @@ services:
 
   # Lohpi-DV     
   dv-node:
+    environment:
+      - LOHPI_ENV=production
     container_name: lohpi-node
     image: lohpi.azurecr.io/lohpi-node
     build: 
@@ -55,7 +64,7 @@ services:
       dockerfile: "./cmd/dataverse/node/Dockerfile"
     network_mode: host
     restart: unless-stopped
-    command: -name "node_0" -new=true
+    command: -name "node_0" -new=true -c lohpi_config/lohpi_config.yaml
     depends_on: 
     - dv-ca
     - dv-directoryserver

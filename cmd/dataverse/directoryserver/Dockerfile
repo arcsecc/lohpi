@@ -19,22 +19,23 @@ COPY go.sum .
 RUN go mod download
 
 # Local dependencies
+COPY ./directoryserver.go ./directoryserver.go
 COPY ./core/directoryserver ./core/directoryserver
 COPY ./core/cache ./core/cache
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
 COPY ./core/comm ./core/comm
 COPY ./protobuf ./protobuf
-COPY ./cmd/dataverse/directoryserver/main.go .
-COPY ./cmd/dataverse/directoryserver/lohpi_config.yaml .
-COPY ./cmd/dataverse/directoryserver/ifrit_config.yaml .
+COPY ./cmd/dataverse/directoryserver/main.go ./cmd/dataverse/directoryserver/main.go
+COPY ./cmd/dataverse/directoryserver/lohpi_config.yaml ./cmd/dataverse/directoryserver/lohpi_config.yaml
+COPY ./cmd/dataverse/directoryserver/ifrit_config.yaml ./cmd/dataverse/directoryserver/ifrit_config.yaml
 
 # Run test
 #RUN go test ./...
 
 # Build the application
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-RUN go build -o directoryserver 
+RUN go build -o directoryserver ./cmd/dataverse/directoryserver/main.go 
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist

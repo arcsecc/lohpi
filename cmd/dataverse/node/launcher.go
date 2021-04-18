@@ -54,16 +54,16 @@ func main() {
 	// Logfile and name flags
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	args.StringVar(&configFile, "c", "", `Configuration file for the node`)
+	args.StringVar(&configFile, "c", "", `Configuration file for the node.`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
 	args.Parse(os.Args[1:])
 
+	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
+
 	if configFile == "" {
-		log.Errorln("Configuration file needs to be set. Exiting.")
+		log.Errorln("Configuration file must not be empty. Exiting.")
 		os.Exit(2)
 	}
-
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
 
 	// Require node identifier
 	if nodeName == "" {
@@ -143,11 +143,13 @@ func newNodeStorage() (*StorageNode, error) {
 	
 	kvClient, err := newAzureKeyVaultClient()
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
 	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -155,6 +157,7 @@ func newNodeStorage() (*StorageNode, error) {
 	
 	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString), lohpi.NodeWithMultipleCheckouts(true))
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -167,6 +170,7 @@ func newNodeStorage() (*StorageNode, error) {
 	
 	// TODO: revise the call stack starting from here
 	if err := sn.node.JoinNetwork(); err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -179,6 +183,9 @@ func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 		AzureKeyVaultClientSecret: config.AzureClientSecret,
 		AzureKeyVaultTenantID:     config.AzureTenantID,
 	}
+
+	log.Println("config.AzureTenantID:::", config.AzureTenantID)
+
 	return lohpi.NewAzureKeyVaultClient(c)
 }
 

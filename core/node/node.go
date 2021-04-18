@@ -76,8 +76,8 @@ type NodeCore struct {
 	conf *Config
 	configLock sync.RWMutex
 
-	// gRPC client towards the Mux
-	muxClient *comm.DirectoryGRPCClient
+	// gRPC client towards the directory server
+	directoryServerClient *comm.DirectoryGRPCClient
 
 	// Policy store
 	psClient *comm.PolicyStoreGRPCClient
@@ -112,6 +112,7 @@ type NodeCore struct {
 func NewNodeCore(config *Config) (*NodeCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -119,6 +120,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	httpListener, err := netutil.GetListener()
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -129,23 +131,26 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
-	muxClient, err := comm.NewDirectoryServerGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
+	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
 	psClient, err := comm.NewPolicyStoreClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
 	node := &NodeCore{
 		ifritClient:  ifritClient,
-		muxClient:    muxClient,
-		conf:       config,
+		directoryServerClient:    directoryServerClient,
+		conf:      	 config,
 		psClient:     psClient,
 		httpListener: httpListener,
 		cu:           cu,
@@ -154,6 +159,8 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		datasetMap:     make(map[string]struct{}),
 		datasetMapLock: sync.RWMutex{},
 	}
+
+	log.Println("PostgresSQLConnectionString", config.PostgresSQLConnectionString)
 
 	// Initialize the PostgresSQL database
 	if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
@@ -263,7 +270,7 @@ func (n *NodeCore) NodeName() string {
 // PRIVATE METHODS BELOW
 func (n *NodeCore) directoryServerHandshake() error {
 	log.Infof("Performing handshake with directory server at address %s:%s\n", n.config().DirectoryServerAddress, strconv.Itoa(n.config().DirectoryServerGPRCPort))
-	conn, err := n.muxClient.Dial(n.config().DirectoryServerAddress + ":" + strconv.Itoa(n.config().DirectoryServerGPRCPort))
+	conn, err := n.directoryServerClient.Dial(n.config().DirectoryServerAddress + ":" + strconv.Itoa(n.config().DirectoryServerGPRCPort))
 	if err != nil {
 		return err
 	}
@@ -320,14 +327,12 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
 		log.Errorln(err)
-		panic(err)
 		return nil, err
 	}
 
 	log.Infof("Node '%s' got message %s\n", n.config().Name, msg.GetType())
 	if err := n.verifyMessageSignature(msg); err != nil {
 		log.Errorln(err)
-		panic(err)
 		return nil, err
 	}
 

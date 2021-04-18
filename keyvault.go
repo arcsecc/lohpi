@@ -1,6 +1,7 @@
 package lohpi
 
 import (
+	log "github.com/sirupsen/logrus"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-// Describes configuration to communicate with
+// Configuration required to use Azure Key Vault
 type AzureKeyVaultClientConfig struct {
 	AzureKeyVaultClientID     string
 	AzureKeyVaultClientSecret string
@@ -67,6 +68,13 @@ func NewAzureKeyVaultClient(config *AzureKeyVaultClientConfig) (*AzureKeyVaultCl
 	if err != nil {
 		return nil, err
 	}
+
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        log.Fatal(err)
+    }
+    bodyString := string(bodyBytes)
+    log.Infof("bodyString: %+v\n", bodyString)
 
 	var tr tokenResponse
 	errUnMarshal := json.Unmarshal(body, &tr)

@@ -64,7 +64,7 @@ services:
       dockerfile: "./cmd/dataverse/node/Dockerfile"
     network_mode: host
     #restart: never
-    command: -name "node_0" -new=true
+    command: -name "node_0" -new=true -c lohpi_config/lohpi_config.dev.yaml
     depends_on: 
       - lohpi-ca-dev
       - lohpi-directoryserver-dev
