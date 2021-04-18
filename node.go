@@ -115,6 +115,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		defaultName = "Node identifier"
 		defaultPostgresSQLConnectionString = ""
 		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
+		defaultAllowMultipleCheckouts = false
 	)
 
 	// Default configuration
@@ -129,6 +130,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		Name: defaultName,
 		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
 		DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
+		AllowMultipleCheckouts: defaultAllowMultipleCheckouts,
 	}
 
 	n := &Node{

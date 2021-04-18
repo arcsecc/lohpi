@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+// TODO: clarify communication between directoryserver and nodes. Print errors if any and use context timeouts
+
 // Fetches the information about a dataset
 func (d *DirectoryServerCore) datasetMetadata(w http.ResponseWriter, req *http.Request, dataset, nodeAddr string, ctx context.Context) ([]byte, error) {
 	newCtx, cancel := context.WithCancel(ctx)
@@ -84,7 +86,7 @@ func (d *DirectoryServerCore) dataset(w http.ResponseWriter, req *http.Request, 
 	// Marshal the request
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Fatalln(err.Error())
+		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -92,7 +94,7 @@ func (d *DirectoryServerCore) dataset(w http.ResponseWriter, req *http.Request, 
 	// Sign it
 	r, s, err := d.ifritClient.Sign(data)
 	if err != nil {
-		log.Fatalln(err.Error())
+		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -100,7 +102,7 @@ func (d *DirectoryServerCore) dataset(w http.ResponseWriter, req *http.Request, 
 	msg.Signature = &pb.MsgSignature{R: r, S: s}
 	data, err = proto.Marshal(msg)
 	if err != nil {
-		log.Fatalln(err.Error())
+		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -111,13 +113,13 @@ func (d *DirectoryServerCore) dataset(w http.ResponseWriter, req *http.Request, 
 	case resp := <-ch:
 		respMsg := &pb.Message{}
 		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			log.Fatalln(err.Error())
+			log.Errorln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
 
 		if err := d.verifyMessageSignature(respMsg); err != nil {
-			log.Fatalln(err.Error())
+			log.Errorln(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -181,6 +183,7 @@ func (d *DirectoryServerCore) getClientIdentifier(token []byte) (string, string,
 
 // TODO: use context and refine me otherwise
 func (d *DirectoryServerCore) getMetadata(w http.ResponseWriter, r *http.Request, remoteUrl string, ctx context.Context) ([]byte, error) {
+	log.Println("remoteUrl:", remoteUrl)
 	request, err := http.NewRequest("GET", remoteUrl, nil)
 	if err != nil {
 		return nil, err
@@ -302,6 +305,7 @@ func (d *DirectoryServerCore) rollbackCheckout(nodeAddr, dataset string, ctx con
 	return nil
 }
 
+// TODO: refine this a lot more :) move me to mem cache
 func (d *DirectoryServerCore) insertCheckedOutDataset(dataset, clientId string) {
 	d.clientCheckoutMapLock.Lock()
 	defer d.clientCheckoutMapLock.Unlock()
@@ -318,13 +322,6 @@ func (d *DirectoryServerCore) getCheckedOutDatasetMap() map[string][]string {
 }
 
 func (d *DirectoryServerCore) datasetIsInvalidated(dataset string) bool {
-	l := d.revokedDatasets()
-
-	for e := l.Front(); e != nil; e = e.Next() {
-		if e.Value == dataset {
-			return true
-		}
-	}
-
-	return false
+	_, exists := d.revokedDatasets()[dataset]
+	return exists
 }

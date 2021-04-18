@@ -143,21 +143,18 @@ func newNodeStorage() (*StorageNode, error) {
 	
 	kvClient, err := newAzureKeyVaultClient()
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	dbConnectionString := resp.Value
 	
-	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString))
+	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString), lohpi.NodeWithMultipleCheckouts(true))
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -170,7 +167,6 @@ func newNodeStorage() (*StorageNode, error) {
 	
 	// TODO: revise the call stack starting from here
 	if err := sn.node.JoinNetwork(); err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -183,7 +179,6 @@ func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 		AzureKeyVaultClientSecret: config.AzureClientSecret,
 		AzureKeyVaultTenantID:     config.AzureTenantID,
 	}
-
 	return lohpi.NewAzureKeyVaultClient(c)
 }
 
@@ -214,7 +209,7 @@ func (s *StorageNode) archiveHandler(id string) (string, error) {
 }
 
 func (s *StorageNode) metadataHandler(id string) (string, error) {
-	return config.RemoteBaseURL + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id, nil 
+	return config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id, nil 
 }
 
 func (s *StorageNode) Shutdown() {

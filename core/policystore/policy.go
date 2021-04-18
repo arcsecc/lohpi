@@ -84,6 +84,7 @@ type PolicyStoreCore struct {
 	// Fetch the JWK
 	ar *jwk.AutoRefresh
 
+	// Dataset id -> pb policy
 	datasetPolicyMap map[string]*pb.Policy
 	datasetPolicyMapLock sync.RWMutex
 }
@@ -337,17 +338,43 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 
 	switch msgType := msg.GetType(); msgType {
 	case message.MSG_TYPE_GET_DATASET_POLICY:
-		// If the dataset has not been requested, but it exists in Git, restore it to in-memory map
+		// If the dataset has not been found in the in-memory map, ask Git. If it is known to Git, insert it into the map
+		// and return the policy. If it is not known to Git, set a default policy, insert it into the and return the policy.
+		// TODO: consider simplifying all of this
 		if p := ps.getDatasetPolicy(msg.GetPolicyRequest().GetIdentifier()); p == nil {
-			if err := ps.setInitialDatasetPolicy(msg.GetSender(), msg.GetPolicyRequest()); err != nil {
-				log.Errorln(err.Error())
-				return nil, err
+			if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
+				newPolicy, err := ps.getInitialDatasetPolicy(msg.GetPolicyRequest())
+				if err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+
+				if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+				ps.setDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy)
+				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
+			} else {
+				policyString, err := ps.gitGetDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier())
+				if err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+
+				newPolicy := &pb.Policy{
+					Issuer:           ps.PolicyStoreConfig().Name,
+					ObjectIdentifier: msg.GetPolicyRequest().GetIdentifier(),
+					Content:          policyString,
+				}
+				ps.setDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy)
+				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
 			}
-		}
+		} 
 		return ps.pbMarshalDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest())
 
 	case message.MSG_TYPE_PROBE_ACK:
-		//log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
+		log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
 		//log.Println("MSG HANDLER IN PS:", msg)
 		//		ps.multicastManager.RegisterProbeMessage(msg)
 
@@ -364,48 +391,16 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 }
 
 // Set the initial policy of a dataset. 
-func (ps *PolicyStoreCore) setInitialDatasetPolicy(sender *pb.Node, policyReq *pb.PolicyRequest) error {
-	if sender == nil {
-		return errors.New("Sender is nil")
-	} else if policyReq == nil {
-		return errors.New("Policy request is nil")
+func (ps *PolicyStoreCore) getInitialDatasetPolicy(policyReq *pb.PolicyRequest) (*pb.Policy, error) {
+	if policyReq == nil {
+		return nil, errors.New("Policy request is nil")
 	}
 	
-	var policy *pb.Policy
-
-	// If git does not know about the dataset, add default policy (false) and return it
-	if !ps.gitDatasetExists(sender.GetName(), policyReq.GetIdentifier()) {
-		policy = &pb.Policy{
-			Issuer:           ps.PolicyStoreConfig().Name,
-			ObjectIdentifier: policyReq.GetIdentifier(),
-			Content:          strconv.FormatBool(false),
-		}
-	
-		if err := ps.gitStorePolicy(sender.GetName(), policyReq.GetIdentifier(), policy); err != nil {
-			return err
-		}
-
-	} else {
-		policyContent, err := ps.gitGetDatasetPolicy(sender.GetName(), policyReq.GetIdentifier())
-		if err != nil {
-			return err
-		}
-
-		if policyContent == "" {
-			log.Warnln("Policy content is empty")
-		}
-
-		policy = &pb.Policy{
-			Issuer:           ps.PolicyStoreConfig().Name,
-			ObjectIdentifier: policyReq.GetIdentifier(),
-			Content:          policyContent,
-		}
-	}
-
-	// Also add the policy to the map because it was known to Git but not the map itself
-	ps.addDatasetPolicy(policyReq.GetIdentifier(), policy)
-
-	return nil
+	return &pb.Policy{
+		Issuer:           ps.PolicyStoreConfig().Name,
+		ObjectIdentifier: policyReq.GetIdentifier(),
+		Content:          strconv.FormatBool(false),
+	}, nil
 }
 
 // Ifrit gossip handler
@@ -440,7 +435,7 @@ func (ps *PolicyStoreCore) getDatasetPolicyMap() map[string]*pb.Policy {
 	return ps.datasetPolicyMap
 }
 
-func (ps *PolicyStoreCore) addDatasetPolicy(id string, entry *pb.Policy) {
+func (ps *PolicyStoreCore) setDatasetPolicy(id string, entry *pb.Policy) {
 	ps.datasetPolicyMapLock.Lock()
 	defer ps.datasetPolicyMapLock.Unlock()
 	ps.datasetPolicyMap[id] = entry

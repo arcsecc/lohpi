@@ -152,7 +152,7 @@ func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.
 		Identifiers: make([]string, 0),
 	}
 
-	for i := range ps.getDatasetPolicyMap() {
+	for i := range ps.memCache.DatasetNodes() {
 		respBody.Identifiers = append(respBody.Identifiers, i)
 	}
 
@@ -247,7 +247,7 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get the node that stores the dataset
-	_, exists := ps.getDatasetPolicyMap()[datasetId]
+	node, exists := ps.memCache.DatasetNodes()[datasetId]
 	if !exists {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
@@ -278,14 +278,15 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 		Content:          strconv.FormatBool(reqBody.Policy),
 	}
 
-	// Store the dataset entry
-	//ps.addDatasetPolicy(datasetId, &datasetPolicyMapEntry{policy, datasetEntry.node})
+	// Store the dataset entry in map
+	ps.setDatasetPolicy(datasetId, policy)
 
-	/*if err := ps.gitStorePolicy(node, datasetId, policy); err != nil {
+	// Store the dataset policy in Git
+	if err := ps.gitStorePolicy(node.GetName(), datasetId, policy); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
-	}*/
+	}
 
 	go ps.submitPolicyForDistribution(policy)
 

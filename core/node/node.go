@@ -345,8 +345,7 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		return n.pbMarshalDatasetMetadataURL(msg)
 
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		log.Infoln("Got new policy batch from policy store")
-		return n.processPolicyBatch(msg)
+		n.processPolicyBatch(msg)
 
 	case message.MSG_TYPE_ROLLBACK_CHECKOUT:
 		n.rollbackCheckout(msg)
@@ -368,16 +367,15 @@ func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 	}
 }
 
-// TODO check the internal tables and so on...
+// TODO refine this. Check all gossip batches and see which one we should apply
 func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 	if msg.GetGossipMessage() == nil {
 		err := errors.New("Gossip message is nil")
-		log.Fatalln(err.Error())
+		log.Errorln(err.Error())
 		return nil, err
 	}
 
 	gspMsg := msg.GetGossipMessage()
-
 	if gspMsg.GetGossipMessageBody() == nil {
 		err := errors.New("Gossip message body is nil")
 		log.Fatalln(err.Error())
@@ -387,62 +385,24 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 			// TODO check policy ID and so on...
 			policy := m.GetPolicy()
 			datasetId := policy.GetObjectIdentifier()
-			if n.datasetExists(datasetId) {
+			if n.dbDatasetExists(datasetId) {
+				log.Println("datasetId, policy.GetContent():", datasetId, policy.GetContent())
 				if err := n.dbSetObjectPolicy(datasetId, policy.GetContent()); err != nil {
 					log.Errorln(err.Error())
-					return nil, err
+					continue
 				}
 
-				if n.isCheckedOutByClient(datasetId) {
-					n.notifyPolicyChangeToDirectoryServer(datasetId)
+				// Withdraw consent if a more restrictive policy is issued
+				if n.dbDatasetIsCheckedOutByClient(datasetId) {
+					log.Println("Sending revocation")
+					if err := n.pbSendDatasetRevocationUpdate(datasetId, policy.GetContent()); err != nil {
+						log.Errorln(err.Error())
+					}
 				}
 			}
 		}
 	}
 	return nil, nil
-}
-
-
-// Only disallow permissions for now
-// TODO more here!
-func (n *NodeCore) notifyPolicyChangeToDirectoryServer(dataset string) {
-	msg := &pb.Message{
-		Type:        message.MSG_POLICY_REVOKE,
-		Sender:      n.pbNode(),
-		StringValue: dataset,
-		BoolValue:   false,
-	}
-
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		panic(err)
-	}
-
-	r, s, err := n.ifritClient.Sign(data)
-	if err != nil {
-		log.Errorln(err.Error())
-		panic(err)
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		log.Errorln(err.Error())
-		panic(err)
-	}
-
-	n.ifritClient.SendTo(n.directoryServerIP, data)
-}
-
-// Returns true if a client has already checked out the dataset,
-// returns false otherwise.
-func (n *NodeCore) isCheckedOutByClient(dataset string) bool {
-	if dataset == "" {
-		log.Errorln("Dataset identifier is empty")
-		return true
-	}
-
-	return n.dbDatasetIsCheckedOutByClient(dataset)
 }
 
 // TODO: match the required access credentials of the dataset to the
@@ -488,6 +448,36 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
+// Returns the URL of the dataset
+func (n *NodeCore) fetchDatasetURL(id string) (string, error) {
+	if handler := n.getDatasetCallback(); handler != nil {
+		externalArchiveUrl, err := handler(id)
+		if err != nil {
+			return "", err
+		}
+
+		return externalArchiveUrl, nil
+	}
+	
+	log.Warnln("Handler in fetchDatasetURL not set")
+	return "", nil
+}
+
+// Fetches the URL of the external metadata, given by the dataset id
+func (n *NodeCore) fetchDatasetMetadataURL(id string) (string, error) {
+	if handler := n.getExternalMetadataHandler(); handler != nil {
+		metadataUrl, err := handler(id)
+		if err != nil {
+			return "", err
+		}
+
+		return metadataUrl, nil
+	}
+	
+	log.Warnln("Handler in fetchDatasetMetadataURL is not set")
+	return "", nil
+}
+
 func (n *NodeCore) nodeInfo() ([]byte, error) {
 	str := fmt.Sprintf("Name: %s\tIfrit address: %s", n.config().Name, n.IfritClient().Addr())
 	return []byte(str), nil
@@ -526,14 +516,12 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 
 	r, s, err := n.ifritClient.Sign(data)
 	if err != nil {
-		log.Errorln(err.Error())
 		return nil, err
 	}
 
 	msg.Signature = &pb.MsgSignature{R: r, S: s}
 	data, err = proto.Marshal(msg)
 	if err != nil {
-		log.Errorln(err.Error())
 		return nil, err
 	}
 

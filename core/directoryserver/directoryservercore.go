@@ -1,7 +1,6 @@
 package directoryserver
 
 import (
-	"container/list"
 	"crypto/tls"
 	"crypto/x509/pkix"
 	"errors"
@@ -61,7 +60,7 @@ type DirectoryServerCore struct {
 	clientCheckoutMap     map[string][]string //datase id -> list of client who have checked out the data
 	clientCheckoutMapLock sync.RWMutex
 
-	invalidatedDatasets     *list.List
+	invalidatedDatasets     map[string]struct{}
 	invalidatedDatasetsLock sync.RWMutex
 
 	// Fetch the JWK
@@ -109,7 +108,7 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 		memCache: cache.NewCache(ifritClient),
 
 		clientCheckoutMap: make(map[string][]string, 0),
-		invalidatedDatasets: list.New(),
+		invalidatedDatasets: make(map[string]struct{}),
 	}
 
 	ds.grpcs.Register(ds)
@@ -123,7 +122,7 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 func (d *DirectoryServerCore) Start() {
 	log.Infoln("Directory server running gRPC server at", d.grpcs.Addr(), "and Ifrit client at", d.ifritClient.Addr())
 	go d.ifritClient.Start()
-	go d.startHttpServer(":" + string(d.config.HTTPPort))
+	go d.startHttpServer(":" + strconv.Itoa(d.config.HTTPPort))
 	go d.grpcs.Start()
 }
 
@@ -153,8 +152,9 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
 		d.memCache.AddDatasetNode(msg.GetStringValue(), msg.GetSender())
 
-	case message.MSG_POLICY_REVOKE:
-		d.addRevokedDataset(msg.GetStringValue())
+	case message.MSG_POLICY_REVOCATION_UPDATE:
+		d.updateRevocationState(msg)
+		//d.addRevokedDataset(msg.GetStringValue())
 
 	default:
 		log.Warnln("Unknown message type at DirectoryServerCore handler: %s\n", msg.GetType())
@@ -169,16 +169,45 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 	return resp, nil
 }
 
+// TODO refine revocations :)
+// Updates the revocation state of the dataset that has been checked out. If the checked-out dataset
+// is to be revoked, put it into the map. Remove it from the map if the policy state changes to "false" to "true".
+func (d *DirectoryServerCore) updateRevocationState(msg *pb.Message) {
+	policyContent := msg.GetPolicy().GetContent()
+	dataset := msg.GetStringValue()
+		
+	log.Println("policyContent:", policyContent)
+
+	b := msg.GetBoolValue()
+
+	// Check if it already is flagged as revoked
+	if d.datasetIsInvalidated(dataset) {
+		if b {
+			d.removeRevokedDataset(dataset)
+		} 
+	} else {
+		if !b {
+			d.addRevokedDataset(dataset)
+		}
+	}
+}
+
 func (d *DirectoryServerCore) addRevokedDataset(dataset string) {
 	d.invalidatedDatasetsLock.Lock()
 	defer d.invalidatedDatasetsLock.Unlock()
-	d.invalidatedDatasets.PushBack(dataset)
+	d.invalidatedDatasets[dataset] = struct{}{}
 }
 
-func (d *DirectoryServerCore) revokedDatasets() *list.List {
+func (d *DirectoryServerCore) revokedDatasets() map[string]struct{} {
 	d.invalidatedDatasetsLock.RLock()
 	defer d.invalidatedDatasetsLock.RUnlock()
 	return d.invalidatedDatasets
+}
+
+func (d *DirectoryServerCore) removeRevokedDataset(dataset string) {
+	d.invalidatedDatasetsLock.Lock()
+	defer d.invalidatedDatasetsLock.Unlock()
+    delete(d.invalidatedDatasets, dataset)
 }
 
 // Adds the given node to the network and returns the DirectoryServerCore's IP address
