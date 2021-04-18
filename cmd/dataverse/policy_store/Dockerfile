@@ -25,9 +25,9 @@ RUN go mod download
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 COPY ./core ./core
 COPY ./protobuf ./protobuf
-COPY ./cmd/dataverse/policy_store/launcher.go ./cmd/policy_store/launcher.go
-COPY ./cmd/dataverse/policy_store/lohpi_config.yaml ./cmd/policy_store/lohpi_config.yaml
-RUN go build -o policy_store ./cmd/policy_store/launcher.go
+COPY ./cmd/dataverse/policy_store/launcher.go .
+COPY ./cmd/dataverse/policy_store/lohpi_config.yaml .
+RUN go build -o policy_store
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist

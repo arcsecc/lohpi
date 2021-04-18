@@ -9,18 +9,18 @@ type Config struct {
 	// Policy store specific
 	Name                     string  `default:"Policy store"`
 	Host                     string  `default:"127.0.1.1"`
-	BatchSize                int     `default:10`
-	GossipInterval           uint32  `default:10`
-	Port                     int     `default:8083`
-	GRPCPort                 int     `default:8084`
-	MulticastAcceptanceLevel float64 `default:0.5`
+	BatchSize                int     `default:"10"`
+	GossipInterval           uint32  `default:"10"`
+	Port                     int     `default:"8083"`
+	GRPCPort                 int     `default:"8084"`
+	MulticastAcceptanceLevel float64 `default:"0.5"`
 	NumDirectRecipients      int     `default:"1"`
 
 	// Other parameters
 	MuxAddress               string `default:"127.0.1.1:8081"`
 	LohpiCaAddr              string `default:"127.0.1.1:8301"`
 	RecIP                    string `default:"127.0.1.1:8084"`
-	PolicyStoreGitRepository string `required:"true`
+	PolicyStoreGitRepository string `required:"true"`
 }
 
 type PolicyStoreOption func(*PolicyStore)

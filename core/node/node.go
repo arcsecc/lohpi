@@ -386,15 +386,13 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 			policy := m.GetPolicy()
 			datasetId := policy.GetObjectIdentifier()
 			if n.dbDatasetExists(datasetId) {
-				log.Println("datasetId, policy.GetContent():", datasetId, policy.GetContent())
 				if err := n.dbSetObjectPolicy(datasetId, policy.GetContent()); err != nil {
 					log.Errorln(err.Error())
 					continue
 				}
 
-				// Withdraw consent if a more restrictive policy is issued
+				// Update revocation list. Optimization: don't push update message if policy is reduntant.
 				if n.dbDatasetIsCheckedOutByClient(datasetId) {
-					log.Println("Sending revocation")
 					if err := n.pbSendDatasetRevocationUpdate(datasetId, policy.GetContent()); err != nil {
 						log.Errorln(err.Error())
 					}

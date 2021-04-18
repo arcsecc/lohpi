@@ -238,17 +238,12 @@ func (n *NodeCore) pbSendDatasetRevocationUpdate(dataset, policyContent string) 
 		return err
 	}
 
-	log.Println("policyContent:", policyContent)
-	log.Println("BBBB:", b)
-
 	msg := &pb.Message{
 		Type:        message.MSG_POLICY_REVOCATION_UPDATE,
 		Sender:      n.pbNode(),
 		StringValue: dataset,
 		BoolValue:   b,
 	}
-
-	log.Printf("MSG.BoolValue: %+v\n", msg.BoolValue)
 
 	if err := n.pbAddMessageSignature(msg); err != nil {
 		return err

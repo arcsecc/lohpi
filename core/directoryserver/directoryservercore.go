@@ -1,6 +1,7 @@
 package directoryserver
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509/pkix"
 	"errors"
@@ -14,21 +15,20 @@ import (
 	"github.com/joonnna/ifrit"
 	"github.com/lestrrat-go/jwx/jwk"
 	log "github.com/sirupsen/logrus"
-	"golang.org/x/net/context"
 	"net"
-	"strconv"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
 type Config struct {
-	HTTPPort    	int    	
-	GRPCPort    	int    	
-	LohpiCaAddress 	string
-	LohpiCaPort		int 	
-	UseTLS			bool 	
-	CertificateFile string 	
-	PrivateKeyFile	string 	
+	HTTPPort        int
+	GRPCPort        int
+	LohpiCaAddress  string
+	LohpiCaPort     int
+	UseTLS          bool
+	CertificateFile string
+	PrivateKeyFile  string
 }
 
 type DirectoryServerCore struct {
@@ -67,7 +67,7 @@ type DirectoryServerCore struct {
 	pubKeyCache *jwk.AutoRefresh
 }
 
-// Returns a new DirectoryServer using the given configuration and HTTP port number. Returns a non-nil error, if any
+// Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
 func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
@@ -84,7 +84,7 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 		Locality:   []string{listener.Addr().String()},
 	}
 
-	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
+	cu, err := comm.NewCu(pk, config.LohpiCaAddress+":"+strconv.Itoa(config.LohpiCaPort))
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 
 		memCache: cache.NewCache(ifritClient),
 
-		clientCheckoutMap: make(map[string][]string, 0),
+		clientCheckoutMap:   make(map[string][]string, 0),
 		invalidatedDatasets: make(map[string]struct{}),
 	}
 
@@ -173,18 +173,14 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 // Updates the revocation state of the dataset that has been checked out. If the checked-out dataset
 // is to be revoked, put it into the map. Remove it from the map if the policy state changes to "false" to "true".
 func (d *DirectoryServerCore) updateRevocationState(msg *pb.Message) {
-	policyContent := msg.GetPolicy().GetContent()
 	dataset := msg.GetStringValue()
-		
-	log.Println("policyContent:", policyContent)
-
 	b := msg.GetBoolValue()
 
 	// Check if it already is flagged as revoked
 	if d.datasetIsInvalidated(dataset) {
 		if b {
 			d.removeRevokedDataset(dataset)
-		} 
+		}
 	} else {
 		if !b {
 			d.addRevokedDataset(dataset)
@@ -207,7 +203,7 @@ func (d *DirectoryServerCore) revokedDatasets() map[string]struct{} {
 func (d *DirectoryServerCore) removeRevokedDataset(dataset string) {
 	d.invalidatedDatasetsLock.Lock()
 	defer d.invalidatedDatasetsLock.Unlock()
-    delete(d.invalidatedDatasets, dataset)
+	delete(d.invalidatedDatasets, dataset)
 }
 
 // Adds the given node to the network and returns the DirectoryServerCore's IP address

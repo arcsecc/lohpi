@@ -21,14 +21,14 @@ RUN go mod download
 # Copy the code into the container
 COPY ./core ./core
 COPY ./protobuf ./protobuf
-COPY ./cmd/dataverse/node/launcher.go ./cmd/node/launcher.go
+COPY ./cmd/dataverse/node/launcher.go .
 
 # Run test
 #RUN go test ./...
 
 # Build the application
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-RUN go build -o node ./cmd/node/launcher.go
+RUN go build -o node .
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
