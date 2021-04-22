@@ -25,7 +25,7 @@ var (
 )
 
 type Config struct {
-	HTTPPort                	int
+	HTTPSPort                	int
 	PolicyStoreAddress   		string
 	PolicyStoreGRPCPport 		int
 	DirectoryServerAddress  	string
@@ -46,24 +46,6 @@ type gossipMessage struct {
 	Hash    []byte
 	Addr    string
 }
-
-type ObjectPolicy struct {
-	Attribute string
-	Value     string
-}
-
-// Policy assoicated with metadata
-type Policy struct {
-	Issuer           string
-	ObjectIdentifier string
-	Content          string
-}
-
-// Function type used to fetch compressed archives from external sources.
-type externalArchiveHandler = func(id string) (string, error)
-
-// Function type to fetch metadata from the external data source
-type externalMetadataHandler = func(id string) (string, error)
 
 type NodeCore struct {
 	// Underlying ifrit client
@@ -90,19 +72,11 @@ type NodeCore struct {
 	policyStoreIP string
 
 	// Object id -> empty value for quick indexing
-	datasetMap     map[string]struct{}
+	datasetMap     map[string]*pb.Dataset
 	datasetMapLock sync.RWMutex
 
-	httpListener net.Listener
+	httpsListener net.Listener
 	httpServer   *http.Server
-
-	// Callback to fetch remote archives
-	datasetCallback     externalArchiveHandler
-	datasetCallbackLock sync.RWMutex
-
-	// Callback to fetch external metadata
-	externalMetadataCallback     externalMetadataHandler
-	externalMetadataCallbackLock sync.RWMutex
 
 	// Azure database
 	datasetCheckoutDB *sql.DB
@@ -118,15 +92,14 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	go ifritClient.Start()
 
-	httpListener, err := netutil.GetListener()
+	httpsListener, err := netutil.ListenOnPort(config.HTTPSPort)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	pk := pkix.Name{
 		CommonName: config.Name,
-		Locality:   []string{httpListener.Addr().String()},
+		Locality:   []string{httpsListener.Addr().String()},
 	}
 
 	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
@@ -152,15 +125,13 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		directoryServerClient:    directoryServerClient,
 		conf:      	 config,
 		psClient:     psClient,
-		httpListener: httpListener,
+		httpsListener: httpsListener,
 		cu:           cu,
 
 		// TODO: revise me
-		datasetMap:     make(map[string]struct{}),
+		datasetMap:     make(map[string]*pb.Dataset),
 		datasetMapLock: sync.RWMutex{},
 	}
-
-	log.Println("PostgresSQLConnectionString", config.PostgresSQLConnectionString)
 
 	// Initialize the PostgresSQL database
 	if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
@@ -199,26 +170,30 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
 // You will have to call this method to make the datasets available to the clients. 
-func (n *NodeCore) IndexDataset(id string, ctx context.Context) error {
-	if n.datasetExists(id) {
-		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the node", id)
+func (n *NodeCore) IndexDataset(datasetId, datasetURL, metadataURL string) error {
+	if n.datasetExists(datasetId) {
+		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the node", datasetId)
 	}
 
 	// Send policy request to policy store
-	policyResponse, err := n.pbSendPolicyStorePolicyRequest(id, n.policyStoreIP)
+	policyResponse, err := n.pbSendPolicyStorePolicyRequest(datasetId, n.policyStoreIP)
 	if err != nil {
 		return err
 	}
 
-	n.insertDataset(id, struct{}{})
+	n.insertDataset(datasetId, &pb.Dataset{
+		Identifier:datasetId, 
+		DatasetURL: datasetURL, 
+		MetadataURL: metadataURL,
+	})
 	
 	// Apply the update from policy store to storage
-	if err := n.dbSetObjectPolicy(id, policyResponse.GetContent()); err != nil {
+	if err := n.dbSetObjectPolicy(datasetId, policyResponse.GetContent()); err != nil {
 		return err
 	}
 
 	// Notify the directory server of the newest policy update
-	if err := n.pbSendDatsetIdentifier(id, n.directoryServerIP); err != nil {
+	if err := n.pbSendDatsetIdentifier(datasetId, n.directoryServerIP); err != nil {
 		return err
 	}
 
@@ -247,7 +222,7 @@ func (n *NodeCore) JoinNetwork() error {
 		return err
 	}
 
-	go n.startHttpServer(fmt.Sprintf(":%d", n.config().HTTPPort))
+	go n.startHTTPServer(fmt.Sprintf(":%d", n.config().HTTPSPort))
 
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
@@ -279,12 +254,7 @@ func (n *NodeCore) directoryServerHandshake() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	r, err := conn.Handshake(ctx, &pb.Node{
-		Name:         n.config().Name,
-		IfritAddress: n.ifritClient.Addr(),
-		Role:         "Storage node",
-		Id:           []byte(n.ifritClient.Id()),
-	})
+	r, err := conn.Handshake(ctx, n.pbNode())
 	if err != nil {
 		return err
 	}
@@ -295,7 +265,7 @@ func (n *NodeCore) directoryServerHandshake() error {
 }
 
 func (n *NodeCore) policyStoreHandshake() error {
-	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config().PolicyStoreAddress, n.config().PolicyStoreGRPCPport)
+	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config().PolicyStoreAddress, strconv.Itoa(n.config().PolicyStoreGRPCPport))
 	conn, err := n.psClient.Dial(n.config().PolicyStoreAddress + ":" + strconv.Itoa(n.config().PolicyStoreGRPCPport))
 	if err != nil {
 		return err
@@ -305,12 +275,7 @@ func (n *NodeCore) policyStoreHandshake() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	r, err := conn.Handshake(ctx, &pb.Node{
-		Name:         n.config().Name,
-		IfritAddress: n.ifritClient.Addr(),
-		Role:         "Storage node",
-		Id:           []byte(n.ifritClient.Id()),
-	})
+	r, err := conn.Handshake(ctx, n.pbNode())
 	if err != nil {
 		return err
 	}
@@ -342,12 +307,6 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
 		return n.pbMarshalDatasetIdentifiers(msg)
-
-	case message.MSG_TYPE_GET_DATASET_URL:
-		return n.pbMarshalDatasetURL(msg)
-		
-	case message.MSG_TYPE_GET_DATASET_METADATA_URL:
-		return n.pbMarshalDatasetMetadataURL(msg)
 
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		n.processPolicyBatch(msg)
@@ -451,36 +410,6 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-// Returns the URL of the dataset
-func (n *NodeCore) fetchDatasetURL(id string) (string, error) {
-	if handler := n.getDatasetCallback(); handler != nil {
-		externalArchiveUrl, err := handler(id)
-		if err != nil {
-			return "", err
-		}
-
-		return externalArchiveUrl, nil
-	}
-	
-	log.Warnln("Handler in fetchDatasetURL not set")
-	return "", nil
-}
-
-// Fetches the URL of the external metadata, given by the dataset id
-func (n *NodeCore) fetchDatasetMetadataURL(id string) (string, error) {
-	if handler := n.getExternalMetadataHandler(); handler != nil {
-		metadataUrl, err := handler(id)
-		if err != nil {
-			return "", err
-		}
-
-		return metadataUrl, nil
-	}
-	
-	log.Warnln("Handler in fetchDatasetMetadataURL is not set")
-	return "", nil
-}
-
 func (n *NodeCore) nodeInfo() ([]byte, error) {
 	str := fmt.Sprintf("Name: %s\tIfrit address: %s", n.config().Name, n.IfritClient().Addr())
 	return []byte(str), nil
@@ -503,12 +432,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	// Acknowledge the probe message
 	resp := &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
-		Sender: &pb.Node{
-			Name:         n.config().Name,
-			IfritAddress: n.ifritClient.Addr(),
-			Role:         "Storage node",
-			Id:           []byte(n.ifritClient.Id()),
-		},
+		Sender: n.pbNode(),
 		Probe: msg.GetProbe(),
 	}
 
@@ -564,12 +488,11 @@ func (n *NodeCore) verifyPolicyStoreMessage(msg *pb.Message) error {
 
 func (n *NodeCore) pbNode() *pb.Node {
 	return &pb.Node{
-		Name:         n.NodeName(),
+		Name:         n.config().Name,
 		IfritAddress: n.ifritClient.Addr(),
-		HttpAddress:  n.httpListener.Addr().String(),
-		Role:         "storage node",
-		//ContactEmail
-		Id: []byte(n.ifritClient.Id()),
+		Role:         "Storage node",
+		Id:           []byte(n.ifritClient.Id()),
+		HttpsAddress:  n.httpsListener.Addr().String(),
 	}
 }
 
@@ -600,10 +523,10 @@ func (n *NodeCore) verifyMessageSignature(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) insertDataset(id string, elem struct{}) {
+func (n *NodeCore) insertDataset(id string, d *pb.Dataset) {
 	n.datasetMapLock.Lock()
 	defer n.datasetMapLock.Unlock()
-	n.datasetMap[id] = struct{}{}
+	n.datasetMap[id] = d
 	log.Println("datasetMap:", n.datasetMap)
 }
 
@@ -620,7 +543,7 @@ func (n *NodeCore) removeDataset(id string) {
 	delete(n.datasetMap, id)
 }
 
-func (n *NodeCore) getDatasetMap() map[string]struct{} {
+func (n *NodeCore) getDatasetMap() map[string]*pb.Dataset {
 	n.datasetMapLock.RLock()
 	defer n.datasetMapLock.RUnlock()
 	return n.datasetMap

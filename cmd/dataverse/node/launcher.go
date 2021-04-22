@@ -165,9 +165,6 @@ func newNodeStorage() (*StorageNode, error) {
 		node: n,
 	}
 
-	sn.node.RegisterDatasetHandler(sn.archiveHandler)
-	sn.node.RegsiterMetadataHandler(sn.metadataHandler)
-	
 	// TODO: revise the call stack starting from here
 	if err := sn.node.JoinNetwork(); err != nil {
 		panic(err)
@@ -202,7 +199,9 @@ func (sn *StorageNode) initializePolicies() error {
 	}
 
 	for _, id := range ids {
-		if err := sn.node.IndexDataset(id, context.Background()); err != nil {
+		datasetUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id
+		metadataUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id
+		if err := sn.node.IndexDataset(id, &lohpi.Dataset{datasetUrl, metadataUrl}); err != nil {
 			return err
 		}
 	}

@@ -1,5 +1,5 @@
 package node
-
+/*
 // Registers the given handler when a compressed archive is fetched from a remote source.
 func (n *NodeCore) SetDatasetHandler(f externalArchiveHandler) {
 	n.datasetCallbackLock.Lock()
@@ -25,3 +25,4 @@ func (n *NodeCore) getExternalMetadataHandler() externalMetadataHandler {
 	defer n.externalMetadataCallbackLock.RUnlock()
 	return n.externalMetadataCallback
 }
+*/

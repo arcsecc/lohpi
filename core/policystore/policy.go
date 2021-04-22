@@ -312,8 +312,8 @@ func (ps *PolicyStoreCore) Stop() {
 func (ps *PolicyStoreCore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := ps.memCache.DatasetNodes()[node.GetName()]; !ok {
 		ps.memCache.AddNode(node.GetName(), node)
-		log.Infof("Policy store added %s to map with Ifrit IP %s and HTTPS adrress %s\n",
-			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
+		log.Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n",
+			node.GetName(), node.GetIfritAddress())
 	} else {
 		return nil, fmt.Errorf("Policy store: node '%s' already exists in network\n", node.GetName())
 	}

@@ -1,14 +1,13 @@
 package lohpi
 
 import (
-	"context"
 	"github.com/pkg/errors"
 	"github.com/arcsecc/lohpi/core/node"
 	"time"
 )
 
 var (
-	errNoId = errors.New("ID must not be empty.")
+	errNoDataset = errors.New("Dataset is nil.")
 )
 
 // Defines functional options for the node.
@@ -19,10 +18,15 @@ type Node struct {
 	conf *node.Config
 }
 
-// Sets the HTTP port of the node that exposes the HTTP endpoints. Default value is 8090.
-func NodeWithHTTPPort(port int) NodeOption {
+type Dataset struct {
+	DatasetURL string
+	MetadataURL string
+}
+
+// Sets the HTTP port of the node that
+func NodeWithHTTPSPort(port int) NodeOption {
 	return func(n *Node) {
-		n.conf.HTTPPort = port
+		n.conf.HTTPSPort = port
 	}
 }
 
@@ -105,7 +109,7 @@ func (n *Node) ApplyConfigurations(opts ...NodeOption) {
 
 func NewNode(opts ...NodeOption) (*Node, error) {
 	const (
-		defaultHTTPPort = 8090
+		defaultHTTPSPort = 8091
 		defaultPolicyStoreAddress = "127.0.1.1"
 		defaultPolicyStoreGRPCPport = 8084
 		defaultDirectoryServerAddress = "127.0.1.1"
@@ -120,7 +124,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 
 	// Default configuration
 	conf := &node.Config{
-		HTTPPort: defaultHTTPPort,
+		HTTPSPort: defaultHTTPSPort,
 		PolicyStoreAddress: defaultPolicyStoreAddress,
 		PolicyStoreGRPCPport: defaultPolicyStoreGRPCPport,
 		DirectoryServerAddress: defaultDirectoryServerAddress,
@@ -156,18 +160,18 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 // IndexDataset requests a policy from policy store. The policies are stored in this node and can be retrieved 
 // (see func (n *Node) GetPolicy(id string) bool). The policies are eventually available the API when the policy store
 // has processsed the request. 
-func (n *Node) IndexDataset(id string, ctx context.Context) error {
-	if id == "" {
-		return errNoId
+func (n *Node) IndexDataset(datasetId string, d *Dataset) error {
+	if d == nil {
+		return errNoDataset
 	}
 
-	return n.nodeCore.IndexDataset(id, ctx)
+	return n.nodeCore.IndexDataset(datasetId, d.DatasetURL, d.MetadataURL)
 }
 
 // Removes the dataset policy from the node. The dataset will no longer be available to clients.
 func (n *Node) RemoveDataset(id string) error {
 	if id == "" {
-		return errNoId
+		return errNoDataset
 	}
 	
 	return n.nodeCore.RemoveDataset(id)
@@ -187,18 +191,6 @@ func (n *Node) JoinNetwork() error {
 // Returns the underlying Ifrit address.
 func (n *Node) IfritAddress() string {
 	return n.nodeCore.IfritAddress()
-}
-
-// Registers the given function to be called whenever a dataset is requested.
-// The id must be the same as the argument to 'func (n Node) IndexDataset(id string, ctx context.Context) error'. 
-func (n *Node) RegisterDatasetHandler(f func(id string) (string, error)) {
-	n.nodeCore.SetDatasetHandler(f)
-}
-
-// Registers the given function to be called whenever a dataset's metadata is requested.
-// The id must be the same as the argument to 'func (n Node) IndexDataset(id string, ctx context.Context) error'. 
-func (n *Node) RegsiterMetadataHandler(f func(id string) (string, error)) {
-	n.nodeCore.SetMetadataHandler(f)
 }
 
 // Returns the string representation of the node.
