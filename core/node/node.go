@@ -26,7 +26,7 @@ var (
 
 type Config struct {
 	HostName					string
-	HTTPSPort                	int
+	HTTPPort                	int
 	PolicyStoreAddress   		string
 	PolicyStoreGRPCPport 		int
 	DirectoryServerAddress  	string
@@ -93,7 +93,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	go ifritClient.Start()
 
-	httpsListener, err := netutil.ListenOnPort(config.HTTPSPort)
+	httpsListener, err := netutil.ListenOnPort(config.HTTPPort)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +223,7 @@ func (n *NodeCore) JoinNetwork() error {
 		return err
 	}
 
-	go n.startHTTPServer(fmt.Sprintf(":%d", n.config().HTTPSPort))
+	go n.startHTTPServer(fmt.Sprintf(":%d", n.config().HTTPPort))
 
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
@@ -494,7 +494,7 @@ func (n *NodeCore) pbNode() *pb.Node {
 		Role:         	"Storage node",
 		Id:           	[]byte(n.ifritClient.Id()),
 		HttpsAddress:  	n.config().HostName,
-		Port: 			int32(n.config().HTTPSPort),
+		Port: 			int32(n.config().HTTPPort),
 	}
 }
 

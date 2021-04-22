@@ -25,7 +25,7 @@ import (
 // TODO: find a better way to configure stuff :))
 
 var config = struct {
-	Port				int 		`default:"8090"`
+	HTTPPort			int 		`default:"8090"`
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
@@ -126,36 +126,12 @@ func exists(name string) bool {
 }
 
 func newNodeStorage() (*StorageNode, error) {
-	env := os.Getenv("LOHPI_ENV")
-	if env == "" {
-		log.Errorln("LOHPI_ENV must be set. Exiting.")
-		os.Exit(1)
-	} else if env == "production" {
-		log.Infoln("Production environment set")
-	} else if env == "development" {
-		log.Infoln("Development environment set")
-	} else {
-		log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
-		os.Exit(1)
-	}
-	
-	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
-	
-	kvClient, err := newAzureKeyVaultClient()
+	opts, err := getNodeConfiguration()
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
-	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
-	if err != nil {
-		panic(err)
-		return nil, err
-	}
-
-	dbConnectionString := resp.Value
-	
-	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString), lohpi.NodeWithMultipleCheckouts(true), lohpi.NodeWithHostName("test.lohpi.cs.uit.no"))
+	n, err := lohpi.NewNode(opts...)
 	if err != nil {
 		panic(err)
 		return nil, err
@@ -173,6 +149,58 @@ func newNodeStorage() (*StorageNode, error) {
 
 	return sn, nil
 }
+
+func getNodeConfiguration() ([]lohpi.NodeOption, error) {
+	var opts []lohpi.NodeOption
+
+	dbConn, err := getDatabaseConnectionString()
+	if err != nil {
+		return nil, err
+	}
+
+	env := os.Getenv("LOHPI_ENV")
+	if env == "" {
+		log.Errorln("LOHPI_ENV must be set. Exiting.")
+		os.Exit(1)
+	} else if env == "production" {
+		log.Infoln("Production environment set")
+		opts = []lohpi.NodeOption{
+			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
+			lohpi.NodeWithMultipleCheckouts(true), 
+			lohpi.NodeWithHostName("test.lohpi.cs.uit.no"),
+			lohpi.NodeWithHTTPPort(config.HTTPPort),
+		}
+	} else if env == "development" {
+		log.Infoln("Development environment set")
+		opts = []lohpi.NodeOption{
+			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
+			lohpi.NodeWithMultipleCheckouts(true),
+			lohpi.NodeWithHTTPPort(config.HTTPPort),
+		}
+	} else {
+		log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
+		os.Exit(1)
+	}
+	
+	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
+	
+	return opts, nil
+}
+
+func getDatabaseConnectionString() (string, error) {
+	kvClient, err := newAzureKeyVaultClient()
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
+	if err != nil {
+		return "", err
+	}
+
+	return resp.Value, nil
+}
+
 
 func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 	c := &lohpi.AzureKeyVaultClientConfig{

@@ -24,9 +24,9 @@ type Dataset struct {
 }
 
 // Sets the HTTP port of the node that
-func NodeWithHTTPSPort(port int) NodeOption {
+func NodeWithHTTPPort(port int) NodeOption {
 	return func(n *Node) {
-		n.conf.HTTPSPort = port
+		n.conf.HTTPPort = port
 	}
 }
 
@@ -90,14 +90,6 @@ func NodeWithDebugEnabled(enabled bool) NodeOption {
 	}
 }
 
-// If set to true, TLS is enabled on the HTTP connection between the node and the clients connecting to 
-// the HTTP server. Default is false.
-func NodeWithTLS(enabled bool) NodeOption {
-	return func(n *Node) {
-		n.conf.TLSEnabled = enabled
-	}
-}
-
 // Sets the hostname of this node. Default value is 127.0.1.1.
 func NodeWithHostName(hostName string) NodeOption {
 	return func(n *Node) {
@@ -116,7 +108,7 @@ func (n *Node) ApplyConfigurations(opts ...NodeOption) {
 
 func NewNode(opts ...NodeOption) (*Node, error) {
 	const (
-		defaultHTTPSPort = 8091
+		defaultHTTPPort = 8090
 		defaultPolicyStoreAddress = "127.0.1.1"
 		defaultPolicyStoreGRPCPport = 8084
 		defaultDirectoryServerAddress = "127.0.1.1"
@@ -133,7 +125,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 	// Default configuration
 	conf := &node.Config{
 		HostName: defaultHostName,
-		HTTPSPort: defaultHTTPSPort,
+		HTTPPort: defaultHTTPPort,
 		PolicyStoreAddress: defaultPolicyStoreAddress,
 		PolicyStoreGRPCPport: defaultPolicyStoreGRPCPport,
 		DirectoryServerAddress: defaultDirectoryServerAddress,
