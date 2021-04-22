@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/lestrrat-go/jwx/jws"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
@@ -277,8 +276,7 @@ func (n *NodeCore) dbCheckinDataset(id string) error {
 	return nil
 }
 
-func (n *NodeCore) dbCheckoutDataset(r *pb.DatasetRequest) error {
-	token := r.GetClientToken()
+func (n *NodeCore) dbCheckoutDataset(token, datasetId string) error {
 	msg, err := jws.ParseString(string(token))
 	if err != nil {
 		return err
@@ -296,12 +294,11 @@ func (n *NodeCore) dbCheckoutDataset(r *pb.DatasetRequest) error {
 
 	clientID := c.Oid
 	clientName := c.Name
-	doi := r.GetIdentifier()
 
 	q := `INSERT INTO ` + schemaName + `.` + datasetCheckoutTable + `(
 		client_id, client_name, dataset_id, tstamp) VALUES ($1, $2, $3, current_timestamp);`
 
-	_, err = n.datasetCheckoutDB.Exec(q, clientID, clientName, doi)
+	_, err = n.datasetCheckoutDB.Exec(q, clientID, clientName, datasetId)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"strings"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,17 +18,16 @@ import (
 
 const PROJECTS_DIRECTORY = "projects"
 
-func (n *NodeCore) startHttpServer(addr string) error {
+func (n *NodeCore) startHTTPServer(addr string) error {
 	router := mux.NewRouter()
 	log.Infof("%s: Started HTTP server on port %s\n", n.config().Name, addr)
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	dRouter.HandleFunc("/ids", n.getDatasetIdentifiers).Methods("GET")
-
-	// Combine these two guys into the same method
 	dRouter.HandleFunc("/info/{id:.*}", n.getDatasetSummary).Methods("GET")
-	//dRouter.HandleFunc("/metadata/{id:.*}", n.getDatasetSummary).Methods("GET")
 	dRouter.HandleFunc("/new_policy/{id:.*}", n.setDatasetPolicy).Methods("PUT")
+	dRouter.HandleFunc("/data/{id:.*}", n.getDataset).Methods("GET")
+	dRouter.HandleFunc("/metadata/{id:.*}", n.getMetadata).Methods("GET")
 
 	// Middlewares used for validation
 	//dRouter.Use(n.middlewareValidateTokenSignature)
@@ -49,7 +49,17 @@ func (n *NodeCore) startHttpServer(addr string) error {
 		return err
 	}*/
 
-	return n.httpServer.ListenAndServe()
+	if err := n.httpServer.Serve(n.httpsListener); err != http.ErrServerClosed {
+		log.Errorln(err.Error())
+		return err
+	}
+
+	return nil
+}
+
+// TODO redirect HTTP to HTTPS
+func redirectTLS(w http.ResponseWriter, r *http.Request) {
+    //http.Redirect(w, r, "https://IPAddr:443"+r.RequestURI, http.StatusMovedPermanently)
 }
 
 /*func (n *NodeCore) setPublicKeyCache() error {
@@ -70,6 +80,188 @@ func (n *NodeCore) startHttpServer(addr string) error {
 	return nil
 }*/
 
+func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
+	datasetId := strings.Split(r.URL.Path, "/dataset/metadata/")[1]
+
+	if !n.dbDatasetExists(datasetId) {
+		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	dataset := n.getDatasetMap()[datasetId]
+	if dataset == nil {
+		err := errors.New("Dataset is nil")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if dataset.GetMetadataURL() == "" {
+		err := errors.New("Could not fetch metadata URL")
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	request, err := http.NewRequest("GET", dataset.GetMetadataURL(), nil)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	httpClient := &http.Client{
+		Timeout: time.Duration(20 * time.Second),
+	}
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	_, err = buf.ReadFrom(response.Body)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	if response.StatusCode != http.StatusOK {
+		log.Errorf("Response from remote data repository: %s\n", string(buf.Bytes()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
+		return
+	}
+	
+	m := copyHeaders(response.Header)
+	setHeaders(m, w.Header())
+	w.WriteHeader(response.StatusCode)
+	w.Write(buf.Bytes())
+}
+
+func copyHeaders(h map[string][]string) map[string][]string {
+	m := make(map[string][]string)
+	for key, val := range h {
+		m[key] = val
+	}
+	return m
+}
+
+func setHeaders(src, dest map[string][]string) {
+	for k, v := range src {
+		dest[k] = v
+	}
+}
+
+func getBearerToken(r *http.Request) ([]byte, error) {
+	authHeader := r.Header.Get("Authorization")
+	authHeaderContent := strings.Split(authHeader, " ")
+	if len(authHeaderContent) != 2 {
+		return nil, errors.New("Token not provided or malformed")
+	}
+	return []byte(authHeaderContent[1]), nil
+}
+
+// TODO use context!
+func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	// proofcheck me
+	datasetId := strings.Split(r.URL.Path, "/dataset/data/")[1]
+
+	if !n.dbDatasetExists(datasetId) {
+		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	dataset := n.getDatasetMap()[datasetId]
+	if dataset == nil {
+		err := errors.New("Dataset is nil")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if !n.dbDatasetIsAvailable(datasetId) {
+		err := errors.New("You do not have permission to access this dataset")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusUnauthorized)+": "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// if client is allowed... 401 if not
+	// If multiple checkouts are allowed, check if the client has checked it out already
+	if !n.config().AllowMultipleCheckouts && n.dbDatasetIsCheckedOutByClient(datasetId) {
+		err := errors.New("You have already checked out this dataset")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusUnauthorized)+": "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	token, err := getBearerToken(r)
+	if err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Add dataset checkout to database. Rollback checkout if anything fails
+	if err := n.dbCheckoutDataset(string(token), datasetId); err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if dataset.GetDatasetURL() == "" {
+		err := errors.New("Could not fetch dataset URL")
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	request, err := http.NewRequest("GET", dataset.GetDatasetURL(), nil)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	httpClient := &http.Client{
+		Timeout: time.Duration(20 * time.Second),
+	}
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	_, err = buf.ReadFrom(response.Body)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	if response.StatusCode != http.StatusOK {
+		log.Errorf("Response from remote data repository: %s\n", string(buf.Bytes()))
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
+		return
+	}
+	
+	m := copyHeaders(response.Header)
+	setHeaders(m, w.Header())
+	w.WriteHeader(response.StatusCode)
+	w.Write(buf.Bytes())
+}
+
 // Returns the dataset identifiers stored at this node
 func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
@@ -84,8 +276,8 @@ func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	r.Header.Add("Content-Length", strconv.Itoa(len(ids)))
+	w.Header().Add("Content-Type", "application/json")
+	w.Header().Add("Content-Length", strconv.Itoa(len(ids)))
 
 	_, err := w.Write(b.Bytes())
 	if err != nil {
@@ -218,7 +410,7 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respMsg := "Successfully set a new policy for " + dataset + "\n"
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	w.Header().Set("Content-Type", "application/text")
 	w.Header().Set("Content-Length", strconv.Itoa(len(respMsg)))
 	w.Write([]byte(respMsg))

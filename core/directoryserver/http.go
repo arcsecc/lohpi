@@ -30,7 +30,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	log.Infoln("Started directory server on port", d.config.HTTPPort)
 
 	// Main dataset router exposed to the clients
-	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(true)
+	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(false)
 	dRouter.HandleFunc("/ids", d.getNetworkDatasetIdentifiers).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", d.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", d.getDataset).Methods("GET")
@@ -210,18 +210,18 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 }
 
 // Fetches the information about a dataset
-func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, req *http.Request) {
-	defer req.Body.Close()
+func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
 
-	dataset := mux.Vars(req)["id"]
+	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
 		errMsg := fmt.Errorf("Missing dataset identifier")
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
 		return
 	}
 
-	ctx, cancel := context.WithDeadline(req.Context(), time.Now().Add(time.Second*10))
-	defer cancel()
+	/*ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second*10))
+	defer cancel()*/
 
 	doneChan := make(chan bool)
 	defer close(doneChan)
@@ -235,46 +235,26 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, req *htt
 		return
 	}
 
-	go func() {
-		// Fetch the node address that stores the dataset
-		md, err := d.datasetMetadata(w, req, dataset, node.GetIfritAddress(), ctx)
-		if err != nil {
-			log.Errorln(err.Error())
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Length", strconv.Itoa(len(md)))
-		w.Write(md)
-		doneChan <- true
-	}()
-
-	select {
-	case <-ctx.Done():
-		log.Println("Timeout!")
-		http.Error(w, http.StatusText(http.StatusRequestTimeout), http.StatusRequestTimeout)
-		return
-	case <-doneChan:
-		return
-	}
+	// Build the URL. Remember to specify the protocol as well
+	// TODO use HTTPS
+	addr := "http://" + node.GetHttpsAddress() + "/dataset/metadata/" + dataset
+	
+	// Perform a HTTP redirect to the node that stores the metadata
+	http.Redirect(w, r, addr, http.StatusFound)
 }
 
 // Handler used to fetch an entire dataset. Writes a zip file to the client
-func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, req *http.Request) {
-	defer req.Body.Close()
+func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
 
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Hour * 5))
-	defer cancel()
-
-	token, err := getBearerToken(req)
+	// Reject request at directoryu server if token is invalid
+	/*token, err := getBearerToken(r)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
-	}
+	}*/
 
-	dataset := mux.Vars(req)["id"]
+	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
 		err := fmt.Errorf("Missing dataset identifier")
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
@@ -289,7 +269,24 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
-	d.dataset(w, req, dataset, node.GetIfritAddress(), token, ctx)
+	// Build the URL. Remember to specify the protocol as well
+	// TODO: use HTTPS
+	addr := "http://" + node.GetHttpsAddress() + "/dataset/data/" + dataset
+	
+	// Perform a HTTP redirect to the node that stores the metadata
+	http.Redirect(w, r, addr, http.StatusFound)
+
+	// How do we rollback checkout as an atomic operation?
+	// Get client-related fields
+	/*_, oid, err := d.getClientIdentifier(clientToken)
+	if err != nil {
+		if err := d.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
+			log.Errorln(err.Error())
+		}
+		return
+	}
+
+	d.insertCheckedOutDataset(dataset, oid)*/
 }
 
 func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
@@ -318,7 +315,7 @@ func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter
 
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
-	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+	w.Header().Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
 	if err != nil {

@@ -10,6 +10,8 @@ import (
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/lestrrat-go/jwx/jws"
+	"encoding/json"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
@@ -210,8 +212,8 @@ func (d *DirectoryServerCore) removeRevokedDataset(dataset string) {
 func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if _, ok := d.memCache.Nodes()[node.GetName()]; !ok {
 		d.memCache.AddNode(node.GetName(), node)
-		log.Infof("DirectoryServerCore added '%s' to map with Ifrit IP %s and HTTPS adrress %s\n",
-			node.GetName(), node.GetIfritAddress(), node.GetHttpAddress())
+		log.Infof("DirectoryServerCore added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n",
+			node.GetName(), node.GetIfritAddress(), node.GetHttpsAddress())
 	} else {
 		return nil, fmt.Errorf("DirectoryServerCore: node '%s' already exists in network\n", node.GetName())
 	}
@@ -256,4 +258,93 @@ func (d *DirectoryServerCore) pbNode() *pb.Node {
 		Role:         "Directory server",
 		Id:           []byte(d.ifritClient.Id()),
 	}
+}
+
+
+func (d *DirectoryServerCore) getClientIdentifier(token []byte) (string, string, error) {
+	msg, err := jws.ParseString(string(token))
+	if err != nil {
+		return "", "", err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return "", "", errors.New("Payload was nil")
+	}
+
+	c := struct {
+		Name string `json:"name"`
+		Oid  string `json:"oid"`
+	}{}
+
+	if err := json.Unmarshal(s, &c); err != nil {
+		return "", "", err
+	}
+
+	return c.Name, c.Oid, nil
+}
+
+// TODO: handle ctx
+func (d *DirectoryServerCore) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
+	msg := &pb.Message{
+		Type:        message.MSG_TYPE_ROLLBACK_CHECKOUT,
+		Sender:      d.pbNode(),
+		StringValue: dataset,
+	}
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	r, s, err := d.ifritClient.Sign(data)
+	if err != nil {
+		return err
+	}
+
+	msg.Signature = &pb.MsgSignature{R: r, S: s}
+	data, err = proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	ch := d.ifritClient.SendTo(nodeAddr, data)
+	select {
+	case resp := <-ch:
+		respMsg := &pb.Message{}
+		if err := proto.Unmarshal(resp, respMsg); err != nil {
+			return err
+		}
+
+		if err := d.verifyMessageSignature(respMsg); err != nil {
+			return err
+		}
+
+	case <-ctx.Done():
+		err := errors.New("Could not verify dataset checkout rollback")
+		return err
+	}
+
+	return nil
+}
+
+// TODO: refine this a lot more :) move me to mem cache
+func (d *DirectoryServerCore) insertCheckedOutDataset(dataset, clientId string) {
+	d.clientCheckoutMapLock.Lock()
+	defer d.clientCheckoutMapLock.Unlock()
+	if d.clientCheckoutMap[dataset] == nil {
+		d.clientCheckoutMap[dataset] = make([]string, 0)
+	}
+	d.clientCheckoutMap[dataset] = append(d.clientCheckoutMap[dataset], clientId)
+}
+
+func (d *DirectoryServerCore) getCheckedOutDatasetMap() map[string][]string {
+	d.clientCheckoutMapLock.RLock()
+	defer d.clientCheckoutMapLock.RUnlock()
+	return d.clientCheckoutMap
+}
+
+func (d *DirectoryServerCore) datasetIsInvalidated(dataset string) bool {
+	_, exists := d.revokedDatasets()[dataset]
+	return exists
 }

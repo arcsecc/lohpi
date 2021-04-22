@@ -277,7 +277,7 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ipAddr, err := net.ResolveIPAddr("ip4", strings.Split(reqCert.Subject.Locality[0], ":")[0])
+	ipAddrs, err := extractIPAddresses(reqCert.Subject.Locality)
 	if err != nil {
 		log.Error(err.Error())
 		return
@@ -290,7 +290,7 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 		NotAfter:     time.Now().AddDate(10, 0, 0),
 		//ExtraExtensions: []pkix.Extension{ext},
 		PublicKey:   reqCert.PublicKey,
-		IPAddresses: []net.IP{ipAddr.IP},
+		IPAddresses: ipAddrs,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 	}
@@ -317,6 +317,20 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 		log.Error(err.Error())
 		return
 	}
+}
+
+func extractIPAddresses(subjects []string) ([]net.IP, error) {
+	result := make([]net.IP, 0)
+
+	for _, s := range subjects {
+		ipAddr, err := net.ResolveIPAddr("ip4", strings.Split(s, ":")[0])
+		if err != nil {
+			log.Error(err.Error())
+			return nil, err
+		}
+		result = append(result, ipAddr.IP)
+	}
+	return result, nil	
 }
 
 func generateCaCert(pubKey crypto.PublicKey, privKey *rsa.PrivateKey) (*x509.Certificate, error) {
