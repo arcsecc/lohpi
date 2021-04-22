@@ -25,6 +25,7 @@ var (
 )
 
 type Config struct {
+	HostName					string
 	HTTPSPort                	int
 	PolicyStoreAddress   		string
 	PolicyStoreGRPCPport 		int
@@ -488,11 +489,12 @@ func (n *NodeCore) verifyPolicyStoreMessage(msg *pb.Message) error {
 
 func (n *NodeCore) pbNode() *pb.Node {
 	return &pb.Node{
-		Name:         n.config().Name,
-		IfritAddress: n.ifritClient.Addr(),
-		Role:         "Storage node",
-		Id:           []byte(n.ifritClient.Id()),
-		HttpsAddress:  n.httpsListener.Addr().String(),
+		Name:         	n.config().Name,
+		IfritAddress: 	n.ifritClient.Addr(),
+		Role:         	"Storage node",
+		Id:           	[]byte(n.ifritClient.Id()),
+		HttpsAddress:  	n.config().HostName,
+		Port: 			int32(n.config().HTTPSPort),
 	}
 }
 

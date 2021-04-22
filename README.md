@@ -31,11 +31,7 @@ You need to connect to VPN if you are outside of the university domain.
 2. Run docker ps to see that it runs. Note the container ID to tear it down later using ```docker stop <id>```.
 
 3. Copy dev-initialize.sql into the Docker image:
-<<<<<<< HEAD
-```$ docker cp dev-initalize.sql lohpi-postgres-dev:/dev-initialize.sql```
-=======
 ```$ docker cp dev-initialize.sql lohpi-postgres-dev:/dev-initialize.sql```
->>>>>>> dev
 
 4. Enter the shell:
 ```$ docker exec -it lohpi-postgres-dev bash```

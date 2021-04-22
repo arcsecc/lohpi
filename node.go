@@ -98,6 +98,13 @@ func NodeWithTLS(enabled bool) NodeOption {
 	}
 }
 
+// Sets the hostname of this node. Default value is 127.0.1.1.
+func NodeWithHostName(hostName string) NodeOption {
+	return func(n *Node) {
+		n.conf.HostName = hostName
+	}
+}
+
 // Applies the options to the node.
 // NOTE: no locking is performed. Beware of undefined behaviour. Check that previous connections are still valid.
 // SHOULD NOT be called.
@@ -120,10 +127,12 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		defaultPostgresSQLConnectionString = ""
 		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
 		defaultAllowMultipleCheckouts = false
+		defaultHostName = "127.0.1.1"
 	)
 
 	// Default configuration
 	conf := &node.Config{
+		HostName: defaultHostName,
 		HTTPSPort: defaultHTTPSPort,
 		PolicyStoreAddress: defaultPolicyStoreAddress,
 		PolicyStoreGRPCPport: defaultPolicyStoreGRPCPport,

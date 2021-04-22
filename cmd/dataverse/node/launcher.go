@@ -155,7 +155,7 @@ func newNodeStorage() (*StorageNode, error) {
 
 	dbConnectionString := resp.Value
 	
-	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString), lohpi.NodeWithMultipleCheckouts(true))
+	n, err := lohpi.NewNode(lohpi.NodeWithPostgresSQLConnectionString(dbConnectionString), lohpi.NodeWithMultipleCheckouts(true), lohpi.NodeWithHostName("test.lohpi.cs.uit.no"))
 	if err != nil {
 		panic(err)
 		return nil, err

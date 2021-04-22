@@ -52,6 +52,7 @@ message Node {
     string contactEmail = 4;    // Contact of person/entity responsible for the node, preferably an email alias, for non-compliance reports. 
     bytes id = 5;               // Ifrit id
     string httpsAddress = 6;     // IP address
+    int32 port = 7; //
 }
 
 message DatasetRequest {
