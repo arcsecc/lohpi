@@ -25,7 +25,7 @@ import (
 // TODO: find a better way to configure stuff :))
 
 var config = struct {
-	HTTPPort			int 		`default:"8090"`
+	HTTPPort			int 		`default:"8080"`
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
 	MuxAddr				string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
@@ -175,6 +175,7 @@ func getNodeConfiguration() ([]lohpi.NodeOption, error) {
 		opts = []lohpi.NodeOption{
 			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
 			lohpi.NodeWithMultipleCheckouts(true),
+			lohpi.NodeWithHostName("iad09.cs.uit.no"),
 			lohpi.NodeWithHTTPPort(config.HTTPPort),
 		}
 	} else {

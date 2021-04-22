@@ -76,7 +76,7 @@ type NodeCore struct {
 	datasetMap     map[string]*pb.Dataset
 	datasetMapLock sync.RWMutex
 
-	httpsListener net.Listener
+	listener net.Listener
 	httpServer   *http.Server
 
 	// Azure database
@@ -93,14 +93,14 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	go ifritClient.Start()
 
-	httpsListener, err := netutil.ListenOnPort(config.HTTPPort)
+	listener, err := netutil.GetListener()
 	if err != nil {
 		return nil, err
 	}
 
 	pk := pkix.Name{
 		CommonName: config.Name,
-		Locality:   []string{httpsListener.Addr().String()},
+		Locality:   []string{listener.Addr().String()},
 	}
 
 	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
@@ -122,16 +122,14 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	}
 
 	node := &NodeCore{
-		ifritClient:  ifritClient,
+		ifritClient:  			  ifritClient,
 		directoryServerClient:    directoryServerClient,
-		conf:      	 config,
-		psClient:     psClient,
-		httpsListener: httpsListener,
-		cu:           cu,
-
-		// TODO: revise me
-		datasetMap:     make(map[string]*pb.Dataset),
-		datasetMapLock: sync.RWMutex{},
+		conf:		   			  config,
+		psClient:     			  psClient,
+		listener: 				  listener,
+		cu:           			  cu,
+		datasetMap:     		  make(map[string]*pb.Dataset),
+		datasetMapLock: 		  sync.RWMutex{},
 	}
 
 	// Initialize the PostgresSQL database
@@ -529,7 +527,6 @@ func (n *NodeCore) insertDataset(id string, d *pb.Dataset) {
 	n.datasetMapLock.Lock()
 	defer n.datasetMapLock.Unlock()
 	n.datasetMap[id] = d
-	log.Println("datasetMap:", n.datasetMap)
 }
 
 func (n *NodeCore) datasetExists(id string) bool {

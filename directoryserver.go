@@ -6,12 +6,6 @@ import (
 
 type DirectoryServerOption func(*DirectoryServer)
 
-// If set to true, run the directory server's HTTP server with TLS enabled
-func DirectoryServerWithTLS() DirectoryServerOption {
-	return func(d *DirectoryServer) {
-		d.conf.UseTLS = true
-	}
-}
 
 // Sets the directory server's HTTP server port to port. Default value is 8080.
 func DirectoryServerWithHTTPPort(port int) DirectoryServerOption {

@@ -237,8 +237,10 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 
 	// Build the URL. Remember to specify the protocol as well
 	// TODO use HTTPS
-	addr := "http://" + node.GetHttpsAddress() + "/dataset/metadata/" + dataset
+	addr := "http://" + node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())) + "/dataset/metadata/" + dataset
 	
+	log.Println("Adr:", addr)
+
 	// Perform a HTTP redirect to the node that stores the metadata
 	http.Redirect(w, r, addr, http.StatusFound)
 }

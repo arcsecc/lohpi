@@ -20,7 +20,7 @@ const PROJECTS_DIRECTORY = "projects"
 
 func (n *NodeCore) startHTTPServer(addr string) error {
 	router := mux.NewRouter()
-	log.Infof("%s: Started HTTP server on port %s\n", n.config().Name, addr)
+	log.Infof("%s: Started HTTP server on port %d\n", n.config().Name, n.config().HTTPPort)
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	dRouter.HandleFunc("/ids", n.getDatasetIdentifiers).Methods("GET")
@@ -49,12 +49,7 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 		return err
 	}*/
 
-	if err := n.httpServer.Serve(n.httpsListener); err != http.ErrServerClosed {
-		log.Errorln(err.Error())
-		return err
-	}
-
-	return nil
+	return n.httpServer.ListenAndServe()
 }
 
 // TODO redirect HTTP to HTTPS

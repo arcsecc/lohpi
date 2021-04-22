@@ -13,7 +13,7 @@ import (
 )
 
 var config = struct {
-	HttpPort   				int     `default:"8080"`
+	HTTPPort   				int     `default:"8080"`
 	GRPCPort 				int     `default:"8081"`
 	LohpiCaAddr 			string 	`default:"127.0.1.1:8301"`
 }{}
@@ -23,9 +23,8 @@ func main() {
 	var createNew bool
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&configFile, "c", "lohpi_config.yaml", "Mux's configuration file.")
-
-	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi mux instance")
+	args.StringVar(&configFile, "c", "lohpi_config.yaml", "Directory server's configuration file.")
+	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi directory server instance.")
 	args.Parse(os.Args[1:])
 
 	configor.New(&configor.Config{Debug: false, ENVPrefix: "DIRECTORYSERVER"}).Load(&config, configFile)
@@ -34,7 +33,8 @@ func main() {
 	var err error
 	
 	if createNew {
-		d, err = lohpi.NewDirectoryServer()
+		opts := getDirectoryServerConfiguration()
+		d, err = lohpi.NewDirectoryServer(opts...)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
@@ -53,14 +53,10 @@ func main() {
 	d.Stop()
 }
 
-func loadConfiguration(configFile string) error {
-	conf := configor.New(&configor.Config{
-		ErrorOnUnmatchedKeys: true,
-		Verbose:              true,
-		Debug:                true,
-	})
-
-	return conf.Load(&config, configFile)
+func getDirectoryServerConfiguration() []lohpi.DirectoryServerOption {
+	return []lohpi.DirectoryServerOption{
+		lohpi.DirectoryServerWithHTTPPort(config.HTTPPort),
+	}	
 }
 
 func initializeLogging(logToFile bool) error {
