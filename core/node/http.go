@@ -2,6 +2,8 @@ package node
 
 import (
 	"bytes"
+	"bufio"
+	"io"
 	"strings"
 	"encoding/json"
 	"errors"
@@ -76,6 +78,7 @@ func redirectTLS(w http.ResponseWriter, r *http.Request) {
 }*/
 
 func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
 	datasetId := strings.Split(r.URL.Path, "/dataset/metadata/")[1]
 
 	if !n.dbDatasetExists(datasetId) {
@@ -117,24 +120,41 @@ func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	buf := new(bytes.Buffer)
-	_, err = buf.ReadFrom(response.Body)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
+	defer response.Body.Close()
+	
 	if response.StatusCode != http.StatusOK {
-		log.Errorf("Response from remote data repository: %s\n", string(buf.Bytes()))
+		log.Errorf("Response from remote data repository\n")
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
 		return
 	}
-	
+
+	bufferedReader := bufio.NewReader(response.Body)
+    buffer := make([]byte, 4 * 1024)
+
 	m := copyHeaders(response.Header)
 	setHeaders(m, w.Header())
 	w.WriteHeader(response.StatusCode)
-	w.Write(buf.Bytes())
+
+	for {
+    	len, err := bufferedReader.Read(buffer)
+        if len > 0 {	
+			_, err = w.Write(buffer[:len])
+			if err != nil {
+				log.Error(err.Error())
+			}
+		}
+
+        if err != nil {
+            if err == io.EOF {
+                log.Infoln(err.Error())
+            } else {
+				log.Error(err.Error())	
+				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+				return
+			}
+            break
+        }
+    }
 }
 
 func copyHeaders(h map[string][]string) map[string][]string {
@@ -236,25 +256,41 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	buf := new(bytes.Buffer)
-	_, err = buf.ReadFrom(response.Body)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
+	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		log.Errorf("Response from remote data repository: %s\n", string(buf.Bytes()))
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
+		log.Errorf("Response from remote data repository\n")
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch dataset from host.", http.StatusInternalServerError)
 		return
 	}
-	
+
+	bufferedReader := bufio.NewReader(response.Body)
+    buffer := make([]byte, 4 * 1024)
+
 	m := copyHeaders(response.Header)
 	setHeaders(m, w.Header())
 	w.WriteHeader(response.StatusCode)
-	w.Write(buf.Bytes())
+
+	for {
+    	len, err := bufferedReader.Read(buffer)
+        if len > 0 {	
+			_, err = w.Write(buffer[:len])
+			if err != nil {
+				log.Error(err.Error())
+			}
+		}
+
+        if err != nil {
+            if err == io.EOF {
+                log.Infoln(err.Error())
+            } else {
+				log.Error(err.Error())	
+				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+				return
+			}
+            break
+        }
+    }
 }
 
 // Returns the dataset identifiers stored at this node

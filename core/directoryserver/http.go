@@ -1,6 +1,9 @@
 package directoryserver
 
 import (
+	"net/url"
+	"bufio"
+	"io"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -235,14 +238,61 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Build the URL. Remember to specify the protocol as well
-	// TODO use HTTPS
-	addr := "http://" + node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())) + "/dataset/metadata/" + dataset
-	
-	log.Println("Adr:", addr)
+    req := &http.Request{
+        Method: "GET",
+        URL: &url.URL{
+            Scheme: "http", //https
+            Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
+            Path:   "/dataset/metadata/" + dataset,
+        },
+		Header: http.Header{},
+    }
 
-	// Perform a HTTP redirect to the node that stores the metadata
-	http.Redirect(w, r, addr, http.StatusFound)
+	client := &http.Client{}
+    resp, err := client.Do(req)
+	if err != nil {
+		err := fmt.Errorf("Failed to fetch dataset\n")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Error(resp.Status)
+		http.Error(w, http.StatusText(resp.StatusCode) + ": " + resp.Status, resp.StatusCode)
+		return
+	}
+
+	bufferedReader := bufio.NewReader(resp.Body)
+    buffer := make([]byte, 4 * 1024)
+
+	m := copyHeaders(resp.Header)
+	setHeaders(m, w.Header())
+	w.WriteHeader(resp.StatusCode)
+
+	for {
+    	len, err := bufferedReader.Read(buffer)
+        if len > 0 {	
+			_, err = w.Write(buffer[:len])
+			if err != nil {
+				log.Error(err.Error())
+			}
+		}
+
+        if err != nil {
+            if err == io.EOF {
+                log.Infoln(err.Error())
+            } else {
+				log.Error(err.Error())	
+				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+				return
+			}
+            break
+        }
+    }
+
 }
 
 // Handler used to fetch an entire dataset. Writes a zip file to the client
@@ -250,11 +300,12 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	defer r.Body.Close()
 
 	// Reject request at directoryu server if token is invalid
-	/*token, err := getBearerToken(r)
+	token, err := getBearerToken(r)
 	if err != nil {
+		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
-	}*/
+	}
 
 	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
@@ -271,13 +322,62 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Build the URL. Remember to specify the protocol as well
-	// TODO: use HTTPS
-	addr := "http://" + node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())) + "/dataset/data/" + dataset
-	log.Println("addr:", addr)
+    req := &http.Request{
+        Method: "GET",
+        URL: &url.URL{
+            Scheme: "http", //https
+            Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
+            Path:   "/dataset/data/" + dataset,
+        },
+		Header: http.Header{},
+    }
 
-	// Perform a HTTP redirect to the node that stores the metadata
-	http.Redirect(w, r, addr, http.StatusFound)
+	req.Header.Add("Authorization", "Bearer " + string(token))
+
+	client := &http.Client{}
+    resp, err := client.Do(req)
+	if err != nil {
+		err := fmt.Errorf("Failed to fetch dataset\n")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Error(resp.Status)
+		http.Error(w, http.StatusText(resp.StatusCode) + ": " + resp.Status, resp.StatusCode)
+		return
+	}
+
+	bufferedReader := bufio.NewReader(resp.Body)
+    buffer := make([]byte, 4 * 1024)
+
+	m := copyHeaders(resp.Header)
+	setHeaders(m, w.Header())
+	w.WriteHeader(resp.StatusCode)
+
+	for {
+    	len, err := bufferedReader.Read(buffer)
+        if len > 0 {	
+			_, err = w.Write(buffer[:len])
+			if err != nil {
+				log.Error(err.Error())
+			}
+		}
+
+        if err != nil {
+            if err == io.EOF {
+                log.Infoln(err.Error())
+            } else {
+				log.Error(err.Error())	
+				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+				return
+			}
+            break
+        }
+    }
 
 	// How do we rollback checkout as an atomic operation?
 	// Get client-related fields
@@ -325,5 +425,19 @@ func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+}
+
+func copyHeaders(h map[string][]string) map[string][]string {
+	m := make(map[string][]string)
+	for key, val := range h {
+		m[key] = val
+	}
+	return m
+}
+
+func setHeaders(src, dest map[string][]string) {
+	for k, v := range src {
+		dest[k] = v
 	}
 }
