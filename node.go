@@ -1,13 +1,14 @@
 package lohpi
 
 import (
+	"net/http"
 	"github.com/pkg/errors"
 	"github.com/arcsecc/lohpi/core/node"
 	"time"
 )
 
 var (
-	errNoDataset = errors.New("Dataset is nil.")
+	errNoDatasetId = errors.New("Dataset identifier is empty.")
 )
 
 // Defines functional options for the node.
@@ -158,21 +159,34 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 	return n, nil
 }
 
-// IndexDataset requests a policy from policy store. The policies are stored in this node and can be retrieved 
-// (see func (n *Node) GetPolicy(id string) bool). The policies are eventually available the API when the policy store
-// has processsed the request. 
-func (n *Node) IndexDataset(datasetId string, d *Dataset) error {
-	if d == nil {
-		return errNoDataset
+// IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
+// it will return when policy requests to the policy store finish.
+func (n *Node) IndexDataset(datasetId string) error {
+	if datasetId == "" {
+		return errNoDatasetId
 	}
 
-	return n.nodeCore.IndexDataset(datasetId, d.DatasetURL, d.MetadataURL)
+	return n.nodeCore.IndexDataset(datasetId)
+}
+
+// Registers a handler that processes the client request of datasets. The handler is only invoked if the same id
+// was registered with 'func (n *Node) IndexDataset()' method. It is the caller's responsibility to
+// close the request after use.
+func (n *Node) RegisterDatasetHandler(f func(datasetId string, w http.ResponseWriter, r *http.Request)) {
+	n.nodeCore.RegisterDatasetHandler(f)
+}
+
+// Registers a handler that processes the client request of metadata. The handler is only invoked if the same id
+// was registered with 'func (n *Node) IndexDataset()' method. It is the caller's responsibility to
+// close the request after use.
+func (n *Node) RegisterMetadataHandler(f func(datasetId string, w http.ResponseWriter, r *http.Request)) {
+	n.nodeCore.RegisterMetadataHandler(f)
 }
 
 // Removes the dataset policy from the node. The dataset will no longer be available to clients.
 func (n *Node) RemoveDataset(id string) error {
 	if id == "" {
-		return errNoDataset
+		return errNoDatasetId
 	}
 	
 	return n.nodeCore.RemoveDataset(id)

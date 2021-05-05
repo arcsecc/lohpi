@@ -251,6 +251,7 @@ func (n *NodeCore) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 	return arr, nil
 }
 
+// TODO: add azure id as parameter
 func (n *NodeCore) dbDatasetIsCheckedOutByClient(id string) bool {
 	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE 

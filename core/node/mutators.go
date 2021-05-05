@@ -1,28 +1,27 @@
 package node
-/*
+
 // Registers the given handler when a compressed archive is fetched from a remote source.
-func (n *NodeCore) SetDatasetHandler(f externalArchiveHandler) {
-	n.datasetCallbackLock.Lock()
-	defer n.datasetCallbackLock.Unlock()
-	n.datasetCallback = f
+func (n *NodeCore) RegisterDatasetHandler(f clientRequestHandler) {
+	n.datasetHandlerLock.Lock()
+	defer n.datasetHandlerLock.Unlock()
+	n.datasetHandlerFunc = f
 }
 
-func (n *NodeCore) getDatasetCallback() externalArchiveHandler {
-	n.datasetCallbackLock.RLock()
-	defer n.datasetCallbackLock.RUnlock()
-	return n.datasetCallback
+func (n *NodeCore) getDatasetHandler() clientRequestHandler {
+	n.datasetHandlerLock.RLock()
+	defer n.datasetHandlerLock.RUnlock()
+	return n.datasetHandlerFunc
 }
 
 // Registers the given handler when external metadata is requested.
-func (n *NodeCore) SetMetadataHandler(f externalMetadataHandler) {
-	n.externalMetadataCallbackLock.Lock()
-	defer n.externalMetadataCallbackLock.Unlock()
-	n.externalMetadataCallback = f
+func (n *NodeCore) RegisterMetadataHandler(f clientRequestHandler) {
+	n.metadataHandlerLock.Lock()
+	defer n.metadataHandlerLock.Unlock()
+	n.metadataHandlerFunc = f
 }
 
-func (n *NodeCore) getExternalMetadataHandler() externalMetadataHandler {
-	n.externalMetadataCallbackLock.RLock()
-	defer n.externalMetadataCallbackLock.RUnlock()
-	return n.externalMetadataCallback
+func (n *NodeCore) getMetadataHandler() clientRequestHandler {
+	n.metadataHandlerLock.RLock()
+	defer n.metadataHandlerLock.RUnlock()
+	return n.metadataHandlerFunc
 }
-*/

@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"bufio"
 	"io"
 	"net/http"
 	"strings"
+	log "github.com/sirupsen/logrus"
 )
 
 type MalformedParserReponse struct {
@@ -73,4 +75,45 @@ func DecodeJSONBody(w http.ResponseWriter, r *http.Request, contentType string, 
 	}
 
 	return nil
+}
+
+// Copies the headers from h into a new map of string slices.
+func CopyHeaders(h map[string][]string) map[string][]string {
+	m := make(map[string][]string)
+	for key, val := range h {
+		m[key] = val
+	}
+	return m
+}
+
+// Assigns the headers in dest from src
+func SetHeaders(src, dest map[string][]string) {
+	for k, v := range src {
+		dest[k] = v
+	}
+}
+
+// Streams the data from the response 'r' into the response writer 'w'.
+func StreamToResponseWriter(r *bufio.Reader, w http.ResponseWriter, bufSize int) error {
+	buffer := make([]byte, bufSize)
+
+	for {
+    	len, err := r.Read(buffer)
+        if len > 0 {
+			_, err = w.Write(buffer[:len])
+			if err != nil {
+				return err
+			}
+		}
+
+        if err != nil {
+            if err == io.EOF {
+                log.Infoln(err.Error())
+				return nil
+            } else {
+				return err
+			}
+        }
+    }
+	return nil 
 }

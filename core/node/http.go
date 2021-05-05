@@ -2,8 +2,6 @@ package node
 
 import (
 	"bytes"
-	"bufio"
-	"io"
 	"strings"
 	"encoding/json"
 	"errors"
@@ -40,9 +38,9 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 	n.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      handler,
-		WriteTimeout: time.Second * 30,
-		ReadTimeout:  time.Second * 30,
-		IdleTimeout:  time.Second * 60,
+		WriteTimeout: time.Hour * 30,
+		ReadTimeout:  time.Hour * 30,
+		IdleTimeout:  time.Hour * 60,
 		TLSConfig:    comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.Priv()),
 	}
 
@@ -77,8 +75,8 @@ func redirectTLS(w http.ResponseWriter, r *http.Request) {
 	return nil
 }*/
 
+// defer r.Body.Close()?
 func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
 	datasetId := strings.Split(r.URL.Path, "/dataset/metadata/")[1]
 
 	if !n.dbDatasetExists(datasetId) {
@@ -88,86 +86,14 @@ func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dataset := n.getDatasetMap()[datasetId]
-	if dataset == nil {
-		err := errors.New("Dataset is nil")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+	// TODO: strip the headers from information about the client
+	if handler := n.getMetadataHandler(); handler != nil {
+		handler(datasetId, w, r)	
+	} else {
+		err := fmt.Errorf("Metadata handler is nil")
+		log.Warnln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotImplemented)+": "+err.Error(), http.StatusNotImplemented)
 		return
-	}
-
-	if dataset.GetMetadataURL() == "" {
-		err := errors.New("Could not fetch metadata URL")
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	request, err := http.NewRequest("GET", dataset.GetMetadataURL(), nil)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	httpClient := &http.Client{
-		Timeout: time.Duration(20 * time.Second),
-	}
-
-	response, err := httpClient.Do(request)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	defer response.Body.Close()
-	
-	if response.StatusCode != http.StatusOK {
-		log.Errorf("Response from remote data repository\n")
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
-		return
-	}
-
-	bufferedReader := bufio.NewReader(response.Body)
-    buffer := make([]byte, 4 * 1024)
-
-	m := copyHeaders(response.Header)
-	setHeaders(m, w.Header())
-	w.WriteHeader(response.StatusCode)
-
-	for {
-    	len, err := bufferedReader.Read(buffer)
-        if len > 0 {	
-			_, err = w.Write(buffer[:len])
-			if err != nil {
-				log.Error(err.Error())
-			}
-		}
-
-        if err != nil {
-            if err == io.EOF {
-                log.Infoln(err.Error())
-            } else {
-				log.Error(err.Error())	
-				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-				return
-			}
-            break
-        }
-    }
-}
-
-func copyHeaders(h map[string][]string) map[string][]string {
-	m := make(map[string][]string)
-	for key, val := range h {
-		m[key] = val
-	}
-	return m
-}
-
-func setHeaders(src, dest map[string][]string) {
-	for k, v := range src {
-		dest[k] = v
 	}
 }
 
@@ -182,23 +108,12 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 
 // TODO use context!
 func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-
-	// proofcheck me
 	datasetId := strings.Split(r.URL.Path, "/dataset/data/")[1]
 
 	if !n.dbDatasetExists(datasetId) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
-		return
-	}
-
-	dataset := n.getDatasetMap()[datasetId]
-	if dataset == nil {
-		err := errors.New("Dataset is nil")
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -209,7 +124,6 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// if client is allowed... 401 if not
 	// If multiple checkouts are allowed, check if the client has checked it out already
 	if !n.config().AllowMultipleCheckouts && n.dbDatasetIsCheckedOutByClient(datasetId) {
 		err := errors.New("You have already checked out this dataset")
@@ -218,6 +132,18 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TODO: strip the headers from information about the client
+	if handler := n.getDatasetHandler(); handler != nil {
+		handler(datasetId, w, r)
+		// TODO: write to responseWriter once
+	} else {
+		err := fmt.Errorf("Metadata handler is nil")
+		log.Warnln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotImplemented)+": "+err.Error(), http.StatusNotImplemented)
+		return
+	}
+
+	defer r.Body.Close()
 	token, err := getBearerToken(r)
 	if err != nil {
 		log.Infoln(err.Error())
@@ -231,66 +157,6 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	if dataset.GetDatasetURL() == "" {
-		err := errors.New("Could not fetch dataset URL")
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	request, err := http.NewRequest("GET", dataset.GetDatasetURL(), nil)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	httpClient := &http.Client{
-		Timeout: time.Duration(20 * time.Second),
-	}
-
-	response, err := httpClient.Do(request)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		log.Errorf("Response from remote data repository\n")
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch dataset from host.", http.StatusInternalServerError)
-		return
-	}
-
-	bufferedReader := bufio.NewReader(response.Body)
-    buffer := make([]byte, 4 * 1024)
-
-	m := copyHeaders(response.Header)
-	setHeaders(m, w.Header())
-	w.WriteHeader(response.StatusCode)
-
-	for {
-    	len, err := bufferedReader.Read(buffer)
-        if len > 0 {	
-			_, err = w.Write(buffer[:len])
-			if err != nil {
-				log.Error(err.Error())
-			}
-		}
-
-        if err != nil {
-            if err == io.EOF {
-                log.Infoln(err.Error())
-            } else {
-				log.Error(err.Error())	
-				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-				return
-			}
-            break
-        }
-    }
 }
 
 // Returns the dataset identifiers stored at this node

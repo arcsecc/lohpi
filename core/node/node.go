@@ -48,6 +48,9 @@ type gossipMessage struct {
 	Addr    string
 }
 
+// Types used in client requests
+type clientRequestHandler func(id string, w http.ResponseWriter, r *http.Request)
+
 type NodeCore struct {
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
@@ -73,7 +76,7 @@ type NodeCore struct {
 	policyStoreIP string
 
 	// Object id -> empty value for quick indexing
-	datasetMap     map[string]*pb.Dataset
+	datasetMap     map[string]struct{}
 	datasetMapLock sync.RWMutex
 
 	listener net.Listener
@@ -82,6 +85,12 @@ type NodeCore struct {
 	// Azure database
 	datasetCheckoutDB *sql.DB
 	datasetPolicyDB   *sql.DB
+
+	datasetHandlerLock sync.RWMutex
+	metadataHandlerLock sync.RWMutex
+
+	datasetHandlerFunc clientRequestHandler
+	metadataHandlerFunc clientRequestHandler
 }
 
 func NewNodeCore(config *Config) (*NodeCore, error) {
@@ -128,7 +137,7 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		psClient:     			  psClient,
 		listener: 				  listener,
 		cu:           			  cu,
-		datasetMap:     		  make(map[string]*pb.Dataset),
+		datasetMap:     		  make(map[string]struct{}),
 		datasetMapLock: 		  sync.RWMutex{},
 	}
 
@@ -148,9 +157,6 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		return nil, err
 	}
 
-	// MAJOR TODO: refine large parts of the system by moving low-level message passing logic to low-level modules.
-	// It should be clear which parts of the system is talking!
-	 
 	return node, nil
 }
 
@@ -169,9 +175,9 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
 // You will have to call this method to make the datasets available to the clients. 
-func (n *NodeCore) IndexDataset(datasetId, datasetURL, metadataURL string) error {
+func (n *NodeCore) IndexDataset(datasetId string) error {
 	if n.datasetExists(datasetId) {
-		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the node", datasetId)
+		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the server", datasetId)
 	}
 
 	// Send policy request to policy store
@@ -179,12 +185,6 @@ func (n *NodeCore) IndexDataset(datasetId, datasetURL, metadataURL string) error
 	if err != nil {
 		return err
 	}
-
-	n.insertDataset(datasetId, &pb.Dataset{
-		Identifier:datasetId, 
-		DatasetURL: datasetURL, 
-		MetadataURL: metadataURL,
-	})
 	
 	// Apply the update from policy store to storage
 	if err := n.dbSetObjectPolicy(datasetId, policyResponse.GetContent()); err != nil {
@@ -195,6 +195,8 @@ func (n *NodeCore) IndexDataset(datasetId, datasetURL, metadataURL string) error
 	if err := n.pbSendDatsetIdentifier(datasetId, n.directoryServerIP); err != nil {
 		return err
 	}
+
+	n.insertDataset(datasetId, struct{}{})
 
 	return nil
 }
@@ -323,6 +325,7 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	return n.pbMarshalAcknowledgeMessage()
 }
 
+// TODO finish me
 func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 	id := msg.GetStringValue()
 	if err := n.dbCheckinDataset(id); err != nil {
@@ -523,7 +526,7 @@ func (n *NodeCore) verifyMessageSignature(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) insertDataset(id string, d *pb.Dataset) {
+func (n *NodeCore) insertDataset(id string, d struct{}) {
 	n.datasetMapLock.Lock()
 	defer n.datasetMapLock.Unlock()
 	n.datasetMap[id] = d
@@ -542,7 +545,7 @@ func (n *NodeCore) removeDataset(id string) {
 	delete(n.datasetMap, id)
 }
 
-func (n *NodeCore) getDatasetMap() map[string]*pb.Dataset {
+func (n *NodeCore) getDatasetMap() map[string]struct{} {
 	n.datasetMapLock.RLock()
 	defer n.datasetMapLock.RUnlock()
 	return n.datasetMap

@@ -6,6 +6,7 @@ package main
  
 import (
 	"context"
+	"bufio"
 	"net/http"
 	"time"
 	"io/ioutil"
@@ -20,6 +21,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/jinzhu/configor"
 	"github.com/arcsecc/lohpi"
+	"github.com/arcsecc/lohpi/core/util"
 )
 
 // TODO: find a better way to configure stuff :))
@@ -41,7 +43,6 @@ var config = struct {
 
 type StorageNode struct {
 	node *lohpi.Node
-	//kvClient *lohpi.AzureKeyVaultClient
 }
 
 func main() {
@@ -210,8 +211,6 @@ func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 		AzureKeyVaultTenantID:     config.AzureTenantID,
 	}
 
-	log.Println("config.AzureTenantID:::", config.AzureTenantID)
-
 	return lohpi.NewAzureKeyVaultClient(c)
 }
 
@@ -219,6 +218,9 @@ func (sn *StorageNode) Start() {
 	if err := sn.initializePolicies(); err != nil {
 		panic(err)
 	}
+
+	sn.node.RegisterDatasetHandler(dataHandler)
+	sn.node.RegisterMetadataHandler(metadataHandler)
 }
 
 func (sn *StorageNode) initializePolicies() error {
@@ -228,9 +230,7 @@ func (sn *StorageNode) initializePolicies() error {
 	}
 
 	for _, id := range ids {
-		datasetUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id
-		metadataUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id
-		if err := sn.node.IndexDataset(id, &lohpi.Dataset{datasetUrl, metadataUrl}); err != nil {
+		if err := sn.node.IndexDataset(id); err != nil {
 			return err
 		}
 	}
@@ -238,79 +238,92 @@ func (sn *StorageNode) initializePolicies() error {
 	return nil
 }
 
-// Returns nescesarry information to fetch an external archive
-func (s *StorageNode) archiveHandler(id string) (string, error) {
-	return config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id, nil
+func metadataHandler(id string, w http.ResponseWriter, r *http.Request) {
+	metadataUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id
+
+	request, err := http.NewRequest("GET", metadataUrl, nil)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	httpClient := &http.Client{
+		Timeout: time.Duration(20 * time.Second),
+	}
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer response.Body.Close()
+	
+	if response.StatusCode != http.StatusOK {
+		log.Errorf("Response from remote data repository\n")
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
+		return
+	}
+
+	m := util.CopyHeaders(response.Header)
+	util.SetHeaders(m, w.Header())
+	w.WriteHeader(response.StatusCode)
+
+	reader := bufio.NewReader(response.Body)
+
+	// Stream from response to client
+	if err := util.StreamToResponseWriter(reader, w, 100 * 1024); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
-func (s *StorageNode) metadataHandler(id string) (string, error) {
-	return config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id, nil 
+func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
+	datasetUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/access/dataset/:persistentId/?persistentId=" + id
+	request, err := http.NewRequest("GET", datasetUrl, nil)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	httpClient := &http.Client{
+		Timeout: time.Duration(20 * time.Second),
+	}
+
+	response, err := httpClient.Do(request)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		log.Errorf("Response from remote data repository\n")
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch dataset from host.", http.StatusInternalServerError)
+		return
+	}
+
+	m := util.CopyHeaders(response.Header)
+	util.SetHeaders(m, w.Header())
+	w.WriteHeader(response.StatusCode)
+
+	reader := bufio.NewReader(response.Body)
+
+	// Stream from response to client
+	if err := util.StreamToResponseWriter(reader, w, 100 * 1024); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (s *StorageNode) Shutdown() {
 
-}
-
-// TODO: remove me and broadcast a request to all nodes at the mux. Might 
-// need to device a smart solution into how the datasets are looked up
-func identifierExists(id string) bool {
-	url := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/:persistentId/?persistentId=" + id
-	client := http.Client{
-		Timeout: time.Duration(30 * time.Second),
-	}
-
-	// TODO: preserve context created at the mux
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5 * time.Second))
-	defer cancel()
-
- 	// Create a new request using http
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		log.Println(err.Error())
-		return false
-	}
-
-	errChan := make(chan error, 0)
-	existsChan := make(chan bool)
-
-	go func() {
-		resp, err := client.Do(req)
-		if err != nil {
-			errChan <-err
-			return
-		}
- 
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			errChan <-err
-			return
-		}
-
-		//log.Println("Resp:", string(body))
-
-		jsonMap := make(map[string](interface{}))
-		err = json.Unmarshal(body, &jsonMap)
-		if err != nil {
-			errChan <-err
-			return
-		}
-
-		_, ok := jsonMap["message"].(interface{})
-		existsChan <-ok
-	}()
-
-	select {
-	case ok := <-existsChan:
-		return !ok // Invert ok because if we found a message the dataset was not found
-	case <-ctx.Done():
-		log.Println(fmt.Errorf("Checking if dataset exists timeout").Error())
-		return false
-	case err := <-errChan:
-		log.Println(err.Error())
-		return false
-	}
-
-	return false
 }
 
 func remoteDatasetIdentifiers() ([]string, error) {

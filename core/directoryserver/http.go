@@ -2,9 +2,8 @@ package directoryserver
 
 import (
 	"net/url"
-	"bufio"
-	"io"
 	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jws"
 	log "github.com/sirupsen/logrus"
+	"github.com/arcsecc/lohpi/core/util"
 	"net/http"
 	"strconv"
 	"strings"
@@ -47,8 +47,8 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 		Addr:         addr,
 		Handler:      r,
 		WriteTimeout: time.Hour * 1,
-		ReadTimeout:  time.Second * 30,
-		IdleTimeout:  time.Second * 60,
+		//ReadTimeout:  time.Second * 30,
+		//IdleTimeout:  time.Second * 60,
 		TLSConfig:    comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
 	}
 
@@ -226,9 +226,6 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 	/*ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second*10))
 	defer cancel()*/
 
-	doneChan := make(chan bool)
-	defer close(doneChan)
-
 	// Check if dataset is known to network
 	node := d.memCache.DatasetNodes()[dataset]
 	if node == nil {
@@ -265,34 +262,12 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 		return
 	}
 
-	bufferedReader := bufio.NewReader(resp.Body)
-    buffer := make([]byte, 4 * 1024)
-
-	m := copyHeaders(resp.Header)
-	setHeaders(m, w.Header())
-	w.WriteHeader(resp.StatusCode)
-
-	for {
-    	len, err := bufferedReader.Read(buffer)
-        if len > 0 {	
-			_, err = w.Write(buffer[:len])
-			if err != nil {
-				log.Error(err.Error())
-			}
-		}
-
-        if err != nil {
-            if err == io.EOF {
-                log.Infoln(err.Error())
-            } else {
-				log.Error(err.Error())	
-				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-				return
-			}
-            break
-        }
-    }
-
+	reader := bufio.NewReader(resp.Body)
+	if err := util.StreamToResponseWriter(reader, w, 100 * 1024); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 // Handler used to fetch an entire dataset. Writes a zip file to the client
@@ -307,6 +282,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Get dataset identifier
 	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
 		err := fmt.Errorf("Missing dataset identifier")
@@ -314,6 +290,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Get the node that stores it
 	node := d.memCache.DatasetNodes()[dataset]
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
@@ -322,6 +299,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Prepare the request. Beginning of pipeline
     req := &http.Request{
         Method: "GET",
         URL: &url.URL{
@@ -346,42 +324,21 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Error(resp.Status)
+		log.Errorln(resp.Status + ": " + resp.Status)
 		http.Error(w, http.StatusText(resp.StatusCode) + ": " + resp.Status, resp.StatusCode)
 		return
 	}
 
-	bufferedReader := bufio.NewReader(resp.Body)
-    buffer := make([]byte, 4 * 1024)
-
-	m := copyHeaders(resp.Header)
-	setHeaders(m, w.Header())
-	w.WriteHeader(resp.StatusCode)
-
-	for {
-    	len, err := bufferedReader.Read(buffer)
-        if len > 0 {	
-			_, err = w.Write(buffer[:len])
-			if err != nil {
-				log.Error(err.Error())
-			}
-		}
-
-        if err != nil {
-            if err == io.EOF {
-                log.Infoln(err.Error())
-            } else {
-				log.Error(err.Error())	
-				http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-				return
-			}
-            break
-        }
-    }
+	reader := bufio.NewReader(resp.Body)
+	if err := util.StreamToResponseWriter(reader, w, 1000 * 1024); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// How do we rollback checkout as an atomic operation?
 	// Get client-related fields
-	/*_, oid, err := d.getClientIdentifier(clientToken)
+	_, oid, err := d.getClientIdentifier(clientToken)
 	if err != nil {
 		if err := d.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
 			log.Errorln(err.Error())
@@ -389,7 +346,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	d.insertCheckedOutDataset(dataset, oid)*/
+	d.insertCheckedOutDataset(dataset, oid)
 }
 
 func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {

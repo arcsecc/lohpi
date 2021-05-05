@@ -3,6 +3,8 @@ module github.com/arcsecc/lohpi
 go 1.15
 
 require (
+	github.com/Azure/azure-pipeline-go v0.2.3 // indirect
+	github.com/Azure/azure-storage-blob-go v0.13.0 // indirect
 	github.com/fsnotify/fsnotify v1.4.9 // indirect
 	github.com/go-git/go-git/v5 v5.2.0
 	github.com/golang/protobuf v1.5.1
