@@ -338,9 +338,9 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 
 	// How do we rollback checkout as an atomic operation?
 	// Get client-related fields
-	_, oid, err := d.getClientIdentifier(clientToken)
+	_, oid, err := d.getClientIdentifier(token)
 	if err != nil {
-		if err := d.rollbackCheckout(nodeAddr, dataset, ctx); err != nil {
+		if err := d.rollbackCheckout(node.GetIfritAddress(), dataset, context.Background()); err != nil {
 			log.Errorln(err.Error())
 		}
 		return

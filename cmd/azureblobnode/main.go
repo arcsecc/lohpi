@@ -74,7 +74,7 @@ func main() {
 	var err error
 
 	if createNew {
-		sn, err = newNodeStorage()
+		sn, err = newNodeStorage(nodeName)
 		if err != nil {
 			log.Errorln(err.Error())
 			os.Exit(1)
@@ -96,8 +96,8 @@ func main() {
 	os.Exit(0)
 }
 
-func newNodeStorage() (*StorageNode, error) {
-	opts, err := getNodeConfiguration()
+func newNodeStorage(name string) (*StorageNode, error) {
+	opts, err := getNodeConfiguration(name)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +175,7 @@ func getBlobIdentifiers() ([]string, error) {
 }
 
 // Implements downloading of data from Azure blob storage.
+// TODO: download speed from azure is very slow. We should investigate why this is the case.
 func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 	credential, err := azblob.NewSharedKeyCredential(config.AzureStorageAccountName, config.AzureStorageAccountKey)
 	if err != nil {
@@ -225,7 +226,7 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getNodeConfiguration() ([]lohpi.NodeOption, error) {
+func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
 	var opts []lohpi.NodeOption
 
 	dbConn, err := getDatabaseConnectionString()
@@ -258,7 +259,8 @@ func getNodeConfiguration() ([]lohpi.NodeOption, error) {
 		os.Exit(1)
 	}
 	
-	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
+	// Set name from command line
+	opts = append(opts, lohpi.NodeWithName(name))
 	
 	return opts, nil
 }

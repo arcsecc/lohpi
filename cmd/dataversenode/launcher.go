@@ -76,7 +76,7 @@ func main() {
 	var err error
 
 	if createNew {
-		sn, err = newNodeStorage()
+		sn, err = newNodeStorage(nodeName)
 		if err != nil {
 			log.Errorln(err.Error())
 			os.Exit(1)
@@ -126,8 +126,8 @@ func exists(name string) bool {
 	return true
 }
 
-func newNodeStorage() (*StorageNode, error) {
-	opts, err := getNodeConfiguration()
+func newNodeStorage(name string) (*StorageNode, error) {
+	opts, err := getNodeConfiguration(name)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func newNodeStorage() (*StorageNode, error) {
 	return sn, nil
 }
 
-func getNodeConfiguration() ([]lohpi.NodeOption, error) {
+func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
 	var opts []lohpi.NodeOption
 
 	dbConn, err := getDatabaseConnectionString()
@@ -176,7 +176,7 @@ func getNodeConfiguration() ([]lohpi.NodeOption, error) {
 		opts = []lohpi.NodeOption{
 			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
 			lohpi.NodeWithMultipleCheckouts(true),
-			lohpi.NodeWithHostName("iad09.cs.uit.no"),
+			lohpi.NodeWithHostName("iad09.cs.uit.no"), // more dynamic?
 			lohpi.NodeWithHTTPPort(config.HTTPPort),
 		}
 	} else {
@@ -184,6 +184,9 @@ func getNodeConfiguration() ([]lohpi.NodeOption, error) {
 		os.Exit(1)
 	}
 	
+	// Set name from command line
+	opts = append(opts, lohpi.NodeWithName(name))
+
 	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
 	
 	return opts, nil
