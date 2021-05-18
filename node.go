@@ -1,9 +1,9 @@
 package lohpi
 
 import (
-	"net/http"
-	"github.com/pkg/errors"
 	"github.com/arcsecc/lohpi/core/node"
+	"github.com/pkg/errors"
+	"net/http"
 	"time"
 )
 
@@ -16,11 +16,11 @@ type NodeOption func(*Node)
 
 type Node struct {
 	nodeCore *node.NodeCore
-	conf *node.Config
+	conf     *node.Config
 }
 
 type Dataset struct {
-	DatasetURL string
+	DatasetURL  string
 	MetadataURL string
 }
 
@@ -70,7 +70,7 @@ func NodeWithPostgresSQLConnectionString(s string) NodeOption {
 }
 
 // Sets the backup retention time to d. At each d, the in-memory caches are flushed
-// to the database. If set to 0, flushing never occurs. 
+// to the database. If set to 0, flushing never occurs.
 func NodeWithBackupRetentionTime(t time.Duration) NodeOption {
 	return func(n *Node) {
 		n.conf.DatabaseRetentionInterval = t
@@ -109,34 +109,34 @@ func (n *Node) ApplyConfigurations(opts ...NodeOption) {
 
 func NewNode(opts ...NodeOption) (*Node, error) {
 	const (
-		defaultHTTPPort = 8090
-		defaultPolicyStoreAddress = "127.0.1.1"
-		defaultPolicyStoreGRPCPport = 8084
-		defaultDirectoryServerAddress = "127.0.1.1"
-		defaultDirectoryServerGPRCPort = 8081
-		defaultLohpiCaAddress = "127.0.1.1"
-		defaultLohpiCaPort = 8301
-		defaultName = "Node identifier"
+		defaultHTTPPort                    = 8090
+		defaultPolicyStoreAddress          = "127.0.1.1"
+		defaultPolicyStoreGRPCPport        = 8084
+		defaultDirectoryServerAddress      = "127.0.1.1"
+		defaultDirectoryServerGPRCPort     = 8081
+		defaultLohpiCaAddress              = "127.0.1.1"
+		defaultLohpiCaPort                 = 8301
+		defaultName                        = "Node identifier"
 		defaultPostgresSQLConnectionString = ""
-		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
-		defaultAllowMultipleCheckouts = false
-		defaultHostName = "127.0.1.1"
+		defaultDatabaseRetentionInterval   = time.Duration(0) // A LOT MORE TO DO HERE
+		defaultAllowMultipleCheckouts      = false
+		defaultHostName                    = "127.0.1.1"
 	)
 
 	// Default configuration
 	conf := &node.Config{
-		HostName: defaultHostName,
-		HTTPPort: defaultHTTPPort,
-		PolicyStoreAddress: defaultPolicyStoreAddress,
-		PolicyStoreGRPCPport: defaultPolicyStoreGRPCPport,
-		DirectoryServerAddress: defaultDirectoryServerAddress,
-		DirectoryServerGPRCPort: defaultDirectoryServerGPRCPort,
-		LohpiCaAddress: defaultLohpiCaAddress,
-		LohpiCaPort: defaultLohpiCaPort,
-		Name: defaultName,
+		HostName:                    defaultHostName,
+		HTTPPort:                    defaultHTTPPort,
+		PolicyStoreAddress:          defaultPolicyStoreAddress,
+		PolicyStoreGRPCPport:        defaultPolicyStoreGRPCPport,
+		DirectoryServerAddress:      defaultDirectoryServerAddress,
+		DirectoryServerGPRCPort:     defaultDirectoryServerGPRCPort,
+		LohpiCaAddress:              defaultLohpiCaAddress,
+		LohpiCaPort:                 defaultLohpiCaPort,
+		Name:                        defaultName,
 		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
-		DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
-		AllowMultipleCheckouts: defaultAllowMultipleCheckouts,
+		DatabaseRetentionInterval:   defaultDatabaseRetentionInterval,
+		AllowMultipleCheckouts:      defaultAllowMultipleCheckouts,
 	}
 
 	n := &Node{
@@ -188,7 +188,7 @@ func (n *Node) RemoveDataset(id string) error {
 	if id == "" {
 		return errNoDatasetId
 	}
-	
+
 	return n.nodeCore.RemoveDataset(id)
 }
 

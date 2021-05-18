@@ -21,7 +21,7 @@ RUN go mod download
 
 # Local dependencies
 COPY ./cauth ./cauth
-COPY ./cmd/dataverse/ca/main.go ./cmd/ca/main.go
+COPY ./cmd/ca/main.go ./cmd/ca/main.go
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ca ./cmd/ca/main.go

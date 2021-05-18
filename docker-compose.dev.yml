@@ -10,7 +10,7 @@ services:
     image: lohpi-ca-dev
     build: 
       context: .
-      dockerfile: "./cmd/dataverse/ca/Dockerfile"
+      dockerfile: "./cmd/ca/Dockerfile"
     command: --new
     network_mode: host
     #restart: 
@@ -26,7 +26,7 @@ services:
     image: lohpi-directoryserver-dev
     build: 
       context: .
-      dockerfile: "./cmd/dataverse/directoryserver/Dockerfile"
+      dockerfile: "./cmd/directoryserver/Dockerfile"
     network_mode: host
     command: --new
     #restart: never
@@ -43,7 +43,7 @@ services:
     image: lohpi-policy-store-dev
     build:
       context: .
-      dockerfile: "./cmd/dataverse/policy_store/Dockerfile"
+      dockerfile: "./cmd/policy_store/Dockerfile"
     network_mode: host
     command: -new=true
     #restart: never
@@ -54,17 +54,34 @@ services:
       - lohpi-directoryserver-dev
 
   # Lohpi-DV     
-  lohpi-node-1-dev  :
+  lohpi-node-1-dev:
     environment:
       - LOHPI_ENV=development
     container_name: lohpi-node-1-dev
     image: lohpi-node-1-dev
     build: 
       context: .
-      dockerfile: "./cmd/dataverse/node/Dockerfile"
+      dockerfile: "./cmd/dataversenode/Dockerfile"
     network_mode: host
     #restart: never
-    command: -name "node_0" -new=true -c lohpi_config/lohpi_config.dev.yaml
+    command: -name "node_1" -new=true -c lohpi_config/lohpi_config.dev.yaml
+    depends_on: 
+      - lohpi-ca-dev
+      - lohpi-directoryserver-dev
+      - lohpi-policy-store-dev
+
+  # Lohpi-DV 
+  lohpi-node-2-dev :
+    environment:
+      - LOHPI_ENV=development
+    container_name: lohpi-node-2-dev
+    image: lohpi-node-2-dev
+    build: 
+      context: .
+      dockerfile: "./cmd/azureblobnode/Dockerfile"
+    network_mode: host
+    #restart: never
+    command: -name "node_2" -new=true -c lohpi_config/lohpi_config.dev.yaml
     depends_on: 
       - lohpi-ca-dev
       - lohpi-directoryserver-dev
