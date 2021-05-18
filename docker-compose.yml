@@ -58,7 +58,7 @@ services:
     environment:
       - LOHPI_ENV=production
     container_name: lohpi-node-1
-    image: lohpi.azurecr.io/lohpi-node
+    image: lohpi.azurecr.io/lohpi-node-1
     build: 
       context: .
       dockerfile: "./cmd/dataversenode/Dockerfile"
@@ -75,12 +75,12 @@ services:
     environment:
       - LOHPI_ENV=production
     container_name: lohpi-node-2
-    image: lohpi-node-2-dev
+    image: lohpi.azurecr.io/lohpi-node-2
     build: 
       context: .
       dockerfile: "./cmd/azureblobnode/Dockerfile"
     network_mode: host
-    #restart: never
+    restart: unless-stopped
     command: -name "node_2" -new=true -c lohpi_config/lohpi_config.yaml
     depends_on: 
       - ca
