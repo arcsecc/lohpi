@@ -96,7 +96,6 @@ type NodeCore struct {
 func NewNodeCore(config *Config) (*NodeCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -114,19 +113,16 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	psClient, err := comm.NewPolicyStoreClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -143,17 +139,6 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	// Initialize the PostgresSQL database
 	if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
-		panic(err)
-		return nil, err
-	}
-
-	// Remove all stale identifiers since the last run. This will remove all the identifiers
-	// from the table. The node cannot host datasets that have been removed from the remote location
-	// since it last ran.
-	// TODO: can we do something better?
-	if err := node.dbResetDatasetIdentifiers(); err != nil {
-		log.Errorf(err.Error())
-		panic(err)
 		return nil, err
 	}
 

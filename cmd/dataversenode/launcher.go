@@ -176,7 +176,6 @@ func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
 		opts = []lohpi.NodeOption{
 			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
 			lohpi.NodeWithMultipleCheckouts(true),
-			lohpi.NodeWithHostName("iad09.cs.uit.no"), // more dynamic?
 			lohpi.NodeWithHTTPPort(config.HTTPPort),
 		}
 	} else {
