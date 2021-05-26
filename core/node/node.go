@@ -39,6 +39,8 @@ type Config struct {
 	AllowMultipleCheckouts 		bool
 	DebugEnabled 				bool
 	TLSEnabled					bool
+	PolicyObserverWorkingDirectory string
+
 }
 
 // TODO move me somewhere else. ref gossip.go
@@ -51,6 +53,8 @@ type gossipMessage struct {
 // Types used in client requests
 type clientRequestHandler func(id string, w http.ResponseWriter, r *http.Request)
 
+// Consider implementing interfaces in lohpi package to hide stuff and smooth out the 
+// project's dependency tree.
 type NodeCore struct {
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
@@ -76,7 +80,7 @@ type NodeCore struct {
 	policyStoreIP string
 
 	// Object id -> empty value for quick indexing
-	datasetMap     map[string]struct{}
+	datasetMap     map[string]*pb.Policy
 	datasetMapLock sync.RWMutex
 
 	listener net.Listener
@@ -91,6 +95,14 @@ type NodeCore struct {
 
 	datasetHandlerFunc clientRequestHandler
 	metadataHandlerFunc clientRequestHandler
+
+	policyObs *policyObserver
+}
+
+// Entry of all gossip messages that are observed since the node joined the network
+type policyGossipObservation struct {
+	ArrivedAt time.Time
+	MessageID *pb.GossipMessageID
 }
 
 func NewNodeCore(config *Config) (*NodeCore, error) {
@@ -130,6 +142,16 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		return nil, err
 	}
 
+	policyObs, err := newPolicyObserver(&policyObserverConfig{
+		outputDirectory: config.PolicyObserverWorkingDirectory,
+		logfilePrefix: config.Name,
+		capacity: 10,
+	})
+	if err != nil {
+		panic(err)
+		return nil, err
+	}
+
 	node := &NodeCore{
 		ifritClient:  			  ifritClient,
 		directoryServerClient:    directoryServerClient,
@@ -137,8 +159,9 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		psClient:     			  psClient,
 		listener: 				  listener,
 		cu:           			  cu,
-		datasetMap:     		  make(map[string]struct{}),
+		datasetMap:     		  make(map[string]*pb.Policy),
 		datasetMapLock: 		  sync.RWMutex{},
+		policyObs: 	  			  policyObs,
 	}
 
 	// Initialize the PostgresSQL database
@@ -151,11 +174,11 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	// from the table. The node cannot host datasets that have been removed from the remote location
 	// since it last ran.
 	// TODO: can we do something better?
-	if err := node.dbResetDatasetIdentifiers(); err != nil {
+	/*if err := node.dbResetDatasetIdentifiers(); err != nil {
 		log.Errorf(err.Error())
 		panic(err)
 		return nil, err
-	}
+	}*/
 
 	return node, nil
 }
@@ -196,7 +219,7 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 		return err
 	}
 
-	n.insertDataset(datasetId, struct{}{})
+	n.insertDataset(datasetId, policyResponse)
 
 	return nil
 }
@@ -223,7 +246,14 @@ func (n *NodeCore) JoinNetwork() error {
 		return err
 	}
 
-	go n.startHTTPServer(fmt.Sprintf(":%d", n.config().HTTPPort))
+	var port int
+	if n.config().HTTPPort == -1 {
+		port = netutil.GetOpenPort()
+	} else {
+		port = n.config().HTTPPort
+	}
+
+	go n.startHTTPServer(fmt.Sprintf(":%d", port))
 
 	n.ifritClient.RegisterMsgHandler(n.messageHandler)
 	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
@@ -239,7 +269,7 @@ func (n *NodeCore) HTTPAddress() string {
 	return ""
 }
 
-func (n *NodeCore) NodeName() string {
+func (n *NodeCore) Name() string {
 	return n.config().Name
 }
 
@@ -296,7 +326,7 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	log.Infof("Node '%s' got message %s\n", n.config().Name, msg.GetType())
+	log.Infof("Node '%s' got direct message %s\n", n.config().Name, msg.GetType())
 	if err := n.verifyMessageSignature(msg); err != nil {
 		log.Errorln(err)
 		return nil, err
@@ -304,13 +334,14 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_GET_NODE_INFO:
-		return n.nodeInfo()
+		return []byte(n.String()), nil
 
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
 		return n.pbMarshalDatasetIdentifiers(msg)
 
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		n.processPolicyBatch(msg)
+		n.ifritClient.SetGossipContent(data)
+		return n.processPolicyBatch(msg)
 
 	case message.MSG_TYPE_ROLLBACK_CHECKOUT:
 		n.rollbackCheckout(msg)
@@ -333,7 +364,7 @@ func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 	}
 }
 
-// TODO refine this. Check all gossip batches and see which one we should apply
+// TODO refine this. Check all gossip batches and see which on	e we should apply
 func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 	if msg.GetGossipMessage() == nil {
 		err := errors.New("Gossip message is nil")
@@ -344,30 +375,52 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 	gspMsg := msg.GetGossipMessage()
 	if gspMsg.GetGossipMessageBody() == nil {
 		err := errors.New("Gossip message body is nil")
-		log.Fatalln(err.Error())
+		log.Errorln(err.Error())
 		return nil, err
-	} else {
-		for _, m := range gspMsg.GetGossipMessageBody() {
-			// TODO check policy ID and so on...
-			policy := m.GetPolicy()
-			datasetId := policy.GetObjectIdentifier()
-			if n.dbDatasetExists(datasetId) {
-				if err := n.dbSetObjectPolicy(datasetId, policy.GetContent()); err != nil {
-					log.Errorln(err.Error())
-					continue
-				}
-
-				// Update revocation list. Optimization: don't push update message if policy is reduntant.
-				if n.dbDatasetIsCheckedOutByClient(datasetId) {
-					if err := n.pbSendDatasetRevocationUpdate(datasetId, policy.GetContent()); err != nil {
-						log.Errorln(err.Error())
-					}
-				}
-			}
+	}
+	
+	for _, m := range gspMsg.GetGossipMessageBody() {
+		if err := n.applyPolicy(m.GetPolicy()); err != nil {
+			log.Errorln(err.Error())
 		}
 	}
+
 	return nil, nil
 }
+
+// Apply the given policy to the correct dataset. 
+func (n *NodeCore) applyPolicy(p *pb.Policy) error {
+	datasetId := p.GetObjectIdentifier()
+	if n.dbDatasetExists(datasetId) {
+		currentPolicy := n.getDatasetEntry(datasetId)
+		//if currentPolicy == nil 
+		if currentPolicy.GetVersion() >= p.GetVersion() {
+			log.Infoln("Got an outdated policy")
+			return nil
+		}
+
+		if err := n.dbSetObjectPolicy(datasetId, p.GetContent()); err != nil {
+			return err
+		}
+
+		n.insertDataset(datasetId, p)
+
+		// Log deltas in policies to logfile
+		// TODO: put loggers in inteface?
+		log.Infof("Changed dataset %s's policy to %s\n", datasetId, p.GetContent())
+
+		// Update revocation list. Optimization: don't push update message if policy is reduntant.
+		if n.dbDatasetIsCheckedOutByClient(datasetId) {
+			if err := n.pbSendDatasetRevocationUpdate(datasetId, p.GetContent()); err != nil {
+				return err
+			}
+		}
+	} else {
+		return fmt.Errorf("Dataset %s does not exist", datasetId)
+	}
+	return nil
+}
+
 
 // TODO: match the required access credentials of the dataset to the
 // access attributes of the client. Return true if the client can access the data,
@@ -388,6 +441,8 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	log.Infof("Node '%s' got gossip message %s\n", n.config().Name, msg.GetType())
+
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
 		log.Warnln(err.Error())
 	}
@@ -396,37 +451,32 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_PROBE:
 		//n.ifritClient.SetGossipContent(data)
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		/*log.Println("Got new policy from policy store!")
-		n.setPolicy(msg)*/
-
+		if !n.policyObs.gossipIsObserved(msg.GetGossipMessage()) {
+			n.policyObs.addObservedGossip(msg.GetGossipMessage())
+			return n.processPolicyBatch(msg)
+		}
+		
 	default:
 		fmt.Printf("Unknown gossip message type: %s\n", msg.GetType())
 	}
 
-	/*
-		check recipients
-		check version number
-		check object (subject or study). Apply the policy if needed
-		store the message on disk
-	*/
 	return nil, nil
 }
 
-func (n *NodeCore) nodeInfo() ([]byte, error) {
-	str := fmt.Sprintf("Name: %s\tIfrit address: %s", n.config().Name, n.IfritClient().Addr())
-	return []byte(str), nil
+func (n *NodeCore) String() string {
+	return fmt.Sprintf("Name: %s\tIfrit address: %s", n.config().Name, n.IfritClient().Addr())
 }
 
 // Acknowledges the given probe message.  TODO MORE HERE
 func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 
 	// Spread the probe message onwards through the network
 	gossipContent, err := proto.Marshal(msg)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 
 	n.ifritClient.SetGossipContent(gossipContent)
@@ -440,7 +490,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 
 	data, err := proto.Marshal(resp)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 
 	r, s, err := n.ifritClient.Sign(data)
@@ -526,10 +576,10 @@ func (n *NodeCore) verifyMessageSignature(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) insertDataset(id string, d struct{}) {
+func (n *NodeCore) insertDataset(id string, p *pb.Policy) {
 	n.datasetMapLock.Lock()
 	defer n.datasetMapLock.Unlock()
-	n.datasetMap[id] = d
+	n.datasetMap[id] = p
 }
 
 func (n *NodeCore) datasetExists(id string) bool {
@@ -545,10 +595,16 @@ func (n *NodeCore) removeDataset(id string) {
 	delete(n.datasetMap, id)
 }
 
-func (n *NodeCore) getDatasetMap() map[string]struct{} {
+func (n *NodeCore) getDatasetMap() map[string]*pb.Policy {
 	n.datasetMapLock.RLock()
 	defer n.datasetMapLock.RUnlock()
 	return n.datasetMap
+}
+
+func (n *NodeCore) getDatasetEntry(id string) *pb.Policy {
+	n.datasetMapLock.RLock()
+	defer n.datasetMapLock.RUnlock()
+	return n.datasetMap[id]
 }
 
 func (n *NodeCore) datasetIdentifiers() []string {

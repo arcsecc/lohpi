@@ -4,11 +4,12 @@ import (
 	"errors"
 	"github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes"
 	"github.com/joonnna/ifrit"
 	log "github.com/sirupsen/logrus"
 	"sync"
+	"strings"
 	"time"
 )
 
@@ -71,6 +72,8 @@ type MulticastManager struct {
 
 	// Probing manager
 	prbManager *probeManager
+
+	sequenceNumber int32
 }
 
 // Used to fetch members from membership mananger
@@ -96,6 +99,7 @@ func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, mul
 		configLock: sync.RWMutex{},
 		memManager: newMembershipManager(ifritClient),
 		prbManager: newProbeManager(ifritClient),
+		sequenceNumber: 0,
 	}
 
 	m.prbManager.start()
@@ -201,10 +205,7 @@ func (m *MulticastManager) multicast(c *Config) error {
 
 	for p := range m.PolicyChan {
 		gossipChunk := &pb.GossipMessageBody{
-			//string object = 1;          // subject or study. Appliy the policy to the object
-			//uint64 version = 2;         // Version numbering
 			Policy: &p,
-			//google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival
 		}
 
 		gossipChunks = append(gossipChunks, gossipChunk)
@@ -214,25 +215,31 @@ func (m *MulticastManager) multicast(c *Config) error {
 		}
 	}
 
-	timestamp := ptypes.TimestampNow()
+	m.sequenceNumber += 1
 	msg := &pb.Message{
 		Type: message.MSG_TYPE_POLICY_STORE_UPDATE,
 		GossipMessage: &pb.GossipMessage{
-			Sender:            "Polciy store",
-			MessageType:       message.GOSSIP_MSG_TYPE_POLICY, // Don't really need this one because the outtermost Message type already has a type specifier
-			Timestamp:         timestamp,
-			GossipMessageBody: gossipChunks,
+			Sender:				"Polciy store",
+			MessageType:		message.GOSSIP_MSG_TYPE_POLICY, // Don't really need this one because the outtermost Message type already has a type specifier
+			DateSent:			pbtime.Now(),
+			GossipMessageBody:  gossipChunks,
+			GossipMessageID: 	&pb.GossipMessageID{
+				PolicyStoreID: 		strings.ToValidUTF8(m.ifritClient.Id(), ""), // use another encoding than UTF-8?
+				SequenceNumber: 	m.sequenceNumber,
+			},
 		},
 	}
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
+		panic(err)
 		return err
 	}
 
 	// Sign the chunks
 	r, s, err := m.ifritClient.Sign(data)
 	if err != nil {
+		panic(err)
 		return err
 	}
 
@@ -242,7 +249,8 @@ func (m *MulticastManager) multicast(c *Config) error {
 	// Marshalled message to be multicasted
 	data, err = proto.Marshal(msg)
 	if err != nil {
-		return nil
+		panic(err)
+		return err
 	}
 
 	wg := sync.WaitGroup{}

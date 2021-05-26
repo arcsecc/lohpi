@@ -24,7 +24,7 @@ type Dataset struct {
 	MetadataURL string
 }
 
-// Sets the HTTP port of the node that
+// Sets the HTTP port of the node that exposes the RESP API. If not set, the port will be chosen at random.
 func NodeWithHTTPPort(port int) NodeOption {
 	return func(n *Node) {
 		n.conf.HTTPPort = port
@@ -98,6 +98,13 @@ func NodeWithHostName(hostName string) NodeOption {
 	}
 }
 
+// Sets the working directory of the policy logging. Default value is the current working directory.
+func NodeWithPolicyObserverWorkingDirectory(dir string) NodeOption {
+	return func(n *Node) {
+		n.conf.PolicyObserverWorkingDirectory = dir
+	}
+}
+
 // Applies the options to the node.
 // NOTE: no locking is performed. Beware of undefined behaviour. Check that previous connections are still valid.
 // SHOULD NOT be called.
@@ -107,9 +114,10 @@ func (n *Node) ApplyConfigurations(opts ...NodeOption) {
 	}
 }
 
+// TODO: consider using intefaces
 func NewNode(opts ...NodeOption) (*Node, error) {
 	const (
-		defaultHTTPPort = 8090
+		defaultHTTPPort = -1
 		defaultPolicyStoreAddress = "127.0.1.1"
 		defaultPolicyStoreGRPCPport = 8084
 		defaultDirectoryServerAddress = "127.0.1.1"
@@ -121,6 +129,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
 		defaultAllowMultipleCheckouts = false
 		defaultHostName = "127.0.1.1"
+		defaultPolicyObserverWorkingDirectory = "."
 	)
 
 	// Default configuration
@@ -137,6 +146,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
 		DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
 		AllowMultipleCheckouts: defaultAllowMultipleCheckouts,
+		PolicyObserverWorkingDirectory: defaultPolicyObserverWorkingDirectory,
 	}
 
 	n := &Node{
@@ -160,7 +170,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 }
 
 // IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
-// it will return when policy requests to the policy store finish.
+// it will return when policy requests to the policy store finish. 
 func (n *Node) IndexDataset(datasetId string) error {
 	if datasetId == "" {
 		return errNoDatasetId
@@ -197,8 +207,9 @@ func (n *Node) Shutdown() {
 	n.nodeCore.Shutdown()
 }
 
-// Joins the network by starting the underlying Ifrit node. It performs handshakes
-// with the policy store and multiplexer at known addresses. In addition, the HTTP server will start as well.
+// Joins the network by starting the underlying Ifrit node. It must be called before any other function;
+// communicating with other nodes in the network will fail. The call performs handshakes with the policy store 
+// and directory server at known addresses.
 func (n *Node) JoinNetwork() error {
 	return n.nodeCore.JoinNetwork()
 }
@@ -211,4 +222,9 @@ func (n *Node) IfritAddress() string {
 // Returns the string representation of the node.
 func (n *Node) String() string {
 	return ""
+}
+
+// Returns the name of the node.
+func (n *Node) Name() string {
+	return n.nodeCore.Name()
 }
