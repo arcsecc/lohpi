@@ -35,23 +35,20 @@ func NodeWithHTTPPort(port int) NodeOption {
 func NodeWithLohpiCaConnectionString(addr string, port int) NodeOption {
 	return func(n *Node) {
 		n.conf.LohpiCaAddress = addr
-		n.conf.LohpiCaPort = port
 	}
 }
 
 // Sets the host:port pair of the policy store. Default value is "".
-func NodeWithPolicyStoreConnectionString(addr string, port int) NodeOption {
+func NodeWithPolicyStoreAddress(addr string) NodeOption {
 	return func(n *Node) {
 		n.conf.PolicyStoreAddress = addr
-		n.conf.PolicyStoreGRPCPport = port
 	}
 }
 
 // Sets the host:port pair of the directory server. Default value is "".
-func NodeWithDirectoryServerConnectionString(addr string, port int) NodeOption {
+func NodeWithDirectoryServerAddress(addr string) NodeOption {
 	return func(n *Node) {
 		n.conf.DirectoryServerAddress = addr
-		n.conf.DirectoryServerGPRCPort = port
 	}
 }
 
@@ -84,13 +81,6 @@ func NodeWithMultipleCheckouts(multiple bool) NodeOption {
 	}
 }
 
-// If set to true, verbose logging is enabled. Default is false.
-func NodeWithDebugEnabled(enabled bool) NodeOption {
-	return func(n *Node) {
-		n.conf.DebugEnabled = enabled
-	}
-}
-
 // Sets the hostname of this node. Default value is 127.0.1.1.
 func NodeWithHostName(hostName string) NodeOption {
 	return func(n *Node) {
@@ -105,6 +95,14 @@ func NodeWithPolicyObserverWorkingDirectory(dir string) NodeOption {
 	}
 }
 
+// Sets the address of the certificate authority. Default value is "127.0.1.1:8301"
+func NodeWithLohpiCaAddress(addr string) NodeOption {
+	return func(n *Node) {
+		n.conf.LohpiCaAddress = addr
+	}	
+}
+
+
 // Applies the options to the node.
 // NOTE: no locking is performed. Beware of undefined behaviour. Check that previous connections are still valid.
 // SHOULD NOT be called.
@@ -118,15 +116,12 @@ func (n *Node) ApplyConfigurations(opts ...NodeOption) {
 func NewNode(opts ...NodeOption) (*Node, error) {
 	const (
 		defaultHTTPPort = -1
-		defaultPolicyStoreAddress = "127.0.1.1"
-		defaultPolicyStoreGRPCPport = 8084
-		defaultDirectoryServerAddress = "127.0.1.1"
-		defaultDirectoryServerGPRCPort = 8081
-		defaultLohpiCaAddress = "127.0.1.1"
-		defaultLohpiCaPort = 8301
-		defaultName = "Node identifier"
+		defaultPolicyStoreAddress = "127.0.1.1:8084"
+		defaultDirectoryServerAddress = "127.0.1.1:8081"
+		defaultLohpiCaAddress = "127.0.1.1:8301"
+		defaultName = ""
 		defaultPostgresSQLConnectionString = ""
-		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
+		//defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
 		defaultAllowMultipleCheckouts = false
 		defaultHostName = "127.0.1.1"
 		defaultPolicyObserverWorkingDirectory = "."
@@ -137,14 +132,11 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 		HostName: defaultHostName,
 		HTTPPort: defaultHTTPPort,
 		PolicyStoreAddress: defaultPolicyStoreAddress,
-		PolicyStoreGRPCPport: defaultPolicyStoreGRPCPport,
 		DirectoryServerAddress: defaultDirectoryServerAddress,
-		DirectoryServerGPRCPort: defaultDirectoryServerGPRCPort,
 		LohpiCaAddress: defaultLohpiCaAddress,
-		LohpiCaPort: defaultLohpiCaPort,
 		Name: defaultName,
 		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
-		DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
+		//DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
 		AllowMultipleCheckouts: defaultAllowMultipleCheckouts,
 		PolicyObserverWorkingDirectory: defaultPolicyObserverWorkingDirectory,
 	}
@@ -157,6 +149,9 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 	for _, opt := range opts {
 		opt(n)
 	}
+
+	// Sanitize the configuration. Some fields need to be set before continuing.
+
 
 	nCore, err := node.NewNodeCore(conf)
 	if err != nil {

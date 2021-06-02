@@ -15,19 +15,12 @@ var (
 	errNoConfig = errors.New("Configuration is nil")
 )
 
+// TODO: add logrus logging with nice fields
+
 type policyObserver struct {
 	observedGossipsList *fifoqueue.Queue
 	config *policyObserverConfig
-	currentPolicyLogFile *policyLogFile
-	beginLogging int
-	endLogging int
 	cursor int
-}
-
-type policyLogFile struct {
-	file *os.File
-	filename string
-	capacity int
 }
 
 type policyObserverConfig struct {
@@ -49,12 +42,10 @@ func newPolicyObserver(config *policyObserverConfig) (*policyObserver, error) {
 	po := &policyObserver{
 		observedGossipsList: fq,
 		config: config,
-		beginLogging: 0,
 		cursor: 0,
-		endLogging: config.capacity,
 	}
 
-	// Create directory
+	// Create output directory 
 	if _, err := os.Stat(config.outputDirectory); os.IsNotExist(err) {
 		if err := os.MkdirAll(config.outputDirectory, 0755); err != nil {
 			return nil, err
@@ -71,7 +62,7 @@ func (p *policyObserver) gossipIsObserved(msg *pb.GossipMessage) bool {
 
 func (p *policyObserver) logObservedGossipBatch(entry []interface{}) error {
 	if entry == nil {
-		return fmt.Errorf("Entries array is nil")
+		return fmt.Errorf("Entries to be logged is nil")
 	}
 
 	filename :=	fmt.Sprintf("%s/%s_%s.json", p.config.outputDirectory, p.config.logfilePrefix, time.Now().String())
@@ -105,7 +96,6 @@ func (p *policyObserver) addObservedGossip(msg *pb.GossipMessage) error {
 	}
 
 	p.observedGossipsList.Insert(pgo)
-
 	p.cursor += 1
 
 	if p.cursor == p.config.capacity {

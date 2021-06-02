@@ -6,11 +6,9 @@ import (
 	"github.com/arcsecc/lohpi"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
-	"math/rand"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 var config = struct {
@@ -65,7 +63,6 @@ func main() {
 
 		sets := datasets(node.Name(), 10)
 		for _, s := range sets {
-			log.Println("sets:", s)
 			if err := node.IndexDataset(s); err != nil {
 				log.Errorln(err.Error())
 				os.Exit(1)
@@ -90,7 +87,7 @@ func newNodes(n int) ([]*lohpi.Node, error) {
 	nodes := make([]*lohpi.Node, 0)
 
 	for i := 0; i < n; i++ {
-		name := nodeName()
+		name := fmt.Sprintf("node_%d", i + 1)
 		opts, err := getNodeConfiguration(name)
 		if err != nil {
 			return nil, err
@@ -125,23 +122,10 @@ func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
 		lohpi.NodeWithPostgresSQLConnectionString(dbConn),
 		lohpi.NodeWithMultipleCheckouts(true),
 		lohpi.NodeWithPolicyObserverWorkingDirectory(name),
+		lohpi.NodeWithName(name))
 	}
-
-	// Set name from command line
-	opts = append(opts, lohpi.NodeWithName(name))
 
 	return opts, nil
-}
-
-func nodeName() string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	b := make([]byte, 6)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
-	}
-	return string(b)
 }
 
 func getDatabaseConnectionString() (string, error) {

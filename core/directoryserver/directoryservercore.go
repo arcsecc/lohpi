@@ -4,19 +4,21 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/cache"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
-	"github.com/lestrrat-go/jwx/jws"
-	"encoding/json"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
 	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/jws"
 	log "github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"net"
 	"net/http"
 	"strconv"
@@ -24,13 +26,10 @@ import (
 )
 
 type Config struct {
-	HTTPPort        int
-	GRPCPort        int
-	LohpiCaAddress  string
-	LohpiCaPort     int
-	UseTLS          bool
-	CertificateFile string
-	PrivateKeyFile  string
+	HTTPPort       int
+	GRPCPort       int
+	LohpiCaAddress string
+	LohpiCaPort    int
 }
 
 type DirectoryServerCore struct {
@@ -67,10 +66,16 @@ type DirectoryServerCore struct {
 
 	// Fetch the JWK
 	pubKeyCache *jwk.AutoRefresh
+
+	pb.UnimplementedDirectoryServerServer
 }
 
 // Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
 func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
+	if config == nil {
+		return nil, errors.New("Configuration for directory server is nil")
+	}
+
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -121,13 +126,21 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 	return ds, nil
 }
 
+// Starts the directory server. This includes starting the HTTP server, Ifrit client and gRPC server.
+// In addition, it will try and restore the state it had before it crashed.
 func (d *DirectoryServerCore) Start() {
 	log.Infoln("Directory server running gRPC server at", d.grpcs.Addr(), "and Ifrit client at", d.ifritClient.Addr())
 	go d.ifritClient.Start()
 	go d.startHttpServer(":" + strconv.Itoa(d.config.HTTPPort))
 	go d.grpcs.Start()
+
+	// TODO: in the event of a warm restart, sync with the rest of the network to restore the state of the directory server
+	// back to where it was before the crash.
+	// Suggestion: load cached data from disk and ask the nodes and PS about their state.
+	// Consider
 }
 
+// Create a node that performs a handshake with
 func (d *DirectoryServerCore) Stop() {
 	d.ifritClient.Stop()
 	d.shutdownHttpServer()
@@ -138,6 +151,7 @@ func (d *DirectoryServerCore) Cache() *cache.Cache {
 }
 
 // PIVATE METHODS BELOW THIS LINE
+// TODO: implement timeouts and context handling on direct messaging.
 func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
@@ -159,7 +173,7 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 		//d.addRevokedDataset(msg.GetStringValue())
 
 	default:
-		log.Warnln("Unknown message type at DirectoryServerCore handler: %s\n", msg.GetType())
+		log.Warnf("Unknown message type at DirectoryServerCore handler: %s\n", msg.GetType())
 	}
 
 	resp, err := proto.Marshal(&pb.Message{Type: message.MSG_TYPE_OK})
@@ -210,6 +224,10 @@ func (d *DirectoryServerCore) removeRevokedDataset(dataset string) {
 
 // Adds the given node to the network and returns the DirectoryServerCore's IP address
 func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
+	if node == nil {
+		return nil, status.Error(codes.InvalidArgument, "pb node is nil")
+	}
+
 	if _, ok := d.memCache.Nodes()[node.GetName()]; !ok {
 		d.memCache.AddNode(node.GetName(), node)
 		log.Infof("DirectoryServerCore added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n",
@@ -224,9 +242,10 @@ func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb
 }
 
 // Verifies the signature of the given message. Returns a non-nil error if the signature is not valid.
+// TODO: implement retries if it fails. Use while loop with a fixed number of attempts. Log the events too
 func (d *DirectoryServerCore) verifyMessageSignature(msg *pb.Message) error {
 	return nil
-	// Verify the integrity of the node
+	// Verify the integrity of the message
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
 
@@ -260,7 +279,7 @@ func (d *DirectoryServerCore) pbNode() *pb.Node {
 	}
 }
 
-
+// Returns the name and ID of the client in the Azure AD.
 func (d *DirectoryServerCore) getClientIdentifier(token []byte) (string, string, error) {
 	msg, err := jws.ParseString(string(token))
 	if err != nil {
@@ -285,6 +304,7 @@ func (d *DirectoryServerCore) getClientIdentifier(token []byte) (string, string,
 }
 
 // TODO: handle ctx
+// Rollbacks the checkout of a dataset. This is useful if any errors occur somewhere in the pipeline.
 func (d *DirectoryServerCore) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_ROLLBACK_CHECKOUT,

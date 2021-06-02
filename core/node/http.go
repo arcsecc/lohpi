@@ -20,7 +20,11 @@ const PROJECTS_DIRECTORY = "projects"
 
 func (n *NodeCore) startHTTPServer(addr string) error {
 	router := mux.NewRouter()
-	log.Infof("%s: Started HTTP server on port %d\n", n.config().Name, n.config().HTTPPort)
+	log.WithFields(log.Fields{
+		"entity": "Lohpi directory server",
+		"host-name": n.config().HostName,
+		"port-number": n.config().HTTPPort,
+	}).Infoln("Started HTTP server")
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
 	dRouter.HandleFunc("/ids", n.getDatasetIdentifiers).Methods("GET")
@@ -78,7 +82,7 @@ func redirectTLS(w http.ResponseWriter, r *http.Request) {
 // defer r.Body.Close()?
 func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 	datasetId := strings.Split(r.URL.Path, "/dataset/metadata/")[1]
-
+	
 	if !n.dbDatasetExists(datasetId) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
 		log.Infoln(err.Error())
@@ -88,7 +92,7 @@ func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 
 	// TODO: strip the headers from information about the client
 	if handler := n.getMetadataHandler(); handler != nil {
-		handler(datasetId, w, r)	
+		handler(datasetId, w, r)
 	} else {
 		err := fmt.Errorf("Metadata handler is nil")
 		log.Warnln(err.Error())

@@ -1,7 +1,7 @@
 package lohpi
 
 import (
-	log "github.com/sirupsen/logrus"
+//	log "github.com/sirupsen/logrus"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -27,7 +27,6 @@ type tokenResponse struct {
 type AzureKeyVaultSecretResponse struct {
 	Value string `json:"value"`
 	Id    string `json:"id"`
-	// attributes
 }
 
 type AzureKeyVaultClient struct {
@@ -68,13 +67,6 @@ func NewAzureKeyVaultClient(config *AzureKeyVaultClientConfig) (*AzureKeyVaultCl
 	if err != nil {
 		return nil, err
 	}
-
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
-    if err != nil {
-        log.Fatal(err)
-    }
-    bodyString := string(bodyBytes)
-    log.Infof("bodyString: %+v\n", bodyString)
 
 	var tr tokenResponse
 	errUnMarshal := json.Unmarshal(body, &tr)
@@ -120,9 +112,8 @@ func (k *AzureKeyVaultClient) GetSecret(vaultBaseURL, secretName string) (*Azure
 	}
 
 	var sr AzureKeyVaultSecretResponse
-	errUnMarshal := json.Unmarshal([]byte(body), &sr)
-	if errUnMarshal != nil {
-		return nil, errUnMarshal
+	if err := json.Unmarshal([]byte(body), &sr); err != nil {
+		return nil, err
 	}
 
 	return &sr, nil

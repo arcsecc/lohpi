@@ -27,18 +27,20 @@ import (
 // TODO: find a better way to configure stuff :))
 
 var config = struct {
-	HTTPPort			int 		`default:"8080"`
-	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
-	MuxAddr				string		`default:"127.0.1.1:8081"`
-	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	RemoteBaseURL		string 		`required:"true"`
-	RemotePort			string 		`required:"true"`
-	AzureKeyVaultName 	string 		`required:"true"`
-	AzureKeyVaultSecret	string		`required:"true"`
-	AzureClientSecret	string 		`required:"true"`
-	AzureClientID		string		`required:"true"`
-	AzureKeyVaultBaseURL string		`required:"true"`
-	AzureTenantID		string		`required:"true"`
+	HTTPPort				int 		`default:"8080"`
+	HostName				string 		`required:"true"`
+	MultipleCheckouts		bool 		`required:"true"`
+	PolicyStoreAddress 		string 		`required:"true"` //`default:"127.0.1.1:8084"`
+	DirectoryServerAddress 	string		`required:"true"`//	`default:"127.0.1.1:8081"`
+	LohpiCaAddress 	   		string 		`required:"true"` //`default:"127.0.1.1:8301"`
+	RemoteBaseURL			string 		`required:"true"`
+	RemotePort				string 		`required:"true"`
+	AzureKeyVaultName 		string 		`required:"true"`
+	AzureKeyVaultSecret		string		`required:"true"`
+	AzureClientSecret		string 		`required:"true"`
+	AzureClientID			string		`required:"true"`
+	AzureKeyVaultBaseURL 	string		`required:"true"`
+	AzureTenantID			string		`required:"true"`
 }{}
 
 type StorageNode struct {
@@ -49,6 +51,7 @@ func main() {
 	var configFile string
 	var createNew bool
 	var nodeName string
+	var logfile string
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
@@ -56,10 +59,14 @@ func main() {
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
 	args.StringVar(&configFile, "c", "", `Configuration file for the node.`)
+	args.StringVar(&logfile, "log", "", `Output file for the logging.`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
+	configor.New(&configor.Config{
+		Debug: false, 
+		ENVPrefix: "PS_NODE",
+		ErrorOnUnmatchedKeys: true}).Load(&config, configFile)
 
 	if configFile == "" {
 		log.Errorln("Configuration file must not be empty. Exiting.")
@@ -70,6 +77,16 @@ func main() {
 	if nodeName == "" {
 		log.Errorln("Missing node identifier. Exiting.")
 		os.Exit(2)
+	}
+
+	// Set logger
+	if logfile != "" {
+		file, err := os.OpenFile(logfile, os.O_CREATE|os.O_WRONLY, 0666)
+		if err == nil {
+			log.SetOutput(file)
+		} else {
+			log.Info("Failed to log to file, using default stderr")
+		}
 	}
 
 	var sn *StorageNode
@@ -84,8 +101,7 @@ func main() {
 	} else {
 		log.Errorln("Need to set the 'new' flag to true. Exiting.")
 		os.Exit(1)
-	}
-	
+	}	
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -96,25 +112,6 @@ func main() {
 	// Clean-up
 	sn.Shutdown()
 	os.Exit(0)
-}
-
-func InitializeLogfile(logToFile bool) error {
-	logfilePath := "node.log"
-
-	if logToFile {
-		file, err := os.OpenFile(logfilePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-		if err != nil {
-			log.SetOutput(os.Stdout)
-			return fmt.Errorf("Could not open logfile %s. Error: %s", logfilePath, err.Error())
-		}
-		log.SetOutput(file)
-		log.SetFormatter(&log.TextFormatter{})
-	} else {
-		log.Infoln("Setting logs to standard output")
-		log.SetOutput(os.Stdout)
-	}
-
-	return nil
 }
 
 func exists(name string) bool {
@@ -134,7 +131,6 @@ func newNodeStorage(name string) (*StorageNode, error) {
 
 	n, err := lohpi.NewNode(opts...)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -144,7 +140,6 @@ func newNodeStorage(name string) (*StorageNode, error) {
 
 	// TODO: revise the call stack starting from here
 	if err := sn.node.JoinNetwork(); err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -152,42 +147,33 @@ func newNodeStorage(name string) (*StorageNode, error) {
 }
 
 func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
-	var opts []lohpi.NodeOption
-
 	dbConn, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
 
-	env := os.Getenv("LOHPI_ENV")
-	if env == "" {
-		log.Errorln("LOHPI_ENV must be set. Exiting.")
-		os.Exit(1)
-	} else if env == "production" {
-		log.Infoln("Production environment set")
-		opts = []lohpi.NodeOption{
-			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
-			lohpi.NodeWithMultipleCheckouts(true), 
-			lohpi.NodeWithHostName("test.lohpi.cs.uit.no"),
-			lohpi.NodeWithHTTPPort(config.HTTPPort),
-		}
-	} else if env == "development" {
-		log.Infoln("Development environment set")
-		opts = []lohpi.NodeOption{
-			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
-			lohpi.NodeWithMultipleCheckouts(true),
-			lohpi.NodeWithHTTPPort(config.HTTPPort),
-		}
-	} else {
-		log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
-		os.Exit(1)
+	opts := []lohpi.NodeOption{
+		lohpi.NodeWithHTTPPort(config.HTTPPort),
+		lohpi.NodeWithHostName(config.HostName),
+		lohpi.NodeWithName(name),
+		lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
+		lohpi.NodeWithMultipleCheckouts(config.MultipleCheckouts), 
+		lohpi.NodeWithPolicyStoreAddress(config.PolicyStoreAddress),
+		lohpi.NodeWithDirectoryServerAddress(config.DirectoryServerAddress),
+		lohpi.NodeWithLohpiCaAddress(config.LohpiCaAddress),
 	}
-	
-	// Set name from command line
-	opts = append(opts, lohpi.NodeWithName(name))
 
-	log.Infof("Using %s as remote URL base\n", config.RemoteBaseURL)
-	
+	log.WithFields(log.Fields{
+		"remote-url": config.RemoteBaseURL,
+		"hostname": config.HostName,
+		"node-name": name,
+		"policy-store-address": config.PolicyStoreAddress,
+		"directory-server-address": config.DirectoryServerAddress,
+		"lohpi-ca-address": config.LohpiCaAddress,
+		"multiple-checkouts": config.MultipleCheckouts,
+		"http-port": config.HTTPPort,
+	}).Infoln("Configuration")
+
 	return opts, nil
 }
 

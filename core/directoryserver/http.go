@@ -1,21 +1,21 @@
 package directoryserver
 
 import (
-	"net/url"
-	"bytes"
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/util"
 	"github.com/gorilla/mux"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jws"
 	log "github.com/sirupsen/logrus"
-	"github.com/arcsecc/lohpi/core/util"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +49,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 		WriteTimeout: time.Hour * 1,
 		//ReadTimeout:  time.Second * 30,
 		//IdleTimeout:  time.Second * 60,
-		TLSConfig:    comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
+		TLSConfig: comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
 	}
 
 	if err := d.setPublicKeyCache(); err != nil {
@@ -235,18 +235,18 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 		return
 	}
 
-    req := &http.Request{
-        Method: "GET",
-        URL: &url.URL{
-            Scheme: "http", //https
-            Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
-            Path:   "/dataset/metadata/" + dataset,
-        },
+	req := &http.Request{
+		Method: "GET",
+		URL: &url.URL{
+			Scheme: "http", //https
+			Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
+			Path:   "/dataset/metadata/" + dataset,
+		},
 		Header: http.Header{},
-    }
+	}
 
 	client := &http.Client{}
-    resp, err := client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		err := fmt.Errorf("Failed to fetch dataset\n")
 		log.Infoln(err.Error())
@@ -258,12 +258,12 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 
 	if resp.StatusCode != http.StatusOK {
 		log.Error(resp.Status)
-		http.Error(w, http.StatusText(resp.StatusCode) + ": " + resp.Status, resp.StatusCode)
+		http.Error(w, http.StatusText(resp.StatusCode)+": "+resp.Status, resp.StatusCode)
 		return
 	}
 
 	reader := bufio.NewReader(resp.Body)
-	if err := util.StreamToResponseWriter(reader, w, 100 * 1024); err != nil {
+	if err := util.StreamToResponseWriter(reader, w, 100*1024); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
@@ -300,20 +300,20 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Prepare the request. Beginning of pipeline
-    req := &http.Request{
-        Method: "GET",
-        URL: &url.URL{
-            Scheme: "http", //https
-            Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
-            Path:   "/dataset/data/" + dataset,
-        },
+	req := &http.Request{
+		Method: "GET",
+		URL: &url.URL{
+			Scheme: "http", //https
+			Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
+			Path:   "/dataset/data/" + dataset,
+		},
 		Header: http.Header{},
-    }
+	}
 
-	req.Header.Add("Authorization", "Bearer " + string(token))
+	req.Header.Add("Authorization", "Bearer "+string(token))
 
 	client := &http.Client{}
-    resp, err := client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		err := fmt.Errorf("Failed to fetch dataset\n")
 		log.Infoln(err.Error())
@@ -325,12 +325,12 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 
 	if resp.StatusCode != http.StatusOK {
 		log.Errorln(resp.Status + ": " + resp.Status)
-		http.Error(w, http.StatusText(resp.StatusCode) + ": " + resp.Status, resp.StatusCode)
+		http.Error(w, http.StatusText(resp.StatusCode)+": "+resp.Status, resp.StatusCode)
 		return
 	}
 
 	reader := bufio.NewReader(resp.Body)
-	if err := util.StreamToResponseWriter(reader, w, 1000 * 1024); err != nil {
+	if err := util.StreamToResponseWriter(reader, w, 1000*1024); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return

@@ -32,14 +32,14 @@ func DirectoryServerWithGRPCPport(port int) DirectoryServerOption {
 // Sets the directory server's X.509 certificate. Default value is "".
 func DirectoryServerWithCertificate(certificateFile string) DirectoryServerOption {
 	return func(d *DirectoryServer) {
-		d.conf.CertificateFile = certificateFile
+	//	d.conf.CertificateFile = certificateFile
 	}
 }
 
 // Sets the directory server's private key file path. Default value is "".
 func DirectoryServerWithPrivateKey(privateKeyFile string) DirectoryServerOption {
 	return func(d *DirectoryServer) {
-		d.conf.PrivateKeyFile = privateKeyFile
+		//d.conf.PrivateKeyFile = privateKeyFile
 	}
 }
 
@@ -68,15 +68,16 @@ func NewDirectoryServer(opts ...DirectoryServerOption) (*DirectoryServer, error)
 		GRPCPort: defaultGrpcPort,
 		LohpiCaAddress: defaultLohpiCaAddr,
 		LohpiCaPort: defaultLohpiCaPort,
-		UseTLS: defaultUseTLS,
-		CertificateFile: defaultCertificateFile,
-		PrivateKeyFile: defaultPrivateKey,
+		//UseTLS: defaultUseTLS,
+		//CertificateFile: defaultCertificateFile,
+		//PrivateKeyFile: defaultPrivateKey,
 	}
 
 	ds := &DirectoryServer{
 		conf: conf,
 	}
 
+	// Apply the configuration
 	for _, opt := range opts {
 		opt(ds)
 	}

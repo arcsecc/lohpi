@@ -10,7 +10,6 @@ import (
 	"github.com/arcsecc/lohpi/core/netutil"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
-	"strconv"
 	"github.com/joonnna/ifrit"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
@@ -28,20 +27,16 @@ type Config struct {
 	HostName					string
 	HTTPPort                	int
 	PolicyStoreAddress   		string
-	PolicyStoreGRPCPport 		int
 	DirectoryServerAddress  	string
-	DirectoryServerGPRCPort 	int
 	LohpiCaAddress 				string
-	LohpiCaPort					int
 	Name 						string
 	PostgresSQLConnectionString string
 	DatabaseRetentionInterval	time.Duration
 	AllowMultipleCheckouts 		bool
-	DebugEnabled 				bool
-	TLSEnabled					bool
-	PolicyObserverWorkingDirectory string
-
+	PolicyObserverWorkingDirectory string // interface me
 }
+
+// TODO: use logrus to create machine-readable logs with fields!
 
 // TODO move me somewhere else. ref gossip.go
 type gossipMessage struct {
@@ -53,8 +48,9 @@ type gossipMessage struct {
 // Types used in client requests
 type clientRequestHandler func(id string, w http.ResponseWriter, r *http.Request)
 
-// Consider implementing interfaces in lohpi package to hide stuff and smooth out the 
-// project's dependency tree.
+// TODO: refine storage of data. Ie: use database as the secondary storage with in-memory maps
+// as the primary storage. Use retention policy to flush the caches to disk/db? 
+// Only flush deltas to disk/db to reduce data transfer
 type NodeCore struct {
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
@@ -108,7 +104,6 @@ type policyGossipObservation struct {
 func NewNodeCore(config *Config) (*NodeCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -124,31 +119,28 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		Locality:   []string{listener.Addr().String()},
 	}
 
-	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
+	cu, err := comm.NewCu(pk, config.LohpiCaAddress)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
 	psClient, err := comm.NewPolicyStoreClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
+	// Observers and logs policies as they arrive at the node
 	policyObs, err := newPolicyObserver(&policyObserverConfig{
 		outputDirectory: config.PolicyObserverWorkingDirectory,
 		logfilePrefix: config.Name,
 		capacity: 10,
 	})
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -165,20 +157,15 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	}
 
 	// Initialize the PostgresSQL database
-	if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
-		panic(err)
-		return nil, err
-	}
-
-	// Remove all stale identifiers since the last run. This will remove all the identifiers
-	// from the table. The node cannot host datasets that have been removed from the remote location
-	// since it last ran.
-	// TODO: can we do something better?
-	/*if err := node.dbResetDatasetIdentifiers(); err != nil {
-		log.Errorf(err.Error())
+	// TODO: remove me and config me somewhere else :)
+	/*if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
 		panic(err)
 		return nil, err
 	}*/
+
+	// Set the Ifrit handlers
+	node.ifritClient.RegisterMsgHandler(node.messageHandler)
+	node.ifritClient.RegisterGossipHandler(node.gossipHandler)
 
 	return node, nil
 }
@@ -233,50 +220,12 @@ func (n *NodeCore) RemoveDataset(id string) error {
 func (n *NodeCore) Shutdown() {
 	log.Infoln("Shutting down Lohpi node")
 	n.ifritClient.Stop()
+	// TODO more here
 }
 
-// Joins the network by starting the underlying Ifrit node. Further, it performs handshakes
-// with the policy store and multiplexer at known addresses.
-func (n *NodeCore) JoinNetwork() error {
-	if err := n.directoryServerHandshake(); err != nil {
-		return err
-	}
-
-	if err := n.policyStoreHandshake(); err != nil {
-		return err
-	}
-
-	var port int
-	if n.config().HTTPPort == -1 {
-		port = netutil.GetOpenPort()
-	} else {
-		port = n.config().HTTPPort
-	}
-
-	go n.startHTTPServer(fmt.Sprintf(":%d", port))
-
-	n.ifritClient.RegisterMsgHandler(n.messageHandler)
-	n.ifritClient.RegisterGossipHandler(n.gossipHandler)
-
-	return nil
-}
-
-func (n *NodeCore) IfritAddress() string {
-	return n.ifritClient.Addr()
-}
-
-func (n *NodeCore) HTTPAddress() string {
-	return ""
-}
-
-func (n *NodeCore) Name() string {
-	return n.config().Name
-}
-
-// PRIVATE METHODS BELOW
-func (n *NodeCore) directoryServerHandshake() error {
-	log.Infof("Performing handshake with directory server at address %s:%s\n", n.config().DirectoryServerAddress, strconv.Itoa(n.config().DirectoryServerGPRCPort))
-	conn, err := n.directoryServerClient.Dial(n.config().DirectoryServerAddress + ":" + strconv.Itoa(n.config().DirectoryServerGPRCPort))
+func (n *NodeCore) HandshakeDirectoryServer() error {
+	log.Infof("Performing handshake with directory server at address %s:%s\n", n.config().DirectoryServerAddress)
+	conn, err := n.directoryServerClient.Dial(n.config().DirectoryServerAddress)
 	if err != nil {
 		return err
 	}
@@ -285,7 +234,7 @@ func (n *NodeCore) directoryServerHandshake() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	r, err := conn.Handshake(ctx, n.pbNode())
+	r, err := conn.Handshake(ctx, n.PbNode())
 	if err != nil {
 		return err
 	}
@@ -295,9 +244,22 @@ func (n *NodeCore) directoryServerHandshake() error {
 	return nil
 }
 
-func (n *NodeCore) policyStoreHandshake() error {
-	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config().PolicyStoreAddress, strconv.Itoa(n.config().PolicyStoreGRPCPport))
-	conn, err := n.psClient.Dial(n.config().PolicyStoreAddress + ":" + strconv.Itoa(n.config().PolicyStoreGRPCPport))
+// TODO: set proper config here :))
+func (n *NodeCore) StartHTTPServer(port int) {
+	go n.startHTTPServer(fmt.Sprintf(":%d", port))
+}
+
+func (n *NodeCore) IfritAddress() string {
+	return n.ifritClient.Addr()
+}
+
+func (n *NodeCore) Name() string {
+	return n.config().Name
+}
+
+func (n *NodeCore) HandshakePolicyStore() error {
+	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config().PolicyStoreAddress)
+	conn, err := n.psClient.Dial(n.config().PolicyStoreAddress)
 	if err != nil {
 		return err
 	}
@@ -306,7 +268,7 @@ func (n *NodeCore) policyStoreHandshake() error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	r, err := conn.Handshake(ctx, n.pbNode())
+	r, err := conn.Handshake(ctx, n.PbNode())
 	if err != nil {
 		return err
 	}
@@ -364,7 +326,7 @@ func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 	}
 }
 
-// TODO refine this. Check all gossip batches and see which on	e we should apply
+// Check all messages in the gossip batch and see which ones we should apply
 func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 	if msg.GetGossipMessage() == nil {
 		err := errors.New("Gossip message is nil")
@@ -388,14 +350,18 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 	return nil, nil
 }
 
-// Apply the given policy to the correct dataset. 
+// Apply the given policy to the correct dataset.
+// TODO: log things better using logrus. 
 func (n *NodeCore) applyPolicy(p *pb.Policy) error {
 	datasetId := p.GetObjectIdentifier()
 	if n.dbDatasetExists(datasetId) {
 		currentPolicy := n.getDatasetEntry(datasetId)
-		//if currentPolicy == nil 
+		if currentPolicy == nil {
+			return errors.New("Tried to get current policy but it was nil")
+		}
+
 		if currentPolicy.GetVersion() >= p.GetVersion() {
-			log.Infoln("Got an outdated policy")
+			log.Infoln("Got an outdated policy. Applies a new version")
 			return nil
 		}
 
@@ -406,7 +372,7 @@ func (n *NodeCore) applyPolicy(p *pb.Policy) error {
 		n.insertDataset(datasetId, p)
 
 		// Log deltas in policies to logfile
-		// TODO: put loggers in inteface?
+		// TODO: put loggers in interfaces?
 		log.Infof("Changed dataset %s's policy to %s\n", datasetId, p.GetContent())
 
 		// Update revocation list. Optimization: don't push update message if policy is reduntant.
@@ -421,7 +387,6 @@ func (n *NodeCore) applyPolicy(p *pb.Policy) error {
 	return nil
 }
 
-
 // TODO: match the required access credentials of the dataset to the
 // access attributes of the client. Return true if the client can access the data,
 // return false otherwise. Also, verify that all the fields are present
@@ -434,6 +399,7 @@ func (n *NodeCore) clientIsAllowed(r *pb.DatasetRequest) bool {
 	return n.dbDatasetIsAvailable(r.GetIdentifier())
 }
 
+// Invoked on each received gossip message. 
 func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
@@ -463,6 +429,7 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
+// Returns the string representation of the node.
 func (n *NodeCore) String() string {
 	return fmt.Sprintf("Name: %s\tIfrit address: %s", n.config().Name, n.IfritClient().Addr())
 }
@@ -484,7 +451,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	// Acknowledge the probe message
 	resp := &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
-		Sender: n.pbNode(),
+		Sender: n.PbNode(),
 		Probe: msg.GetProbe(),
 	}
 
@@ -509,7 +476,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	return nil, nil
 }
 
-// TODO remove me and use pbNode in ps gossip message instead
+// TODO remove me and use PbNode in ps gossip message instead
 func (n *NodeCore) verifyPolicyStoreMessage(msg *pb.Message) error {
 	return nil
 	r := msg.GetSignature().GetR()
@@ -538,7 +505,7 @@ func (n *NodeCore) verifyPolicyStoreMessage(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) pbNode() *pb.Node {
+func (n *NodeCore) PbNode() *pb.Node {
 	return &pb.Node{
 		Name:         	n.config().Name,
 		IfritAddress: 	n.ifritClient.Addr(),

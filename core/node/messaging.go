@@ -18,7 +18,7 @@ import (
 func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP string) (*pb.Policy, error) {
 	msg := &pb.Message{
 		Type:   message.MSG_TYPE_GET_DATASET_POLICY,
-		Sender: n.pbNode(),
+		Sender: n.PbNode(),
 		PolicyRequest: &pb.PolicyRequest{
 			Identifier: datasetId,
 		},
@@ -58,7 +58,7 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
-		Sender:      n.pbNode(),
+		Sender:      n.PbNode(),
 		StringValue: id,
 	}
 
@@ -158,7 +158,7 @@ func (n *NodeCore) pbSendDatasetRevocationUpdate(dataset, policyContent string) 
 
 	msg := &pb.Message{
 		Type:        message.MSG_POLICY_REVOCATION_UPDATE,
-		Sender:      n.pbNode(),
+		Sender:      n.PbNode(),
 		StringValue: dataset,
 		BoolValue:   b,
 	}

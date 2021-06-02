@@ -49,6 +49,8 @@ func NewCache(client *ifrit.Client) *Cache {
 		datasetNodesMap:    make(map[string]*pb.Node),
 		datasetCheckoutMap: make(map[string]*ClientCheckout),
 		invalidDatasetMap:  make(map[string]*InvalidDataset),
+		nodesMapLock: 		sync.RWMutex{},
+		invalidDatasetMapLock: sync.RWMutex{},
 		ifritClient:        client,
 	}
 }
