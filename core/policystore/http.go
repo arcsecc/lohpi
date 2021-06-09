@@ -39,7 +39,7 @@ func (ps *PolicyStoreCore) startHttpServer(addr string) error {
 		WriteTimeout: time.Second * 30,
 		ReadTimeout:  time.Second * 30,
 		IdleTimeout:  time.Second * 60,
-		TLSConfig:    comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.Priv()),
+		TLSConfig:    comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.PrivateKey()),
 	}
 
 	//router.Use(ps.middlewareValidateTokenSignature)
@@ -203,7 +203,7 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 		Policy string
 	}{}
 
-	resp.Policy = policy.GetContent()
+	resp.Policy = strconv.FormatBool(policy.GetContent())
 
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
@@ -281,8 +281,8 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 
 	policy := &pb.Policy{
 		Issuer:           ps.PolicyStoreConfig().Name, // should get name of client instead
-		ObjectIdentifier: datasetId,
-		Content:          strconv.FormatBool(reqBody.Policy),
+		DatasetIdentifier: datasetId,
+		Content:          reqBody.Policy,
 		Version: 		  version + 1,
 		DateCreated: 	  pbtime.Now(),
 	}

@@ -96,7 +96,7 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 		return nil, err
 	}
 
-	s, err := newDirectoryGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.Priv(), listener)
+	s, err := newDirectoryGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.PrivateKey(), listener)
 	if err != nil {
 		return nil, err
 	}

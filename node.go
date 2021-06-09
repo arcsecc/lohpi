@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"github.com/pkg/errors"
 	"github.com/arcsecc/lohpi/core/node"
+	"crypto/x509/pkix"
+	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/comm"
+	"github.com/arcsecc/lohpi/core/gossipobserver"
+	log "github.com/sirupsen/logrus"
 	"time"
 )
 
@@ -11,12 +16,34 @@ var (
 	errNoDatasetId = errors.New("Dataset identifier is empty.")
 )
 
-// Defines functional options for the node.
-type NodeOption func(*Node)
-
 type Node struct {
 	nodeCore *node.NodeCore
 	conf *node.Config
+}
+
+type NodeConfig struct {
+	// The address of the CA. Default value is "127.0.0.1:8301"
+	CaAddress string
+
+	// The name of this node
+	Name string
+
+	// The database connection string. Default value is "". If it is not set, the database connection
+	// will not be used. This means that only the in-memory maps will be used for storage.
+	SQLConnectionString string
+
+	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued. 
+	// NOT USED
+	BackupRetentionTime time.Time
+
+	// If set to true, a client can checkout a dataset multiple times. Default value is false.
+	AllowMultipleCheckouts bool
+
+	// Hostname of the node. Default value is "127.0.1.1".
+	HostName string
+
+	// Output directory of gossip observation unit. Default value is the current working directory.
+	PolicyObserverWorkingDirectory string
 }
 
 type Dataset struct {
@@ -24,136 +51,60 @@ type Dataset struct {
 	MetadataURL string
 }
 
-// Sets the HTTP port of the node that exposes the RESP API. If not set, the port will be chosen at random.
-func NodeWithHTTPPort(port int) NodeOption {
-	return func(n *Node) {
-		n.conf.HTTPPort = port
-	}
-}
-
-// Sets the CA's address and port number. The default values are "127.0.0.1" and 8301, respectively.
-func NodeWithLohpiCaConnectionString(addr string, port int) NodeOption {
-	return func(n *Node) {
-		n.conf.LohpiCaAddress = addr
-	}
-}
-
-// Sets the host:port pair of the policy store. Default value is "".
-func NodeWithPolicyStoreAddress(addr string) NodeOption {
-	return func(n *Node) {
-		n.conf.PolicyStoreAddress = addr
-	}
-}
-
-// Sets the host:port pair of the directory server. Default value is "".
-func NodeWithDirectoryServerAddress(addr string) NodeOption {
-	return func(n *Node) {
-		n.conf.DirectoryServerAddress = addr
-	}
-}
-
-// Sets the name of the node.
-func NodeWithName(name string) NodeOption {
-	return func(n *Node) {
-		n.conf.Name = name
-	}
-}
-
-// Sets the connection string to the database that stores the policies.
-func NodeWithPostgresSQLConnectionString(s string) NodeOption {
-	return func(n *Node) {
-		n.conf.PostgresSQLConnectionString = s
-	}
-}
-
-// Sets the backup retention time to d. At each d, the in-memory caches are flushed
-// to the database. If set to 0, flushing never occurs. 
-func NodeWithBackupRetentionTime(t time.Duration) NodeOption {
-	return func(n *Node) {
-		n.conf.DatabaseRetentionInterval = t
-	}
-}
-
-// If set to true, a client can checkout a dataset multiple times. Default is false.
-func NodeWithMultipleCheckouts(multiple bool) NodeOption {
-	return func(n *Node) {
-		n.conf.AllowMultipleCheckouts = multiple
-	}
-}
-
-// Sets the hostname of this node. Default value is 127.0.1.1.
-func NodeWithHostName(hostName string) NodeOption {
-	return func(n *Node) {
-		n.conf.HostName = hostName
-	}
-}
-
-// Sets the working directory of the policy logging. Default value is the current working directory.
-func NodeWithPolicyObserverWorkingDirectory(dir string) NodeOption {
-	return func(n *Node) {
-		n.conf.PolicyObserverWorkingDirectory = dir
-	}
-}
-
-// Sets the address of the certificate authority. Default value is "127.0.1.1:8301"
-func NodeWithLohpiCaAddress(addr string) NodeOption {
-	return func(n *Node) {
-		n.conf.LohpiCaAddress = addr
-	}	
-}
-
-
-// Applies the options to the node.
-// NOTE: no locking is performed. Beware of undefined behaviour. Check that previous connections are still valid.
-// SHOULD NOT be called.
-func (n *Node) ApplyConfigurations(opts ...NodeOption) {
-	for _, opt := range opts {
-		opt(n)
-	}
-}
-
 // TODO: consider using intefaces
-func NewNode(opts ...NodeOption) (*Node, error) {
-	const (
-		defaultHTTPPort = -1
-		defaultPolicyStoreAddress = "127.0.1.1:8084"
-		defaultDirectoryServerAddress = "127.0.1.1:8081"
-		defaultLohpiCaAddress = "127.0.1.1:8301"
-		defaultName = ""
-		defaultPostgresSQLConnectionString = ""
-		//defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
-		defaultAllowMultipleCheckouts = false
-		defaultHostName = "127.0.1.1"
-		defaultPolicyObserverWorkingDirectory = "."
-	)
-
-	// Default configuration
-	conf := &node.Config{
-		HostName: defaultHostName,
-		HTTPPort: defaultHTTPPort,
-		PolicyStoreAddress: defaultPolicyStoreAddress,
-		DirectoryServerAddress: defaultDirectoryServerAddress,
-		LohpiCaAddress: defaultLohpiCaAddress,
-		Name: defaultName,
-		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
-		//DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
-		AllowMultipleCheckouts: defaultAllowMultipleCheckouts,
-		PolicyObserverWorkingDirectory: defaultPolicyObserverWorkingDirectory,
+func NewNode(config *NodeConfig) (*Node, error) {
+	if config == nil {
+		return nil, errors.New("Node configuration is nil")
 	}
 
+	if config.CaAddress == "" {
+		config.CaAddress = "127.0.1.1:8301"
+	}
+
+	if config.HostName == "" {
+		config.HostName = "127.0.1.1"
+	}
+
+	if config.PolicyObserverWorkingDirectory == "" {
+		config.PolicyObserverWorkingDirectory = "."
+	}
+	
 	n := &Node{
-		conf: conf,
+		conf: &node.Config{
+			Name: config.Name,
+			AllowMultipleCheckouts: config.AllowMultipleCheckouts,
+			SQLConnectionString: config.SQLConnectionString,
+		},
 	}
 
-	// Apply the configuration to the higher-level node
-	for _, opt := range opts {
-		opt(n)
+	listener, err := netutil.GetListener()
+	if err != nil {
+		return nil, err
 	}
 
-	// Sanitize the configuration. Some fields need to be set before continuing.
+	pk := pkix.Name{
+		CommonName: n.conf.Name,
+		Locality:   []string{listener.Addr().String()},
+	}
 
+	// Crypto unit
+	cu, err := comm.NewCu(pk, config.CaAddress)
+	if err != nil {
+		return nil, err
+	}
 
-	nCore, err := node.NewNodeCore(conf)
+	// Policy observer
+	gossipObsConfig := &gossipobserver.PolicyObserverConfig{
+		OutputDirectory: config.PolicyObserverWorkingDirectory,
+		LogfilePrefix: config.Name,
+		Capacity: 10, //config me
+	}
+	gossipObs, err := gossipobserver.NewGossipObserver(gossipObsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	nCore, err := node.NewNodeCore(cu, gossipObs, n.conf)
 	if err != nil {
 		return nil, err
 	}
@@ -189,12 +140,13 @@ func (n *Node) RegisterMetadataHandler(f func(datasetId string, w http.ResponseW
 }
 
 // Removes the dataset policy from the node. The dataset will no longer be available to clients.
-func (n *Node) RemoveDataset(id string) error {
+func (n *Node) RemoveDataset(id string) {
 	if id == "" {
-		return errNoDatasetId
+		log.Errorln("Dataset identifier must not be empty")
+		return
 	}
 	
-	return n.nodeCore.RemoveDataset(id)
+	n.nodeCore.RemoveDataset(id)
 }
 
 // Shuts down the node
@@ -202,11 +154,20 @@ func (n *Node) Shutdown() {
 	n.nodeCore.Shutdown()
 }
 
-// Joins the network by starting the underlying Ifrit node. It must be called before any other function;
-// communicating with other nodes in the network will fail. The call performs handshakes with the policy store 
-// and directory server at known addresses.
-func (n *Node) JoinNetwork() error {
-	return n.nodeCore.JoinNetwork()
+func (n *Node) JoinNetwork(directoryServerAddress, policyStoreAddress string) error {
+	if err := n.nodeCore.HandshakeDirectoryServer(directoryServerAddress); err != nil {
+		return err
+	}
+
+	if err := n.nodeCore.HandshakePolicyStore(policyStoreAddress); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (n *Node) StartHTTPServer(port int) {
+	n.nodeCore.StartHTTPServer(port)	
 }
 
 // Returns the underlying Ifrit address.

@@ -98,11 +98,11 @@ func (cu *CryptoUnit) CaCertificate() *x509.Certificate {
 	return cu.ca
 }
 
-func (cu *CryptoUnit) Priv() *ecdsa.PrivateKey {
+func (cu *CryptoUnit) PrivateKey() *ecdsa.PrivateKey {
 	return cu.priv
 }
 
-func (cu *CryptoUnit) Pub() *ecdsa.PublicKey {
+func (cu *CryptoUnit) PublicKey() *ecdsa.PublicKey {
 	return &cu.priv.PublicKey
 }
 

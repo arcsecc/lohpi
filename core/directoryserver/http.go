@@ -49,7 +49,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 		WriteTimeout: time.Hour * 1,
 		//ReadTimeout:  time.Second * 30,
 		//IdleTimeout:  time.Second * 60,
-		TLSConfig: comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.Priv()),
+		TLSConfig: comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.PrivateKey()),
 	}
 
 	if err := d.setPublicKeyCache(); err != nil {

@@ -25,7 +25,7 @@ import (
 var config = struct {
 	HTTPPort			int 		`default:"9000"`
 	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
-	MuxAddr				string		`default:"127.0.1.1:8081"`
+	DirectoryServerAddr string		`default:"127.0.1.1:8081"`
 	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
 	RemoteBaseURL		string 		`required:"true"`
 	RemotePort			string 		`required:"true"`
@@ -97,14 +97,13 @@ func main() {
 }
 
 func newNodeStorage(name string) (*StorageNode, error) {
-	opts, err := getNodeConfiguration(name)
+	c, err := getNodeConfiguration(name)
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := lohpi.NewNode(opts...)
+	n, err := lohpi.NewNode(c)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -112,9 +111,7 @@ func newNodeStorage(name string) (*StorageNode, error) {
 		node: n,
 	}
 
-	// TODO: revise the call stack starting from here
-	if err := sn.node.JoinNetwork(); err != nil {
-		panic(err)
+	if err := sn.node.JoinNetwork(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
 		return nil, err
 	}
 
@@ -226,43 +223,21 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
-	var opts []lohpi.NodeOption
-
+func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
 	dbConn, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
-
-	env := os.Getenv("LOHPI_ENV")
-	if env == "" {
-		log.Errorln("LOHPI_ENV must be set. Exiting.")
-		os.Exit(1)
-	} else if env == "production" {
-		log.Infoln("Production environment set")
-		opts = []lohpi.NodeOption{
-			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
-			lohpi.NodeWithMultipleCheckouts(true), 
-			lohpi.NodeWithHostName("test.lohpi.cs.uit.no"),
-			lohpi.NodeWithHTTPPort(config.HTTPPort),
-		}
-	} else if env == "development" {
-		log.Infoln("Development environment set")
-		opts = []lohpi.NodeOption{
-			lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
-			lohpi.NodeWithMultipleCheckouts(true),
-			lohpi.NodeWithHostName("iad09.cs.uit.no"),
-			lohpi.NodeWithHTTPPort(config.HTTPPort),
-		}
-	} else {
-		log.Errorln("Unknown value for environment variable LOHPI_ENV:" + env + ". Exiting.")
-		os.Exit(1)
-	}
-	
-	// Set name from command line
-	opts = append(opts, lohpi.NodeWithName(name))
-	
-	return opts, nil
+		
+	return &lohpi.NodeConfig{
+		CaAddress: config.LohpiCaAddr,
+		Name: name,
+		SQLConnectionString: dbConn,
+		//BackupRetentionTime time.Time
+		AllowMultipleCheckouts: true,
+		HostName: "127.0.1.1",
+		PolicyObserverWorkingDirectory: ".",
+	}, nil
 }
 
 func getDatabaseConnectionString() (string, error) {

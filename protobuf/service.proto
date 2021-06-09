@@ -13,7 +13,7 @@ service PolicyStore {
 
 message Client {
     string name = 1;
-    bytes policyAttribute = 2;
+    bytes ID = 2;
 }
 
 // Used in direct messaging
@@ -67,6 +67,12 @@ message Dataset {
     string metadataURL = 3;
 }
 
+message DatasetCheckout {
+    string identifier = 1;
+    Client client = 2;
+    google.protobuf.Timestamp DateCheckout = 3;
+}
+
 message DatasetResponse {
     string Type = 1;        // zip/gzip/binary...
     string URL = 2;
@@ -92,8 +98,8 @@ message MetadataResponse {
 
 message Policy {
     string issuer = 1;
-    string objectIdentifier = 2;
-    string content = 3; // Acutal policy content
+    string datasetIdentifier = 2;
+    bool content = 3; // Acutal policy content
     uint64 version = 4; // Version number set by policy store when a new policy is set.
     google.protobuf.Timestamp DateCreated = 5; // Time of creation of policy. Timezone?
     //google.protobuf.Timestamp DateApplied = 5; // Set by recipient when policy is applied.

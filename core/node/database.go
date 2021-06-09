@@ -1,5 +1,6 @@
 package node
 
+/*
 import (
 	"database/sql"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+/*
 // TODO: change oid to something else? OID comes from Azure AD
 type Client struct {
 	Name string `json:"name"`
@@ -31,7 +33,7 @@ var (
 	datasetCheckoutTable = "dataset_checkout_table"
 )
 
-/* MAJOR TODO: use db.Prepare and friends to prevent SQL injection!!1! */
+/* MAJOR TODO: use db.Prepare and friends to prevent SQL injection!!1! *
 // Also: make db columns into config variables
 
 // Main entry point for initializing the database schema and its tables on Microsoft Azure
@@ -179,11 +181,11 @@ func (n *NodeCore) dbGetObjectPolicy(datasetId string) (string, error) {
 		log.Warnln(err.Error())
 	}
 	return allowed
-}*/
+}*
 
 /* Returns true if the dataset is publicly available, returns false otherwise.
  * Note: this function looks for the "allowed" attribute only. We need to find a better way to specify policies.
- */
+ *
 func (n *NodeCore) dbDatasetIsAvailable(id string) bool {
 	var allowed bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + ` 
@@ -212,7 +214,7 @@ func (n *NodeCore) dbDatasetExists(id string) bool {
 // the daataset at the timestamp (point in time)
 /*func (n *NodeCore) dbGetDatasetCheckout(id string) (string, string, string, error) {
 
-}*/
+}*
 
 // Returns a list of records displaying the dataset being checked out and
 func (n *NodeCore) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
@@ -358,4 +360,4 @@ func (n *NodeCore) dbResetDatasetIdentifiers() error {
 	}
 
 	return nil
-}
+}*/

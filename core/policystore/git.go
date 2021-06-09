@@ -1,6 +1,7 @@
 package policystore
 
 import (
+	"strconv"
 	"errors"
 	"fmt"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -101,7 +102,7 @@ func (ps *PolicyStoreCore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) e
 	}
 
 	// Special case: replace '/' by '_'
-	s := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
+	s := strings.ReplaceAll(p.GetDatasetIdentifier(), "/", "_")
 
 	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
 
@@ -122,7 +123,7 @@ func (ps *PolicyStoreCore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) e
 			return err
 		}
 
-		_, err = f.WriteString(p.GetContent())
+		_, err = f.WriteString(strconv.FormatBool(p.GetContent()))
 		if err != nil {
 			panic(err)
 			return err
@@ -135,7 +136,7 @@ func (ps *PolicyStoreCore) gitWritePolicy(p *pb.Policy, nodeIdentifier string) e
 			return err
 		}
 
-		_, err = f.WriteString(p.GetContent())
+		_, err = f.WriteString(strconv.FormatBool(p.GetContent()))
 		if err != nil {
 			panic(err)
 			return err
@@ -151,7 +152,7 @@ func (ps *PolicyStoreCore) getFilePath(p *pb.Policy) string {
 	}
 
 	// Special case: replace '/' by '_'
-	s := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
+	s := strings.ReplaceAll(p.GetDatasetIdentifier(), "/", "_")
 	return filepath.Join(ps.config.GitRepositoryPath, s)
 }
 
@@ -177,7 +178,7 @@ func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) 
 		panic(err)
 	}
 
-	s := strings.ReplaceAll(p.GetObjectIdentifier(), "/", "_")
+	s := strings.ReplaceAll(p.GetDatasetIdentifier(), "/", "_")
 	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
 
 	// Add the file to the staging area

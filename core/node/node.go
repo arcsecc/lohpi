@@ -2,18 +2,19 @@ package node
 
 import (
 	"context"
-	"crypto/x509/pkix"
-	"database/sql"
+	"github.com/lestrrat-go/jwx/jws"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
-	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/node/datasetmanager"
+	"crypto/x509"
+	"crypto/ecdsa"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
+	"encoding/json"
 	"github.com/joonnna/ifrit"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -23,21 +24,22 @@ var (
 	errNoAddr = errors.New("No certificate authority address provided, can't continue")
 )
 
+type Client struct {
+	Name string `json:"name"`
+	Oid  string `json:"oid"`
+}
+
 type Config struct {
-	HostName					string
-	HTTPPort                	int
-	PolicyStoreAddress   		string
-	DirectoryServerAddress  	string
-	LohpiCaAddress 				string
-	Name 						string
-	PostgresSQLConnectionString string
-	DatabaseRetentionInterval	time.Duration
-	AllowMultipleCheckouts 		bool
-	PolicyObserverWorkingDirectory string // interface me
+	SQLConnectionString string 
+
+	// The name of this node
+	Name string
+
+	// If true, a dataset can be checked out multiple times by the same client
+	AllowMultipleCheckouts bool
 }
 
 // TODO: use logrus to create machine-readable logs with fields!
-
 // TODO move me somewhere else. ref gossip.go
 type gossipMessage struct {
 	Content [][]byte
@@ -79,12 +81,9 @@ type NodeCore struct {
 	datasetMap     map[string]*pb.Policy
 	datasetMapLock sync.RWMutex
 
-	listener net.Listener
 	httpServer   *http.Server
 
-	// Azure database
-	datasetCheckoutDB *sql.DB
-	datasetPolicyDB   *sql.DB
+	datasetManager *datasetmanager.DatasetManager
 
 	datasetHandlerLock sync.RWMutex
 	metadataHandlerLock sync.RWMutex
@@ -92,16 +91,33 @@ type NodeCore struct {
 	datasetHandlerFunc clientRequestHandler
 	metadataHandlerFunc clientRequestHandler
 
-	policyObs *policyObserver
+	gossipObs gossipObserver
 }
 
-// Entry of all gossip messages that are observed since the node joined the network
-type policyGossipObservation struct {
-	ArrivedAt time.Time
-	MessageID *pb.GossipMessageID
+type certManager interface {
+	Certificate() *x509.Certificate
+	CaCertificate() *x509.Certificate
+	PrivateKey() *ecdsa.PrivateKey
+	PublicKey() *ecdsa.PublicKey
 }
 
-func NewNodeCore(config *Config) (*NodeCore, error) {
+type gossipObserver interface {
+	AddGossip(g *pb.GossipMessage) error
+	GossipIsObserved(g *pb.GossipMessage) bool
+}
+
+// TODO: add a client entity as argument to the methods in this interface
+type datasetCheckoutManager interface {
+	CheckoutDataset(id string) error
+	CheckinDataset(id string) error
+	DatasetIsChecked(id string) bool
+}
+
+func NewNodeCore(cm certManager, gossipObs gossipObserver, config *Config) (*NodeCore, error) {
+	if config == nil {
+		return nil, errors.New("Configuration is nil")
+	}
+	
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -109,37 +125,22 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 
 	go ifritClient.Start()
 
-	listener, err := netutil.GetListener()
+	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
 	if err != nil {
 		return nil, err
 	}
 
-	pk := pkix.Name{
-		CommonName: config.Name,
-		Locality:   []string{listener.Addr().String()},
-	}
-
-	cu, err := comm.NewCu(pk, config.LohpiCaAddress)
+	psClient, err := comm.NewPolicyStoreClient(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
 	if err != nil {
 		return nil, err
 	}
 
-	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
-	if err != nil {
-		return nil, err
+	// Manages datasets 
+	datasetManagerConfig := &datasetmanager.DatasetManagerConfig{
+		SQLConnectionString: 	config.SQLConnectionString,
+		Reload: 				false,
 	}
-
-	psClient, err := comm.NewPolicyStoreClient(cu.Certificate(), cu.CaCertificate(), cu.Priv())
-	if err != nil {
-		return nil, err
-	}
-
-	// Observers and logs policies as they arrive at the node
-	policyObs, err := newPolicyObserver(&policyObserverConfig{
-		outputDirectory: config.PolicyObserverWorkingDirectory,
-		logfilePrefix: config.Name,
-		capacity: 10,
-	})
+	datasetManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -149,11 +150,10 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 		directoryServerClient:    directoryServerClient,
 		conf:		   			  config,
 		psClient:     			  psClient,
-		listener: 				  listener,
-		cu:           			  cu,
 		datasetMap:     		  make(map[string]*pb.Policy),
 		datasetMapLock: 		  sync.RWMutex{},
-		policyObs: 	  			  policyObs,
+		gossipObs: 	  			  gossipObs,
+		datasetManager: 		  datasetManager,
 	}
 
 	// Initialize the PostgresSQL database
@@ -170,12 +170,6 @@ func NewNodeCore(config *Config) (*NodeCore, error) {
 	return node, nil
 }
 
-func (n *NodeCore) SetConfig(c *Config) {
-	n.configLock.Lock()
-	defer n.configLock.Unlock()
-	n.conf = c
-}
-
 // TODO: restore checkouts from previous runs so that we don't lose information from memory.
 // Especially for checkout datasets 
 func (n *NodeCore) IfritClient() *ifrit.Client {
@@ -186,7 +180,7 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
 // You will have to call this method to make the datasets available to the clients. 
 func (n *NodeCore) IndexDataset(datasetId string) error {
-	if n.datasetExists(datasetId) {
+	if n.datasetManager.DatasetPolicyExists(datasetId) {
 		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the server", datasetId)
 	}
 
@@ -197,7 +191,7 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 	}
 	
 	// Apply the update from policy store to storage
-	if err := n.dbSetObjectPolicy(datasetId, policyResponse.GetContent()); err != nil {
+	if err := n.datasetManager.InsertDatasetPolicy(datasetId, policyResponse); err != nil {
 		return err
 	}
 
@@ -206,14 +200,12 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 		return err
 	}
 
-	n.insertDataset(datasetId, policyResponse)
-
 	return nil
 }
 
 // Removes the dataset policy from the node. The dataset will no longer be available to clients.
-func (n *NodeCore) RemoveDataset(id string) error {
-	return nil
+func (n *NodeCore) RemoveDataset(id string) {
+	n.datasetManager.RemoveDatasetPolicy(id)
 }
 
 // Shuts down the node
@@ -223,9 +215,13 @@ func (n *NodeCore) Shutdown() {
 	// TODO more here
 }
 
-func (n *NodeCore) HandshakeDirectoryServer() error {
-	log.Infof("Performing handshake with directory server at address %s:%s\n", n.config().DirectoryServerAddress)
-	conn, err := n.directoryServerClient.Dial(n.config().DirectoryServerAddress)
+func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
+	if addr == "" {
+		return errors.New("Address is empty")
+	}
+
+	log.Infof("Performing handshake with directory server at address %s\n", addr)
+	conn, err := n.directoryServerClient.Dial(addr)
 	if err != nil {
 		return err
 	}
@@ -257,9 +253,13 @@ func (n *NodeCore) Name() string {
 	return n.config().Name
 }
 
-func (n *NodeCore) HandshakePolicyStore() error {
-	log.Infof("Performing handshake with policy store at address %s:%s\n", n.config().PolicyStoreAddress)
-	conn, err := n.psClient.Dial(n.config().PolicyStoreAddress)
+func (n *NodeCore) HandshakePolicyStore(addr string) error {
+	if addr == "" {
+		return errors.New("Address is empty")
+	}
+
+	log.Infof("Performing handshake with policy store at address %s\n")
+	conn, err := n.psClient.Dial(addr)
 	if err != nil {
 		return err
 	}
@@ -320,10 +320,10 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 
 // TODO finish me
 func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
-	id := msg.GetStringValue()
+	/*id := msg.GetStringValue()
 	if err := n.dbCheckinDataset(id); err != nil {
 		log.Errorln(err.Error())
-	}
+	}*/
 }
 
 // Check all messages in the gossip batch and see which ones we should apply
@@ -353,9 +353,9 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 // Apply the given policy to the correct dataset.
 // TODO: log things better using logrus. 
 func (n *NodeCore) applyPolicy(p *pb.Policy) error {
-	datasetId := p.GetObjectIdentifier()
-	if n.dbDatasetExists(datasetId) {
-		currentPolicy := n.getDatasetEntry(datasetId)
+	datasetId := p.GetDatasetIdentifier()
+	if n.datasetManager.DatasetPolicyExists(datasetId) {
+		currentPolicy := n.datasetManager.DatasetPolicy(datasetId)
 		if currentPolicy == nil {
 			return errors.New("Tried to get current policy but it was nil")
 		}
@@ -365,22 +365,20 @@ func (n *NodeCore) applyPolicy(p *pb.Policy) error {
 			return nil
 		}
 
-		if err := n.dbSetObjectPolicy(datasetId, p.GetContent()); err != nil {
+		if err := n.datasetManager.InsertDatasetPolicy(datasetId, p); err != nil {
 			return err
 		}
-
-		n.insertDataset(datasetId, p)
 
 		// Log deltas in policies to logfile
 		// TODO: put loggers in interfaces?
 		log.Infof("Changed dataset %s's policy to %s\n", datasetId, p.GetContent())
 
 		// Update revocation list. Optimization: don't push update message if policy is reduntant.
-		if n.dbDatasetIsCheckedOutByClient(datasetId) {
+		/*if n.dbDatasetIsCheckedOutByClient(datasetId) {
 			if err := n.pbSendDatasetRevocationUpdate(datasetId, p.GetContent()); err != nil {
 				return err
 			}
-		}
+		}*/
 	} else {
 		return fmt.Errorf("Dataset %s does not exist", datasetId)
 	}
@@ -396,7 +394,8 @@ func (n *NodeCore) clientIsAllowed(r *pb.DatasetRequest) bool {
 		return false
 	}
 
-	return n.dbDatasetIsAvailable(r.GetIdentifier())
+	//return n.dbDatasetIsAvailable(r.GetIdentifier())
+	return true
 }
 
 // Invoked on each received gossip message. 
@@ -417,10 +416,10 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_PROBE:
 		//n.ifritClient.SetGossipContent(data)
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		if !n.policyObs.gossipIsObserved(msg.GetGossipMessage()) {
+/*		if !n.policyObs.gossipIsObserved(msg.GetGossipMessage()) {
 			n.policyObs.addObservedGossip(msg.GetGossipMessage())
 			return n.processPolicyBatch(msg)
-		}
+		}*/
 		
 	default:
 		fmt.Printf("Unknown gossip message type: %s\n", msg.GetType())
@@ -511,8 +510,6 @@ func (n *NodeCore) PbNode() *pb.Node {
 		IfritAddress: 	n.ifritClient.Addr(),
 		Role:         	"Storage node",
 		Id:           	[]byte(n.ifritClient.Id()),
-		HttpsAddress:  	n.config().HostName,
-		Port: 			int32(n.config().HTTPPort),
 	}
 }
 
@@ -543,44 +540,30 @@ func (n *NodeCore) verifyMessageSignature(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) insertDataset(id string, p *pb.Policy) {
-	n.datasetMapLock.Lock()
-	defer n.datasetMapLock.Unlock()
-	n.datasetMap[id] = p
-}
-
-func (n *NodeCore) datasetExists(id string) bool {
-	n.datasetMapLock.RLock()
-	defer n.datasetMapLock.RUnlock()
-	_, ok := n.datasetMap[id]
-	return ok
-}
-
-func (n *NodeCore) removeDataset(id string) {
-	n.datasetMapLock.Lock()
-	defer n.datasetMapLock.Unlock()
-	delete(n.datasetMap, id)
-}
-
-func (n *NodeCore) getDatasetMap() map[string]*pb.Policy {
-	n.datasetMapLock.RLock()
-	defer n.datasetMapLock.RUnlock()
-	return n.datasetMap
-}
-
-func (n *NodeCore) getDatasetEntry(id string) *pb.Policy {
-	n.datasetMapLock.RLock()
-	defer n.datasetMapLock.RUnlock()
-	return n.datasetMap[id]
-}
-
-func (n *NodeCore) datasetIdentifiers() []string {
-	ids := make([]string, 0)
-	m := n.getDatasetMap()
-	for id := range m {
-		ids = append(ids, id)
+func (n *NodeCore) jwtTokenToPbClient(token string) (*pb.Client, error) {
+	if token == "" {
+		return nil, errors.New("Token string is empty")
 	}
-	return ids
+
+	msg, err := jws.ParseString(token)
+	if err != nil {
+		return nil, err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return nil, errors.New("Payload was nil")
+	}
+
+	c := &Client{}
+	if err := json.Unmarshal(s, &c); err != nil {
+		return nil, err
+	}
+
+	return &pb.Client{
+		Name: c.Name,
+		ID: []byte(c.Oid),
+	}, nil
 }
 
 // Use this to refer to configuration variables

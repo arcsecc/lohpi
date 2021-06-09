@@ -120,7 +120,7 @@ func NewPolicyStoreCore(config *Config) (*PolicyStoreCore, error) {
 		return nil, err
 	}
 
-	s, err := newPolicyStoreGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.Priv(), listener)
+	s, err := newPolicyStoreGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.PrivateKey(), listener)
 	if err != nil {
 		return nil, err
 	}
@@ -362,10 +362,16 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 					return nil, err
 				}
 
+				b, err := strconv.ParseBool(policyString)
+				if err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+
 				newPolicy := &pb.Policy{
 					Issuer:           ps.PolicyStoreConfig().Name,
-					ObjectIdentifier: msg.GetPolicyRequest().GetIdentifier(),
-					Content:          policyString,
+					DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),
+					Content:          b,
 				}
 				ps.setDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy)
 				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
@@ -398,8 +404,8 @@ func (ps *PolicyStoreCore) getInitialDatasetPolicy(policyReq *pb.PolicyRequest) 
 	
 	return &pb.Policy{
 		Issuer:           ps.PolicyStoreConfig().Name,
-		ObjectIdentifier: policyReq.GetIdentifier(),
-		Content:          strconv.FormatBool(false),
+		DatasetIdentifier: policyReq.GetIdentifier(),
+		Content:          false,
 	}, nil
 }
 
