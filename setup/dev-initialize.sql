@@ -25,10 +25,11 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'directory_server_db')
 GRANT ALL PRIVILEGES ON DATABASE dataset_policy_db TO lohpi_dev_user;
 GRANT ALL PRIVILEGES ON DATABASE directory_server_db TO lohpi_dev_user;
 
+-- Not working
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO lohpi_dev_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO lohpi_dev_user;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO lohpi_dev_user;
+
 ALTER ROLE "lohpi_dev_user" WITH LOGIN;
 
 
---????????
--- Create directory server database 
---SELECT 'CREATE DATABASE directory_server_db'
---WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'directory_server_db')\gexec

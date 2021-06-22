@@ -125,7 +125,7 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
 	// Initialize the PostgreSQL directory server database
-	if err := ds.initializeDirectorydb(config.PostgresSQLConnectionString); err != nil {
+	if err := ds.initializeDirectorydb("user=lohpi_dev_user password=password! dbname=directory_server_db sslmode=disable"/*config.PostgresSQLConnectionString*/); err != nil {
 		panic(err)
 		return nil, err
 	}

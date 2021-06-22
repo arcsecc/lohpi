@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	//"encoding/json"
 	//"errors"
-	//"fmt"
+	"fmt"
 	//"github.com/lestrrat-go/jwx/jws"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
@@ -27,12 +27,13 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 	}
 	
 	// Create schema
-	if err := d.createSchema(connectionString); err != nil { // Error here
+	if err := d.createSchema(connectionString); err != nil {  // No permission here
+		log.Warnln("here")
 		return err
 	}
 
 	// Dataset table
-	if err := d.initializeDatasetTable(connectionString); err != nil { // Somewhere here
+	if err := d.initializeDatasetTable(connectionString); err != nil { 
 		return err
 	}
 
@@ -40,7 +41,7 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 	if err := d.initializeCheckoutTable(connectionString); err != nil {
 		return err
 	}
-
+	
 	return nil
 }
 
@@ -84,8 +85,9 @@ func (d *DirectoryServerCore) initializeCheckoutTable(connectionString string) e
 		dataset_id VARCHAR(200),
 		t_stamp TIMESTAMP
 		);`
-		
+	fmt.Println("here1")
 	db, err := sql.Open("postgres", connectionString)
+	fmt.Println("here2")
 	if err != nil {
 		return err
 	}
@@ -112,7 +114,7 @@ func (d *DirectoryServerCore) createSchema(connectionString string) error {
 		return err
 	}
 	if err := db.Ping(); err != nil {		// Error here ("SSL is not enabled on the server")
-		log.Warnln("here")
+		panic(err)
 		return err
 	}
 	_, err = db.Exec(q)

@@ -42,7 +42,9 @@ func main() {
 	var err error
 	
 	if createNew {
+		fmt.Printf("1\n")
 		opts := getDirectoryServerConfiguration()
+		fmt.Printf("2\n")
 		d, err = lohpi.NewDirectoryServer(opts...)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
