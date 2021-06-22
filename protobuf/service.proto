@@ -93,7 +93,10 @@ message MetadataResponse {
 message Policy {
     string issuer = 1;
     string objectIdentifier = 2;
-    string content = 3; // Policy details. See Casbin policy 
+    string content = 3; // Acutal policy content
+    uint64 version = 4; // Version number set by policy store when a new policy is set.
+    google.protobuf.Timestamp DateCreated = 5; // Time of creation of policy. Timezone?
+    //google.protobuf.Timestamp DateApplied = 5; // Set by recipient when policy is applied.
 }
 
 message MsgSignature {
@@ -110,16 +113,20 @@ message HandshakeResponse {
 message GossipMessage {
     string Sender = 1;              // Who sent it?
     string MessageType = 2;         // Gossip or probing?
-    google.protobuf.Timestamp timestamp = 3; // Time at policy store, to keep track of messages     
+    google.protobuf.Timestamp DateSent = 3; // Time at policy store, to keep track of messages     
     MsgSignature signature = 4;
-    repeated GossipMessageBody gossipMessageBody = 5;   
+    repeated GossipMessageBody gossipMessageBody = 5; //!
+    GossipMessageID gossipMessageID = 6; //!
+}
+
+message GossipMessageID {
+    string PolicyStoreID = 1;
+    int32 SequenceNumber = 6; // increased every time a batch is sent. Has to be retained
 }
 
 message GossipMessageBody {
-    string objectId = 1;          // subject or study. Appliy the policy to the object
-    uint64 version = 2;         // Version numbering 
-    Policy policy = 3;
-    google.protobuf.Timestamp timestamp = 4; // Time at policy store at the time of arrival
+    Policy policy = 1;
+    // probe!
 }
 
 message Probe {

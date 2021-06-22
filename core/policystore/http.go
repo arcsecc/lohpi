@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (ps *PolicyStoreCore) startHttpServer(addr string) error {
@@ -272,10 +273,18 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var version uint64 = 1
+	// Get the latest policy and increment the version number by one.
+	if currentPolicy := ps.getDatasetPolicy(datasetId); currentPolicy != nil {
+		version = currentPolicy.GetVersion()
+	} 
+
 	policy := &pb.Policy{
-		Issuer:           ps.PolicyStoreConfig().Name,
+		Issuer:           ps.PolicyStoreConfig().Name, // should get name of client instead
 		ObjectIdentifier: datasetId,
 		Content:          strconv.FormatBool(reqBody.Policy),
+		Version: 		  version + 1,
+		DateCreated: 	  pbtime.Now(),
 	}
 
 	// Store the dataset entry in map

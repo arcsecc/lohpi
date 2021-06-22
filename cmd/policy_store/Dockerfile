@@ -26,9 +26,9 @@ RUN go mod download
 COPY ./policy.go ./policy.go
 COPY ./core ./core
 COPY ./protobuf ./protobuf
-COPY ./cmd/policy_store/launcher.go ./cmd/policy_store/launcher.go
-COPY ./cmd/policy_store/lohpi_config.yaml ./cmd/policy_store/lohpi_config.yaml
-RUN go build -o policy_store ./cmd/policy_store/launcher.go
+COPY ./cmd/dataverse/policy_store/launcher.go ./cmd/dataverse/policy_store/launcher.go
+COPY ./cmd/dataverse/policy_store/lohpi_config.yaml ./cmd/dataverse/policy_store/lohpi_config.yaml
+RUN go build -o policy_store ./cmd/dataverse/policy_store/launcher.go
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
@@ -44,8 +44,8 @@ COPY --from=builder /dist/policy_store /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy the configuration files
-COPY ./cmd/policy_store/ifrit_config.yaml /var/tmp/ifrit_config.yaml
-COPY ./cmd/policy_store/lohpi_config.yaml .
+COPY ./cmd/dataverse/policy_store/ifrit_config.yaml /var/tmp/ifrit_config.yaml
+COPY ./cmd/dataverse/policy_store/lohpi_config.yaml .
 
 # Command to run the executable
 ENTRYPOINT ["/policy_store"]

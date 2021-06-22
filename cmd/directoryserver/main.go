@@ -16,6 +16,12 @@ var config = struct {
 	HTTPPort   				int     `default:"8080"`
 	GRPCPort 				int     `default:"8081"`
 	LohpiCaAddr 			string 	`default:"127.0.1.1:8301"`
+	AzureKeyVaultName 	string 		`required:"true"`
+	AzureKeyVaultSecret	string		`required:"true"`
+	AzureClientSecret	string 		`required:"true"`
+	AzureClientID		string		`required:"true"`
+	AzureKeyVaultBaseURL string		`required:"true"`
+	AzureTenantID		string		`required:"true"`
 }{}
 
 func main() {
@@ -23,11 +29,14 @@ func main() {
 	var createNew bool
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&configFile, "c", "lohpi_config.yaml", "Directory server's configuration file.")
+	args.StringVar(&configFile, "c", "lohpi_config/lohpi_config.dev.yaml", "Directory server's configuration file.")
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi directory server instance.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "DIRECTORYSERVER"}).Load(&config, configFile)
+	configor.New(&configor.Config{
+		Debug: true, 
+		ENVPrefix: "DIRECTORYSERVER", 
+		ErrorOnUnmatchedKeys: true}).Load(&config, configFile)
 
 	var d *lohpi.DirectoryServer
 	var err error
@@ -54,8 +63,14 @@ func main() {
 }
 
 func getDirectoryServerConfiguration() []lohpi.DirectoryServerOption {
+	constring, err := getDatabaseConnectionString()
+	if err != nil {
+		panic(err)
+	}
+
 	return []lohpi.DirectoryServerOption{
 		lohpi.DirectoryServerWithHTTPPort(config.HTTPPort),
+		lohpi.DirectoryServerWithConnectionString(constring),
 	}	
 }
 
@@ -76,4 +91,31 @@ func initializeLogging(logToFile bool) error {
 	}
 
 	return nil
+}
+
+func getDatabaseConnectionString() (string, error) {
+	fmt.Println("FOO")
+	kvClient, err := newAzureKeyVaultClient()
+	if err != nil {
+		return "", err
+	}
+
+	fmt.Println("BAR")
+	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
+	if err != nil {
+		log.Warnln(err)
+		return "", err
+	}
+	fmt.Println(resp.Value)
+	return resp.Value, nil
+}
+
+func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
+	c := &lohpi.AzureKeyVaultClientConfig{
+		AzureKeyVaultClientID:     config.AzureClientID,
+		AzureKeyVaultClientSecret: config.AzureClientSecret,
+		AzureKeyVaultTenantID:     config.AzureTenantID,
+	}
+
+	return lohpi.NewAzureKeyVaultClient(c)
 }

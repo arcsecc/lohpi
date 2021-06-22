@@ -38,6 +38,8 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/metadata/{id:.*}", d.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", d.getDataset).Methods("GET")
 	dRouter.HandleFunc("/verify/{id:.*}", d.getDatasetPolicyVerification).Methods("GET")
+	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
+	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
 
 	// Middlewares used for validation
 	//dRouter.Use(d.middlewareValidateTokenSignature)
@@ -59,6 +61,95 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 	return d.httpServer.ListenAndServe()
 }
+
+
+// Sets project description for the dataset given as 'id'
+func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	
+	/* Front end needs to send in json object with project description, with application/json in header */
+	clientReq := struct {
+		ProjectDescription string `json:"project_description"`
+	}{}
+
+	if err := util.DecodeJSONBody(w, r, "application/json", clientReq); err != nil {
+		panic(err)
+	}
+
+	log.Println(clientReq.ProjectDescription)
+
+	dataset := mux.Vars(r)["id"]
+	if dataset == "" {
+		errMsg := fmt.Errorf("Missing dataset identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check if dataset is known to network
+	node := d.memCache.DatasetNodes()[dataset]
+	if node == nil {
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+	// Project description as argument to updatePD, string?
+	if err := d.updateProjectDescription(dataset, clientReq.ProjectDescription); err != nil {
+		panic(err)
+	}
+}
+
+// Gets project description form the dataset given as 'id'
+func (d *DirectoryServerCore) getProjectDescription(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	dataset := mux.Vars(r)["id"]
+	if dataset == "" {
+		errMsg := fmt.Errorf("Missing dataset identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check if dataset is known to network
+	node := d.memCache.DatasetNodes()[dataset]
+	if node == nil {
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Project description as argument to updatePD, string?
+	pd, err := d.getProjectDescriptionDB(dataset)
+	if err != nil {
+		panic(err)
+	}
+
+	response := struct {
+		ProjectDescription string `json:"project_description"`
+	}{
+		ProjectDescription:	pd,
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(response); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err = w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 
 func (d *DirectoryServerCore) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())

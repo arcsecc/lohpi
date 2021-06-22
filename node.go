@@ -1,9 +1,9 @@
 package lohpi
 
 import (
-	"github.com/arcsecc/lohpi/core/node"
-	"github.com/pkg/errors"
 	"net/http"
+	"github.com/pkg/errors"
+	"github.com/arcsecc/lohpi/core/node"
 	"time"
 )
 
@@ -16,15 +16,15 @@ type NodeOption func(*Node)
 
 type Node struct {
 	nodeCore *node.NodeCore
-	conf     *node.Config
+	conf *node.Config
 }
 
 type Dataset struct {
-	DatasetURL  string
+	DatasetURL string
 	MetadataURL string
 }
 
-// Sets the HTTP port of the node that
+// Sets the HTTP port of the node that exposes the RESP API. If not set, the port will be chosen at random.
 func NodeWithHTTPPort(port int) NodeOption {
 	return func(n *Node) {
 		n.conf.HTTPPort = port
@@ -70,7 +70,7 @@ func NodeWithPostgresSQLConnectionString(s string) NodeOption {
 }
 
 // Sets the backup retention time to d. At each d, the in-memory caches are flushed
-// to the database. If set to 0, flushing never occurs.
+// to the database. If set to 0, flushing never occurs. 
 func NodeWithBackupRetentionTime(t time.Duration) NodeOption {
 	return func(n *Node) {
 		n.conf.DatabaseRetentionInterval = t
@@ -98,6 +98,13 @@ func NodeWithHostName(hostName string) NodeOption {
 	}
 }
 
+// Sets the working directory of the policy logging. Default value is the current working directory.
+func NodeWithPolicyObserverWorkingDirectory(dir string) NodeOption {
+	return func(n *Node) {
+		n.conf.PolicyObserverWorkingDirectory = dir
+	}
+}
+
 // Applies the options to the node.
 // NOTE: no locking is performed. Beware of undefined behaviour. Check that previous connections are still valid.
 // SHOULD NOT be called.
@@ -107,36 +114,39 @@ func (n *Node) ApplyConfigurations(opts ...NodeOption) {
 	}
 }
 
+// TODO: consider using intefaces
 func NewNode(opts ...NodeOption) (*Node, error) {
 	const (
-		defaultHTTPPort                    = 8090
-		defaultPolicyStoreAddress          = "127.0.1.1"
-		defaultPolicyStoreGRPCPport        = 8084
-		defaultDirectoryServerAddress      = "127.0.1.1"
-		defaultDirectoryServerGPRCPort     = 8081
-		defaultLohpiCaAddress              = "127.0.1.1"
-		defaultLohpiCaPort                 = 8301
-		defaultName                        = "Node identifier"
+		defaultHTTPPort = -1
+		defaultPolicyStoreAddress = "127.0.1.1"
+		defaultPolicyStoreGRPCPport = 8084
+		defaultDirectoryServerAddress = "127.0.1.1"
+		defaultDirectoryServerGPRCPort = 8081
+		defaultLohpiCaAddress = "127.0.1.1"
+		defaultLohpiCaPort = 8301
+		defaultName = "Node identifier"
 		defaultPostgresSQLConnectionString = ""
-		defaultDatabaseRetentionInterval   = time.Duration(0) // A LOT MORE TO DO HERE
-		defaultAllowMultipleCheckouts      = false
-		defaultHostName                    = "127.0.1.1"
+		defaultDatabaseRetentionInterval = time.Duration(0)	// A LOT MORE TO DO HERE
+		defaultAllowMultipleCheckouts = false
+		defaultHostName = "127.0.1.1"
+		defaultPolicyObserverWorkingDirectory = "."
 	)
 
 	// Default configuration
 	conf := &node.Config{
-		HostName:                    defaultHostName,
-		HTTPPort:                    defaultHTTPPort,
-		PolicyStoreAddress:          defaultPolicyStoreAddress,
-		PolicyStoreGRPCPport:        defaultPolicyStoreGRPCPport,
-		DirectoryServerAddress:      defaultDirectoryServerAddress,
-		DirectoryServerGPRCPort:     defaultDirectoryServerGPRCPort,
-		LohpiCaAddress:              defaultLohpiCaAddress,
-		LohpiCaPort:                 defaultLohpiCaPort,
-		Name:                        defaultName,
+		HostName: defaultHostName,
+		HTTPPort: defaultHTTPPort,
+		PolicyStoreAddress: defaultPolicyStoreAddress,
+		PolicyStoreGRPCPport: defaultPolicyStoreGRPCPport,
+		DirectoryServerAddress: defaultDirectoryServerAddress,
+		DirectoryServerGPRCPort: defaultDirectoryServerGPRCPort,
+		LohpiCaAddress: defaultLohpiCaAddress,
+		LohpiCaPort: defaultLohpiCaPort,
+		Name: defaultName,
 		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
-		DatabaseRetentionInterval:   defaultDatabaseRetentionInterval,
-		AllowMultipleCheckouts:      defaultAllowMultipleCheckouts,
+		DatabaseRetentionInterval: defaultDatabaseRetentionInterval,
+		AllowMultipleCheckouts: defaultAllowMultipleCheckouts,
+		PolicyObserverWorkingDirectory: defaultPolicyObserverWorkingDirectory,
 	}
 
 	n := &Node{
@@ -160,7 +170,7 @@ func NewNode(opts ...NodeOption) (*Node, error) {
 }
 
 // IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
-// it will return when policy requests to the policy store finish.
+// it will return when policy requests to the policy store finish. 
 func (n *Node) IndexDataset(datasetId string) error {
 	if datasetId == "" {
 		return errNoDatasetId
@@ -188,7 +198,7 @@ func (n *Node) RemoveDataset(id string) error {
 	if id == "" {
 		return errNoDatasetId
 	}
-
+	
 	return n.nodeCore.RemoveDataset(id)
 }
 
@@ -197,8 +207,9 @@ func (n *Node) Shutdown() {
 	n.nodeCore.Shutdown()
 }
 
-// Joins the network by starting the underlying Ifrit node. It performs handshakes
-// with the policy store and multiplexer at known addresses. In addition, the HTTP server will start as well.
+// Joins the network by starting the underlying Ifrit node. It must be called before any other function;
+// communicating with other nodes in the network will fail. The call performs handshakes with the policy store 
+// and directory server at known addresses.
 func (n *Node) JoinNetwork() error {
 	return n.nodeCore.JoinNetwork()
 }
@@ -211,4 +222,9 @@ func (n *Node) IfritAddress() string {
 // Returns the string representation of the node.
 func (n *Node) String() string {
 	return ""
+}
+
+// Returns the name of the node.
+func (n *Node) Name() string {
+	return n.nodeCore.Name()
 }

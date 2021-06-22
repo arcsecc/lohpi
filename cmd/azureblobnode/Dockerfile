@@ -23,14 +23,14 @@ COPY ./node.go ./node.go
 COPY ./keyvault.go ./keyvault.go
 COPY ./core ./core
 COPY ./protobuf ./protobuf
-COPY ./cmd/azureblobnode/launcher.go ./cmd/azureblobnode/launcher.go
+COPY ./cmd/dataverse/node/launcher.go ./cmd/dataverse/node/launcher.go
 
 # Run test
 #RUN go test ./...
 
 # Build the application
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-RUN go build -o node ./cmd/azureblobnode/launcher.go
+RUN go build -o node ./cmd/dataverse/node/launcher.go
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
@@ -46,9 +46,9 @@ COPY --from=builder /dist/node /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy the configuration files
-COPY ./cmd/azureblobnode/ifrit_config.yaml /var/tmp/ifrit_config.yaml
-COPY ./cmd/azureblobnode/lohpi_config/lohpi_config.dev.yaml ./lohpi_config/lohpi_config.dev.yaml
-COPY ./cmd/azureblobnode/lohpi_config/lohpi_config.yaml ./lohpi_config/lohpi_config.yaml
+COPY ./cmd/dataverse/node/ifrit_config.yaml /var/tmp/ifrit_config.yaml
+COPY ./cmd/dataverse/node/lohpi_config/lohpi_config.dev.yaml ./lohpi_config/lohpi_config.dev.yaml
+COPY ./cmd/dataverse/node/lohpi_config/lohpi_config.yaml ./lohpi_config/lohpi_config.yaml
 
 # Command to run the executable
 ENTRYPOINT ["/node"]

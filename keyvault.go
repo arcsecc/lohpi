@@ -1,6 +1,7 @@
 package lohpi
 
 import (
+	log "github.com/sirupsen/logrus"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -68,9 +69,12 @@ func NewAzureKeyVaultClient(config *AzureKeyVaultClientConfig) (*AzureKeyVaultCl
 		return nil, err
 	}
 
-	if len(string(body)) < 1 {
-		return nil, fmt.Errorf("Response from Azure Key Vault is empty")
-	}
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        log.Fatal(err)
+    }
+    bodyString := string(bodyBytes)
+    log.Infof("bodyString: %+v\n", bodyString)
 
 	var tr tokenResponse
 	errUnMarshal := json.Unmarshal(body, &tr)

@@ -25,7 +25,7 @@ type Config struct {
 
 type PolicyStoreOption func(*PolicyStore)
 
-// Sets the name of the policy store. Default value is "".
+// Sets the name of the policy store. Default value is "". 
 func PolicyStoreWithName(name string) PolicyStoreOption {
 	return func(p *PolicyStore) {
 		p.config.Name = name
@@ -107,39 +107,39 @@ type PolicyStore struct {
 
 func NewPolicyStore(opts ...PolicyStoreOption) (*PolicyStore, error) {
 	const (
-		defaultName                     = ""
-		defaultHost                     = "127.0.1.1"
-		defaultPolicyBatchSize          = 10
-		defaultGossipInterval           = 5 * time.Second
-		defaultHTTPPort                 = 8083
-		defaultGRPCPort                 = 8084
+		defaultName = ""
+		defaultHost = "127.0.1.1"
+		defaultPolicyBatchSize = 10
+		defaultGossipInterval = 5 * time.Second
+		defaultHTTPPort = 8083
+		defaultGRPCPort = 8084
 		defaultMulticastAcceptanceLevel = 0.5
-		defaultDirectRecipients         = 1
-		defaultDirectoryServerAddress   = "127.0.1.1"
-		defaultDirectoryServerGPRCPort  = 8081
-		defaultLohpiCaAddress           = "127.0.1.1"
-		defaultLohpiCaPort              = 8301
-		defaultGitRepositoryPath        = "policy_store_repository"
+		defaultDirectRecipients = 1
+		defaultDirectoryServerAddress = "127.0.1.1"
+		defaultDirectoryServerGPRCPort = 8081
+		defaultLohpiCaAddress = "127.0.1.1"
+		defaultLohpiCaPort = 8301
+		defaultGitRepositoryPath = "policy_store_repository"
 	)
 
 	config := &policystore.Config{
-		Name:                     defaultName,
-		Host:                     defaultHost,
-		PolicyBatchSize:          defaultPolicyBatchSize,
-		GossipInterval:           defaultGossipInterval,
-		HTTPPort:                 defaultHTTPPort,
-		GRPCPort:                 defaultGRPCPort,
+		Name: defaultName,
+		Host: defaultHost,
+		PolicyBatchSize: defaultPolicyBatchSize,
+		GossipInterval: defaultGossipInterval,
+		HTTPPort: defaultHTTPPort,
+		GRPCPort: defaultGRPCPort,
 		MulticastAcceptanceLevel: defaultMulticastAcceptanceLevel,
-		DirectRecipients:         defaultDirectRecipients,
-		LohpiCaAddress:           defaultLohpiCaAddress,
-		DirectoryServerAddress:   defaultDirectoryServerAddress,
-		LohpiCaPort:              defaultLohpiCaPort,
-		GitRepositoryPath:        defaultGitRepositoryPath,
+		DirectRecipients: defaultDirectRecipients,
+		LohpiCaAddress: defaultLohpiCaAddress,
+		DirectoryServerAddress: defaultDirectoryServerAddress,
+		LohpiCaPort: defaultLohpiCaPort,
+		GitRepositoryPath: defaultGitRepositoryPath,
 	}
 
 	p := &PolicyStore{
 		config: config,
-	}
+	}	
 
 	for _, opt := range opts {
 		opt(p)

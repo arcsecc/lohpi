@@ -6,6 +6,7 @@ import (
 
 type DirectoryServerOption func(*DirectoryServer)
 
+
 // Sets the directory server's HTTP server port to port. Default value is 8080.
 func DirectoryServerWithHTTPPort(port int) DirectoryServerOption {
 	return func(d *DirectoryServer) {
@@ -21,7 +22,7 @@ func DirectoryServerWithLohpiCaConnectionString(addr string, port int) Directory
 	}
 }
 
-// Sets the directory server's gRPC port to port. Default value is 8081.
+// Sets the directory server's gRPC port to port. Default value is 8081. 
 func DirectoryServerWithGRPCPport(port int) DirectoryServerOption {
 	return func(d *DirectoryServer) {
 		d.conf.GRPCPort = port
@@ -42,34 +43,42 @@ func DirectoryServerWithPrivateKey(privateKeyFile string) DirectoryServerOption 
 	}
 }
 
+func DirectoryServerWithConnectionString( connectionString string) DirectoryServerOption {
+	return func( d *DirectoryServer) {
+		d.conf.PostgresSQLConnectionString = connectionString
+	}
+}
+
 // TODO: enable ifrit config in the similar way
 
 type DirectoryServer struct {
 	dsCore *directoryserver.DirectoryServerCore
-	conf   *directoryserver.Config
+	conf *directoryserver.Config
 }
 
-// Returns a new DirectoryServer using the given directory server options. Returns a non-nil error, if any.
+// Returns a new DirectoryServer using the given directory server options. Returns a non-nil error, if any. 
 func NewDirectoryServer(opts ...DirectoryServerOption) (*DirectoryServer, error) {
 	const (
-		defaulthttpPort        = 8080
-		defaultGrpcPort        = 8081
-		defaultLohpiCaAddr     = "127.0.1.1"
-		defaultLohpiCaPort     = 8301
-		defaultUseTLS          = false
+		defaulthttpPort = 8080
+		defaultGrpcPort = 8081
+		defaultLohpiCaAddr = "127.0.1.1"
+		defaultLohpiCaPort = 8301
+		defaultUseTLS = false
 		defaultCertificateFile = ""
-		defaultPrivateKey      = ""
+		defaultPrivateKey = ""
+		defaultPostgresSQLConnectionString = ""
 	)
 
 	// Default configuration
 	conf := &directoryserver.Config{
-		HTTPPort:        defaulthttpPort,
-		GRPCPort:        defaultGrpcPort,
-		LohpiCaAddress:  defaultLohpiCaAddr,
-		LohpiCaPort:     defaultLohpiCaPort,
-		UseTLS:          defaultUseTLS,
+		HTTPPort: defaulthttpPort,
+		GRPCPort: defaultGrpcPort,
+		LohpiCaAddress: defaultLohpiCaAddr,
+		LohpiCaPort: defaultLohpiCaPort,
+		UseTLS: defaultUseTLS,
 		CertificateFile: defaultCertificateFile,
-		PrivateKeyFile:  defaultPrivateKey,
+		PrivateKeyFile: defaultPrivateKey,
+		PostgresSQLConnectionString: defaultPostgresSQLConnectionString,
 	}
 
 	ds := &DirectoryServer{
@@ -89,8 +98,8 @@ func NewDirectoryServer(opts ...DirectoryServerOption) (*DirectoryServer, error)
 
 	return ds, nil
 }
-
-// Starts the directory server by running the Ifrit server, gRPC server and HTTP server. The call will return when
+ 
+// Starts the directory server by running the Ifrit server, gRPC server and HTTP server. The call will return when 
 // these services have been started.
 func (d *DirectoryServer) Start() {
 	d.dsCore.Start()
