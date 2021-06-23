@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	//"encoding/json"
 	//"errors"
-	"fmt"
+	//"fmt"
 	//"github.com/lestrrat-go/jwx/jws"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
@@ -27,8 +27,7 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 	}
 	
 	// Create schema
-	if err := d.createSchema(connectionString); err != nil {  // No permission here
-		log.Warnln("here")
+	if err := d.createSchema(connectionString); err != nil {  
 		return err
 	}
 
@@ -49,9 +48,7 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 // TODO: refine this to perform boolean operations as a temp fix
 func (d *DirectoryServerCore) initializeDatasetTable(connectionString string) error {
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetTable + ` (
-		serial_id SERIAL PRIMARY KEY,		
-		dataset_id VARCHAR(200),
-
+		dataset_id VARCHAR(200) PRIMARY KEY,
 		project_description VARCHAR(10000),	
 		size INT
 		);`
@@ -85,9 +82,9 @@ func (d *DirectoryServerCore) initializeCheckoutTable(connectionString string) e
 		dataset_id VARCHAR(200),
 		t_stamp TIMESTAMP
 		);`
-	fmt.Println("here1")
+
 	db, err := sql.Open("postgres", connectionString)
-	fmt.Println("here2")
+
 	if err != nil {
 		return err
 	}
@@ -107,7 +104,7 @@ func (d *DirectoryServerCore) initializeCheckoutTable(connectionString string) e
 
 // Creates the schema, given the connection string
 func (d *DirectoryServerCore) createSchema(connectionString string) error {
-	log.Println("connectionString:", connectionString)
+
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
 	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
@@ -129,10 +126,10 @@ func (d *DirectoryServerCore) createSchema(connectionString string) error {
 // Insert datasetId into database, called from `directoryservercore.go, line 162`
 func (d *DirectoryServerCore) dbInsertDataset(dataSetId string) error {
 	q := `INSERT INTO ` + schemaName + `.` + datasetTable + `
-		(c_id) VALUES ($1)
+		(dataset_id) VALUES ($1)
 		ON CONFLICT (dataset_id) 
 		DO
-			UPDATE SET c_id = $1;`
+			UPDATE SET dataset_id = $1;`
 	_, err := d.datasetDB.Exec(q, dataSetId)
 	if err != nil {
 		return err
@@ -143,9 +140,12 @@ func (d *DirectoryServerCore) dbInsertDataset(dataSetId string) error {
 
 func (d *DirectoryServerCore) updateProjectDescription(id string, project_description string) error {
 
-	q := `UPDATE ` + schemaName + `.` + datasetTable + ` 
-	SET project_description = $2 
-	WHERE dataset_id = $1;`
+	q := `INSERT INTO ` + schemaName + `.` + datasetTable + ` 
+	(dataset_id, project_description) VALUES ($1, $2)
+	ON CONFLICT (dataset_id)
+	DO
+		UPDATE SET project_description = $2;`
+
 
 	_, err := d.datasetDB.Exec(q, id, project_description)
 	if err != nil {
@@ -166,19 +166,18 @@ func (d *DirectoryServerCore) getProjectDescriptionDB(id string) (string, error)
 	}
 	defer rows.Close()
 
-	var project_description string
-	for rows.Next() {
-		if err := rows.Scan(&project_description); err != nil {
-			panic(err)
-			log.Errorln(err.Error())
-			return "", err
-		}
-	}
-
 	if err := rows.Err(); err != nil {
 		log.Errorln(err.Error())
 		return "", err
 	}
 
-	return project_description, nil
+	var project_description sql.NullString
+	for rows.Next() {
+		if err := rows.Scan(&project_description); err != nil {
+			log.Errorln(err.Error())
+			return "", err
+		}
+	}
+
+	return project_description.String, nil
 }

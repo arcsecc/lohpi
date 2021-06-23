@@ -96,19 +96,16 @@ func initializeLogging(logToFile bool) error {
 }
 
 func getDatabaseConnectionString() (string, error) {
-	fmt.Println("FOO")
 	kvClient, err := newAzureKeyVaultClient()
 	if err != nil {
 		return "", err
 	}
 
-	fmt.Println("BAR")
 	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
 	if err != nil {
 		log.Warnln(err)
 		return "", err
 	}
-	fmt.Println(resp.Value)
 	return resp.Value, nil
 }
 

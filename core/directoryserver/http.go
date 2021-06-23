@@ -72,11 +72,9 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 		ProjectDescription string `json:"project_description"`
 	}{}
 
-	if err := util.DecodeJSONBody(w, r, "application/json", clientReq); err != nil {
+	if err := util.DecodeJSONBody(w, r, "application/json", &clientReq); err != nil {
 		panic(err)
 	}
-
-	log.Println(clientReq.ProjectDescription)
 
 	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
@@ -93,6 +91,7 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
+
 	// Project description as argument to updatePD, string?
 	if err := d.updateProjectDescription(dataset, clientReq.ProjectDescription); err != nil {
 		panic(err)
