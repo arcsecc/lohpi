@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
-	"github.com/arcsecc/lohpi/core/node/datasetmanager"
 	"crypto/x509"
 	"crypto/ecdsa"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -57,6 +56,8 @@ type NodeCore struct {
 	// Underlying ifrit client
 	ifritClient *ifrit.Client
 
+	exitChan chan bool
+
 	// Crypto unit
 	cu *comm.CryptoUnit
 
@@ -83,15 +84,17 @@ type NodeCore struct {
 
 	httpServer   *http.Server
 
-	datasetManager *datasetmanager.DatasetManager
-
 	datasetHandlerLock sync.RWMutex
 	metadataHandlerLock sync.RWMutex
 
 	datasetHandlerFunc clientRequestHandler
 	metadataHandlerFunc clientRequestHandler
 
+	dsManager datasetManager
 	gossipObs gossipObserver
+	stateSync stateSyncer
+	
+	joinTime time.Time
 }
 
 type certManager interface {
@@ -104,16 +107,33 @@ type certManager interface {
 type gossipObserver interface {
 	AddGossip(g *pb.GossipMessage) error
 	GossipIsObserved(g *pb.GossipMessage) bool
+	LatestGossip() *pb.GossipMessageID // TODO fix me!
 }
 
 // TODO: add a client entity as argument to the methods in this interface
-type datasetCheckoutManager interface {
-	CheckoutDataset(id string) error
-	CheckinDataset(id string) error
-	DatasetIsChecked(id string) bool
+type datasetManager interface {
+	Dataset(datasetId string) *pb.Dataset
+	Datasets() map[string]*pb.Dataset
+	DatasetIdentifiers() []string
+	DatasetExists(datasetId string) bool
+	RemoveDataset(datasetId string)
+	DatasetIsAvailable(datasetId string) (bool, error)
+	DatasetIsCheckedOut(datasetId string, client *pb.Client) bool
+	DatasetPolicy(datasetId string) *pb.Policy
+	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
+	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
+	DatasetCheckouts(datasetId string) ([]*pb.Dataset, error)
+	InsertDataset(datasetId string, dataset *pb.Dataset) error
+	SetDatasetPolicies(datasetMap map[string]*pb.Dataset) error
 }
 
-func NewNodeCore(cm certManager, gossipObs gossipObserver, config *Config) (*NodeCore, error) {
+type stateSyncer interface {
+	RegisterIfritClient(client *ifrit.Client) 
+	SynchronizeDatasetIdentifiers(ctx context.Context, datasetIdentifiers []string, remoteAddr string) error
+	IsSyncing() bool
+}
+
+func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetManager, stateSync stateSyncer, config *Config) (*NodeCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration is nil")
 	}
@@ -135,16 +155,6 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, config *Config) (*Nod
 		return nil, err
 	}
 
-	// Manages datasets 
-	datasetManagerConfig := &datasetmanager.DatasetManagerConfig{
-		SQLConnectionString: 	config.SQLConnectionString,
-		Reload: 				false,
-	}
-	datasetManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
-	if err != nil {
-		return nil, err
-	}
-
 	node := &NodeCore{
 		ifritClient:  			  ifritClient,
 		directoryServerClient:    directoryServerClient,
@@ -153,12 +163,16 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, config *Config) (*Nod
 		datasetMap:     		  make(map[string]*pb.Policy),
 		datasetMapLock: 		  sync.RWMutex{},
 		gossipObs: 	  			  gossipObs,
-		datasetManager: 		  datasetManager,
+		dsManager: 				  dsManager,
+		stateSync: 				  stateSync,
+		exitChan:				  make(chan bool, 1),
 	}
 
+	//go node.startDatasetSyncer(time.Second * 5, )
 	// Initialize the PostgresSQL database
 	// TODO: remove me and config me somewhere else :)
-	/*if err := node.initializePostgreSQLdb(config.PostgresSQLConnectionString); err != nil {
+	/*if err := node.initializePostgreSQLdb(config.PostgresSQLConnect
+		ionString); err != nil {
 		panic(err)
 		return nil, err
 	}*/
@@ -166,6 +180,9 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, config *Config) (*Nod
 	// Set the Ifrit handlers
 	node.ifritClient.RegisterMsgHandler(node.messageHandler)
 	node.ifritClient.RegisterGossipHandler(node.gossipHandler)
+
+	// Register the Ifrit client such that the syncer can use it
+	node.stateSync.RegisterIfritClient(ifritClient)
 
 	return node, nil
 }
@@ -176,11 +193,29 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 	return n.ifritClient
 }
 
+// TODO: refine me! Fix the abstraction boundaries
+func (n *NodeCore) StartDatasetSyncer(syncInterval time.Duration, remoteAddr string) {
+	for {
+		select {
+		case <-n.exitChan:
+			log.Info("Exiting sync")
+			return
+		case <-time.After(syncInterval):
+			if !n.stateSync.IsSyncing() {
+				if err := n.stateSync.SynchronizeDatasetIdentifiers(context.Background(), n.dsManager.DatasetIdentifiers(), remoteAddr); err != nil {
+					log.Error(err.Error())
+					continue
+				}
+			}
+		}
+	}
+}
+
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
 // You will have to call this method to make the datasets available to the clients. 
 func (n *NodeCore) IndexDataset(datasetId string) error {
-	if n.datasetManager.DatasetPolicyExists(datasetId) {
+	if n.dsManager.DatasetExists(datasetId) {
 		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the server", datasetId)
 	}
 
@@ -190,8 +225,13 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 		return err
 	}
 	
+	dataset := &pb.Dataset{
+		Identifier: datasetId,
+		Policy: policyResponse,
+	}
+
 	// Apply the update from policy store to storage
-	if err := n.datasetManager.InsertDatasetPolicy(datasetId, policyResponse); err != nil {
+	if err := n.dsManager.InsertDataset(datasetId, dataset); err != nil {
 		return err
 	}
 
@@ -205,14 +245,15 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 
 // Removes the dataset policy from the node. The dataset will no longer be available to clients.
 func (n *NodeCore) RemoveDataset(id string) {
-	n.datasetManager.RemoveDatasetPolicy(id)
+	n.dsManager.RemoveDataset(id)
 }
 
 // Shuts down the node
 func (n *NodeCore) Shutdown() {
 	log.Infoln("Shutting down Lohpi node")
 	n.ifritClient.Stop()
-	// TODO more here
+	n.exitChan <-true
+	//n.dsManager.StopSynchronizer()
 }
 
 func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
@@ -237,6 +278,10 @@ func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 
 	n.directoryServerIP = r.GetIp()
 	n.directoryServerID = r.GetId()
+
+	// TODO: put me somewhere else!
+	n.joinTime = time.Now()
+
 	return nil
 }
 
@@ -354,18 +399,18 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 // TODO: log things better using logrus. 
 func (n *NodeCore) applyPolicy(p *pb.Policy) error {
 	datasetId := p.GetDatasetIdentifier()
-	if n.datasetManager.DatasetPolicyExists(datasetId) {
-		currentPolicy := n.datasetManager.DatasetPolicy(datasetId)
-		if currentPolicy == nil {
-			return errors.New("Tried to get current policy but it was nil")
+	if n.dsManager.DatasetExists(datasetId) {
+		dataset := n.dsManager.Dataset(datasetId)
+		if dataset == nil {
+			return errors.New("Tried to get dataset description but it was nil")
 		}
 
-		if currentPolicy.GetVersion() >= p.GetVersion() {
+		if dataset.GetPolicy().GetVersion() >= p.GetVersion() {
 			log.Infoln("Got an outdated policy. Applies a new version")
 			return nil
 		}
 
-		if err := n.datasetManager.InsertDatasetPolicy(datasetId, p); err != nil {
+		if err := n.dsManager.SetDatasetPolicy(datasetId, p); err != nil {
 			return err
 		}
 

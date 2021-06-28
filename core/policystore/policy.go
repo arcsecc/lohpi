@@ -44,6 +44,40 @@ type Config struct {
 	TLSEnabled				 bool
 }
 
+type datasetManager interface {
+	Dataset(datasetId string) *pb.Dataset
+	Datasets() map[string]*pb.Dataset
+	DatasetIdentifiers() []string
+	DatasetExists(datasetId string) bool
+	RemoveDataset(datasetId string)
+	DatasetIsAvailable(datasetId string) (bool, error)
+	DatasetIsCheckedOut(datasetId string, client *pb.Client) bool
+	DatasetPolicy(datasetId string) *pb.Policy
+	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
+	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
+	DatasetCheckouts(datasetId string) ([]*pb.Dataset, error)
+	InsertDataset(datasetId string, dataset *pb.Dataset) error
+	SetDatasetPolicies(datasetMap map[string]*pb.Dataset) error
+}
+
+type stateSyncer interface {
+	RegisterIfritClient(client *ifrit.Client) 
+	SynchronizeDatasetIdentifiers(ctx context.Context, datasetIdentifiers []string, remoteAddr string) error
+	ResolveDatasetIdentifiers(ctx context.Context, inputIdentifiers []string, s *pb.DatasetIdentifierStateRequest) ([]string, error)
+	IsSyncing() bool
+}
+
+type membershipManager interface {
+	StorageNodeExists(datasetId string) bool
+	AddStorageNode(id string, node *pb.Node) error
+	SetDatasetStorageNode(datasetId string, node *pb.Node) error
+	GetDatasetStorageNode(datasetId string) error
+	DeleteDatasetFromNode(datasetId string) error
+	DeleteStorageNode(nodeId string) error
+	StorageNodes() []*pb.Node
+
+}
+
 type PolicyStoreCore struct {
 	// Policy store's configuration
 	config     *Config
@@ -87,9 +121,12 @@ type PolicyStoreCore struct {
 	// Dataset id -> pb policy
 	datasetPolicyMap map[string]*pb.Policy
 	datasetPolicyMapLock sync.RWMutex
+
+	stateSync stateSyncer
+	dsManager datasetManager
 }
 
-func NewPolicyStoreCore(config *Config) (*PolicyStoreCore, error) {
+func NewPolicyStoreCore(dsManager datasetManager, stateSync stateSyncer, config *Config) (*PolicyStoreCore, error) {
 	// Ifrit client
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
@@ -146,6 +183,8 @@ func NewPolicyStoreCore(config *Config) (*PolicyStoreCore, error) {
 		datasetPolicyMap: make(map[string]*pb.Policy),
 		multicastManager: multicastManager,
 		stopBatching:     make(chan bool),
+		dsManager: 	      dsManager,
+		stateSync:		  stateSync,
 	}
 
 	ps.grpcs.Register(ps)
@@ -337,11 +376,41 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 	}
 
 	switch msgType := msg.GetType(); msgType {
+	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
+		currentIdentifiers := ps.dsManager.DatasetIdentifiers()
+		sets, err := ps.stateSync.ResolveDatasetIdentifiers(context.Background(), currentIdentifiers, msg.GetDatasetIdentifierStateRequest())
+		if err != nil {
+			panic(err)
+		}
+
+		// Add missing identifiers
+		for _, id := range sets {
+			if !ps.dsManager.DatasetExists(id) {
+				newPolicy := &pb.Policy{
+					Issuer:            ps.PolicyStoreConfig().Name,
+					DatasetIdentifier: id,
+					Content:           false,
+				}
+				if err := ps.dsManager.SetDatasetPolicy(id, newPolicy); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		// Remove superfluous identifiers. Note that we call this after adding missing identifiers
+		// We might implement this as an append only system, but for now we remove it, but not from Git.
+		for _, id := range currentIdentifiers { 
+			if !ps.dsManager.DatasetExists(id) {
+				ps.dsManager.RemoveDataset(id)
+			}
+		}
+
+
 	case message.MSG_TYPE_GET_DATASET_POLICY:
 		// If the dataset has not been found in the in-memory map, ask Git. If it is known to Git, insert it into the map
 		// and return the policy. If it is not known to Git, set a default policy, insert it into the and return the policy.
 		// TODO: consider simplifying all of this
-		if p := ps.getDatasetPolicy(msg.GetPolicyRequest().GetIdentifier()); p == nil {
+		if p := ps.dsManager.DatasetPolicy(msg.GetPolicyRequest().GetIdentifier()); p == nil {
 			if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
 				newPolicy, err := ps.getInitialDatasetPolicy(msg.GetPolicyRequest())
 				if err != nil {
@@ -353,8 +422,14 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 					log.Errorln(err.Error())
 					return nil, err
 				}
-				ps.setDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy)
+				
+				if err := ps.dsManager.SetDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+
 				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
+				
 			} else {
 				policyString, err := ps.gitGetDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier())
 				if err != nil {
@@ -369,11 +444,17 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 				}
 
 				newPolicy := &pb.Policy{
-					Issuer:           ps.PolicyStoreConfig().Name,
+					Issuer:            ps.PolicyStoreConfig().Name,
 					DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),
-					Content:          b,
+					Content:           b,
 				}
-				ps.setDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy)
+				
+				if err := ps.dsManager.SetDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
+					log.Errorln(err.Error())
+					return nil, err
+				}
+
+				// REPLACE ME
 				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
 			}
 		} 
@@ -396,7 +477,7 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 	return resp, nil
 }
 
-// Set the initial policy of a dataset. 
+// Set the initial policy of a dataset. REMOVE ME
 func (ps *PolicyStoreCore) getInitialDatasetPolicy(policyReq *pb.PolicyRequest) (*pb.Policy, error) {
 	if policyReq == nil {
 		return nil, errors.New("Policy request is nil")
@@ -417,12 +498,13 @@ func (ps *PolicyStoreCore) gossipHandler(data []byte) ([]byte, error) {
 	}
 
 	if err := ps.verifyPolicyStoreGossipSignature(msg); err != nil {
-		return []byte{}, nil
+		return nil, nil
 	}
 
 	switch msgType := msg.GetType(); msgType {
 	case message.MSG_TYPE_PROBE:
-		ps.ifritClient.SetGossipContent(data)
+		ps.ifritClient.SetGossipContent(data)	
+
 	default:
 		fmt.Printf("Unknown message at policy store: %s\n", msgType)
 	}
@@ -432,30 +514,6 @@ func (ps *PolicyStoreCore) gossipHandler(data []byte) ([]byte, error) {
 
 func (ps *PolicyStoreCore) submitPolicyForDistribution(p *pb.Policy) {
 	ps.multicastManager.PolicyChan <- *p
-}
-
-// Returns the policy store's dataset identifier-to-policy map
-func (ps *PolicyStoreCore) getDatasetPolicyMap() map[string]*pb.Policy {
-	ps.datasetPolicyMapLock.RLock()
-	defer ps.datasetPolicyMapLock.RUnlock()
-	return ps.datasetPolicyMap
-}
-
-func (ps *PolicyStoreCore) setDatasetPolicy(id string, entry *pb.Policy) {
-	ps.datasetPolicyMapLock.Lock()
-	defer ps.datasetPolicyMapLock.Unlock()
-	ps.datasetPolicyMap[id] = entry
-}
-
-func (ps *PolicyStoreCore) getDatasetPolicy(id string) *pb.Policy {
-	ps.datasetPolicyMapLock.RLock()
-	defer ps.datasetPolicyMapLock.RUnlock()
-	return ps.datasetPolicyMap[id]
-}
-
-func (ps *PolicyStoreCore) datasetExists(id string) bool {
-	_, ok := ps.getDatasetPolicyMap()[id]
-	return ok
 }
 
 func (ps *PolicyStoreCore) PolicyStoreConfig() Config {

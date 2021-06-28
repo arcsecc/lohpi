@@ -8,6 +8,8 @@ import (
 	"github.com/arcsecc/lohpi/core/netutil"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/gossipobserver"
+	"github.com/arcsecc/lohpi/core/datasetmanager"
+	"github.com/arcsecc/lohpi/core/statesync"
 	log "github.com/sirupsen/logrus"
 	"time"
 )
@@ -44,11 +46,6 @@ type NodeConfig struct {
 
 	// Output directory of gossip observation unit. Default value is the current working directory.
 	PolicyObserverWorkingDirectory string
-}
-
-type Dataset struct {
-	DatasetURL string
-	MetadataURL string
 }
 
 // TODO: consider using intefaces
@@ -104,7 +101,22 @@ func NewNode(config *NodeConfig) (*Node, error) {
 		return nil, err
 	}
 
-	nCore, err := node.NewNodeCore(cu, gossipObs, n.conf)
+	// Dataset manager
+	datasetManagerConfig := &datasetmanager.DatasetManagerConfig{
+		SQLConnectionString: 	config.SQLConnectionString,
+		Reload: 				true,
+	}
+	dsManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	stateSync, err := statesync.NewStateSyncUnit()
+	if err != nil {
+		return nil, err
+	}
+
+	nCore, err := node.NewNodeCore(cu, gossipObs, dsManager, stateSync, n.conf)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +125,10 @@ func NewNode(config *NodeConfig) (*Node, error) {
 	n.nodeCore = nCore
 
 	return n, nil
+}
+
+func (n *Node) StartDatasetSyncing(remoteAddr string) error {
+	return nil	
 }
 
 // IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
@@ -154,7 +170,7 @@ func (n *Node) Shutdown() {
 	n.nodeCore.Shutdown()
 }
 
-func (n *Node) JoinNetwork(directoryServerAddress, policyStoreAddress string) error {
+func (n *Node) Start(directoryServerAddress, policyStoreAddress string) error {
 	if err := n.nodeCore.HandshakeDirectoryServer(directoryServerAddress); err != nil {
 		return err
 	}
@@ -163,6 +179,8 @@ func (n *Node) JoinNetwork(directoryServerAddress, policyStoreAddress string) er
 		return err
 	}
 
+	go n.nodeCore.StartDatasetSyncer(time.Second * 5, policyStoreAddress)
+	
 	return nil
 }
 

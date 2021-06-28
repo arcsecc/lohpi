@@ -2,6 +2,8 @@ package lohpi
 
 import (
 	"github.com/arcsecc/lohpi/core/policystore"
+	"github.com/arcsecc/lohpi/core/statesync"
+	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"time"
 )
 
@@ -145,7 +147,22 @@ func NewPolicyStore(opts ...PolicyStoreOption) (*PolicyStore, error) {
 		opt(p)
 	}
 
-	psCore, err := policystore.NewPolicyStoreCore(config)
+	// Dataset manager
+	datasetManagerConfig := &datasetmanager.DatasetManagerConfig{
+		Reload: 				true,
+	}
+	dsManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// State syncer
+	stateSync, err := statesync.NewStateSyncUnit()
+	if err != nil {
+		return nil, err
+	}
+
+	psCore, err := policystore.NewPolicyStoreCore(dsManager, stateSync, config)
 	if err != nil {
 		return nil, err
 	}

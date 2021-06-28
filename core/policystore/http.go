@@ -190,8 +190,8 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get the node that stores the dataset
-	policy, exists := ps.getDatasetPolicyMap()[datasetId]
-	if !exists {
+	policy := ps.dsManager.DatasetPolicy(datasetId)
+	if policy == nil {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
@@ -275,20 +275,24 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 
 	var version uint64 = 1
 	// Get the latest policy and increment the version number by one.
-	if currentPolicy := ps.getDatasetPolicy(datasetId); currentPolicy != nil {
+	if currentPolicy := ps.dsManager.DatasetPolicy(datasetId); currentPolicy != nil {
 		version = currentPolicy.GetVersion()
 	} 
 
 	policy := &pb.Policy{
-		Issuer:           ps.PolicyStoreConfig().Name, // should get name of client instead
-		DatasetIdentifier: datasetId,
-		Content:          reqBody.Policy,
-		Version: 		  version + 1,
-		DateCreated: 	  pbtime.Now(),
+		Issuer:           	ps.PolicyStoreConfig().Name, // should get name of client instead
+		DatasetIdentifier: 	datasetId,
+		Content:          	reqBody.Policy,
+		Version: 		  	version + 1,
+		DateCreated: 	  	pbtime.Now(),
 	}
 
 	// Store the dataset entry in map
-	ps.setDatasetPolicy(datasetId, policy)
+	if err := ps.dsManager.SetDatasetPolicy(datasetId, policy); err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
 
 	// Store the dataset policy in Git
 	if err := ps.gitStorePolicy(node.GetName(), datasetId, policy); err != nil {

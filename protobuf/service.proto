@@ -27,6 +27,11 @@ message Message {
     DatasetRequest datasetRequest = 8;
     DatasetResponse datasetResponse = 9;
     PolicyRequest policyRequest = 10;
+    
+    DatasetIdentifierStateRequest datasetIdentifierStateRequest = 11;
+//    DatasetDeltaRequest datasetDeltaRequest = 11;
+//    DatasetDeltaResponse DatasetDeltaResponse = 12;
+//    DatasetCollectionSummary datasetCollectionSummary = 13;
 
     // Other fields
     string stringValue = 14;
@@ -63,8 +68,7 @@ message DatasetRequest {
 
 message Dataset {
     string identifier = 1; // String identifier
-    string datasetURL = 2; //
-    string metadataURL = 3;
+    Policy policy = 2;
 }
 
 message DatasetCheckout {
@@ -127,7 +131,7 @@ message GossipMessage {
 
 message GossipMessageID {
     string PolicyStoreID = 1;
-    int32 SequenceNumber = 6; // increased every time a batch is sent. Has to be retained
+    int32 SequenceNumber = 2; // increased every time a batch is sent. Has to be retained
 }
 
 message GossipMessageBody {
@@ -139,3 +143,35 @@ message Probe {
     uint32 order = 1;
     bytes sessionId = 2;
 }
+
+// TODO all messages below here should be put in its separate package that concerns 
+// consistency in the network. It should be treated as a lower-level abstraction.
+message MembershipState {
+    google.protobuf.Timestamp joinTime = 1;
+    // session id1
+}
+
+// DEFINITIONS BELOW THIS LINE: MOVE TO ANOTHER PACKAGE/FILE
+
+// Send from the node to LDS/PS
+message DatasetIdentifierStateRequest {
+    uint64 datasetIdentifiersHash = 1;  // hash of the list of dataset identifiers
+    repeated string datasetIdentifiers = 2;
+}
+
+message DatasetIdentifierStateResponse {
+    repeated string CorrectSetOfIdentifiers = 1;
+}
+
+// Request by node to PS. Includes policies as well
+/*message DatasetDeltaRequest {
+    repeated Dataset datasetToAdd = 1;
+    repeated Dataset datasetToRemove = 2;
+}
+
+message DatasetDeltaResponse {
+    repeated Dataset datasetToAdd = 1;
+    repeated Dataset datasetToRemove = 2;
+}
+*/
+// Policies list

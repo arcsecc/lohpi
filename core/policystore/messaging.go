@@ -25,7 +25,7 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(nodeIdentifier string, policyR
 		Policy: &pb.Policy{},
 	}
 
-	p := ps.getDatasetPolicy(policyReq.GetIdentifier())
+	p := ps.dsManager.DatasetPolicy(policyReq.GetIdentifier())
 	if p != nil {
 		resp.Policy = p
 	} else {

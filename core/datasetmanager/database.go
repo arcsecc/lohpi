@@ -67,12 +67,12 @@ func (dm *DatasetManager) createDatasetCheckoutTable(connectionString string) er
 }
 
 // Creates the table in the database that assigns policies to datasets
-func (dm *DatasetManager) createDatasetPolicyTable(connectionString string) error {
+func (dm *DatasetManager) createDatasetTable(connectionString string) error {
 	if connectionString == "" {
 		return errNoConnectionString
 	}
 
-	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetPolicyTable + ` (
+	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetTable + ` (
 		id SERIAL PRIMARY KEY,
 		dataset_id VARCHAR(200) NOT NULL UNIQUE,
 		issuer VARCHAR(20) NOT NULL,
@@ -98,18 +98,19 @@ func (dm *DatasetManager) createDatasetPolicyTable(connectionString string) erro
 	return nil
 }
 
-func (dm *DatasetManager) dbInsertPolicyIntoTable(p *pb.Policy) error {
-	if p == nil {
+func (dm *DatasetManager) dbInsertDatasetIntoTable(dataset *pb.Dataset) error {
+	if dataset == nil {
 		return errNilPolicy
 	}
 
-	q := `INSERT INTO ` + schemaName + `.` + datasetPolicyTable + `
+	q := `INSERT INTO ` + schemaName + `.` + datasetTable + `
 	(dataset_id, issuer, version, date_created, content) VALUES ($1, $2, $3, current_timestamp, $4)
 	ON CONFLICT (dataset_id) 
 	DO
 		UPDATE SET content = $4;`
 
-	_, err := dm.datasetPolicyDB.Exec(q, p.GetDatasetIdentifier(), p.GetIssuer(), p.GetVersion(), p.GetContent())
+	p := dataset.GetPolicy()
+	_, err := dm.datasetPolicyDB.Exec(q, dataset.GetIdentifier(), p.GetIssuer(), p.GetVersion(), p.GetContent())
 	if err != nil {
 		log.Errorln("SQL insert error:", err.Error())
 	}

@@ -96,7 +96,7 @@ func (n *NodeCore) pbAddMessageSignature(msg *pb.Message) error {
 // Returns the protobuf message of the indexed identifiers in this node.
 func (n *NodeCore) pbMarshalDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{
-		StringSlice: n.datasetManager.DatasetIdentifiers(),
+		StringSlice: n.dsManager.DatasetIdentifiers(),
 	}
 
 	if err := n.pbAddMessageSignature(respMsg); err != nil {

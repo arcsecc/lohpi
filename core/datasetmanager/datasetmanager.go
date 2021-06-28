@@ -1,6 +1,7 @@
 package datasetmanager
 
 import (
+	"fmt"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"sync"
 	"database/sql"
@@ -15,7 +16,7 @@ import (
 // Database-related consts
 var (
 	schemaName           = "nodedbschema"
-	datasetPolicyTable   = "policy_table"
+	datasetTable 		 = "dataset_table"
 	datasetCheckoutTable = "dataset_checkout_table"
 )
 
@@ -30,15 +31,20 @@ var (
 	errNilPolicy = errors.New("Dataset policy is nil")
 	errNilConfig = errors.New("Configuration is nil")
 	errNoPolicyFound = errors.New("No such policy exists")
+	errNoIfritClient = errors.New("Ifrit client is nil")
+	errNoPolicyStoreAddress = errors.New("Policy store address is empty")
+	errNoDatasetMap = errors.New("Dataset map is nil")
 )
 
 // TODO: logging everywhere
+// TODO: rename tables by using the node's name
 
 // Configuration struct for the dataset manager
 type DatasetManagerConfig struct {
 	// The database connection string used to back the in-memory data structures. 
 	// If this is left empty, the in-memory data structures will not be backed by persistent storage.
 	// TODO: use timeouts to flush the data structures to the db at regular intervals :))
+	// TODO: configure SQL connection pools and timeouts. The timeout values must be sane
 	SQLConnectionString string
 
 	// Fill the in-memory data structures with the contents in the database. It will only take effect 
@@ -46,9 +52,9 @@ type DatasetManagerConfig struct {
 	Reload bool
 }
 
-type DatasetManager struct {
-	datasetPolicyMap     map[string]*pb.Policy
-	datasetPolicyMapLock sync.RWMutex
+type DatasetManager struct {	
+	datasetMap     map[string]*pb.Dataset
+	datasetMapLock sync.RWMutex
 
 	datasetCheckoutMap map[string]*pb.DatasetCheckout
 	datasetCheckoutMapLock sync.RWMutex
@@ -57,6 +63,7 @@ type DatasetManager struct {
 	datasetPolicyDB   *sql.DB
 	datasetCheckoutDB *sql.DB
 
+	exitChan chan bool
 	//datasetCheckoutDB *sql.DB
 	// TODO: retry options if db transactions fail. See exp backoff with jitter 
 	// Only applicable in high load environments, but we should take a look into it at some point.
@@ -69,7 +76,7 @@ func NewDatasetManager(config *DatasetManagerConfig) (*DatasetManager, error) {
 	}
 
 	dm := &DatasetManager{
-		datasetPolicyMap: make(map[string]*pb.Policy),
+		datasetMap: 		make(map[string]*pb.Dataset),
 		datasetCheckoutMap: make(map[string]*pb.DatasetCheckout),
 	}
 
@@ -78,7 +85,7 @@ func NewDatasetManager(config *DatasetManagerConfig) (*DatasetManager, error) {
 			return nil, err
 		}
 
-		if err := dm.createDatasetPolicyTable(config.SQLConnectionString); err != nil {
+		if err := dm.createDatasetTable(config.SQLConnectionString); err != nil {
 			return nil, err
 		}
 
@@ -98,27 +105,39 @@ func NewDatasetManager(config *DatasetManagerConfig) (*DatasetManager, error) {
 	return dm, nil
 }
 
+func (dm *DatasetManager) Dataset(datasetId string) *pb.Dataset {
+	dm.datasetMapLock.RLock()
+	defer dm.datasetMapLock.RUnlock()
+	return dm.datasetMap[datasetId]
+}
+
+func (dm *DatasetManager) Datasets() map[string]*pb.Dataset {
+	dm.datasetMapLock.RLock()
+	defer dm.datasetMapLock.RUnlock()
+	return dm.datasetMap
+}
+
 func (dm *DatasetManager) DatasetIdentifiers() []string {
 	ids := make([]string, 0)
-	dm.datasetPolicyMapLock.RLock()
-	defer dm.datasetPolicyMapLock.RUnlock()
-	for id := range dm.datasetPolicyMap {
+	dm.datasetMapLock.RLock()
+	defer dm.datasetMapLock.RUnlock()
+	for id := range dm.datasetMap {
 		ids = append(ids, id)
 	}
 	return ids
 }
 
-func (dm *DatasetManager) DatasetPolicyExists(dataset string) bool {
-	dm.datasetPolicyMapLock.RLock()
-	defer dm.datasetPolicyMapLock.RUnlock()
-	_, ok := dm.datasetPolicyMap[dataset]
+func (dm *DatasetManager) DatasetExists(datasetId string) bool {
+	dm.datasetMapLock.RLock()
+	defer dm.datasetMapLock.RUnlock()
+	_, ok := dm.datasetMap[datasetId]
 	return ok
 }
 
-func (dm *DatasetManager) RemoveDatasetPolicy(dataset string) {
-	dm.datasetPolicyMapLock.Lock()
-	defer dm.datasetPolicyMapLock.Unlock()
-	delete(dm.datasetPolicyMap, dataset)
+func (dm *DatasetManager) RemoveDataset(datasetId string) {
+	dm.datasetMapLock.Lock()
+	defer dm.datasetMapLock.Unlock()
+	delete(dm.datasetMap, datasetId)
 
 	if dm.datasetCheckoutDB != nil {
 	// TODO: is this an append-only system? Should we completely remove elements or 
@@ -127,39 +146,58 @@ func (dm *DatasetManager) RemoveDatasetPolicy(dataset string) {
 	}
 }
 
-func (dm *DatasetManager) DatasetIsAvailable(dataset string) (bool, error) {
-	dm.datasetPolicyMapLock.RLock()
-	defer dm.datasetPolicyMapLock.RUnlock()
+func (dm *DatasetManager) DatasetIsAvailable(datasetId string) (bool, error) {
+	dm.datasetMapLock.RLock()
+	defer dm.datasetMapLock.RUnlock()
 	
-	policy, ok := dm.datasetPolicyMap[dataset]
+	dataset, ok := dm.datasetMap[datasetId]
 	if !ok {
 		return false, errNoPolicyFound
 	}
 
-	return policy.GetContent(), nil
+	return dataset.GetPolicy().GetContent(), nil
 }
 
-func (dm *DatasetManager) DatasetIsCheckedOut(dataset string, client *pb.Client) bool {
+func (dm *DatasetManager) DatasetIsCheckedOut(datasetId string, client *pb.Client) bool {
 	dm.datasetCheckoutMapLock.RLock()
 	defer dm.datasetCheckoutMapLock.RUnlock()
-	_, ok := dm.datasetCheckoutMap[dataset]
+	_, ok := dm.datasetCheckoutMap[datasetId]
 	return ok
 }
 
-func (dm *DatasetManager) DatasetPolicy(dataset string) *pb.Policy {
-	dm.datasetPolicyMapLock.RLock()
-	defer dm.datasetPolicyMapLock.RUnlock()
-	return dm.datasetPolicyMap[dataset]
+func (dm *DatasetManager) DatasetPolicy(datasetId string) *pb.Policy {
+	dm.datasetMapLock.RLock()
+	defer dm.datasetMapLock.RUnlock()
+	return dm.datasetMap[datasetId].GetPolicy()
 }
 
-func (dm *DatasetManager) CheckoutDataset(dataset string, checkout *pb.DatasetCheckout) error {
+func (dm *DatasetManager) SetDatasetPolicy(datasetId string, policy *pb.Policy) error {
+	if policy == nil {
+		return errNilPolicy
+	}
+	
+	dm.datasetMapLock.Lock()
+	defer dm.datasetMapLock.Unlock()
+	_, ok := dm.datasetMap[datasetId]
+	if !ok {
+		return fmt.Errorf("No such dataset '%s'", datasetId)
+	}
+	newDataset := &pb.Dataset{
+		Identifier: datasetId,
+		Policy: policy,
+	}
+	dm.datasetMap[datasetId] = newDataset
+	return nil
+}
+
+func (dm *DatasetManager) CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error {
 	if checkout == nil {
 		return errNilCheckout
 	}
 
 	dm.datasetCheckoutMapLock.Lock()
 	defer dm.datasetCheckoutMapLock.Unlock()
-	dm.datasetCheckoutMap[dataset] = checkout
+	dm.datasetCheckoutMap[datasetId] = checkout
 
 	if dm.datasetCheckoutDB != nil {
 		return dm.dbInsertDatasetCheckout(checkout)
@@ -168,21 +206,32 @@ func (dm *DatasetManager) CheckoutDataset(dataset string, checkout *pb.DatasetCh
 	return nil
 }
 
-func (dm *DatasetManager) DatasetCheckouts(dataset string) ([]*pb.Dataset, error) {
+func (dm *DatasetManager) SetDatasetPolicies(datasetMap map[string]*pb.Dataset) error {
+	if datasetMap == nil {
+		return errNoDatasetMap
+	}
+
+	dm.datasetMapLock.Lock()
+	defer dm.datasetMapLock.Unlock()
+	dm.datasetMap = datasetMap
+	return nil
+}
+
+func (dm *DatasetManager) DatasetCheckouts(datasetId string) ([]*pb.Dataset, error) {
 	return nil, nil
 }
 
-func (dm *DatasetManager) InsertDatasetPolicy(dataset string, policy *pb.Policy) error {
-	if policy == nil {
+func (dm *DatasetManager) InsertDataset(datasetId string, dataset *pb.Dataset) error {
+	if dataset == nil {
 		return errNilPolicy
 	}
 
-	dm.datasetPolicyMapLock.Lock()
-	defer dm.datasetPolicyMapLock.Unlock()
-	dm.datasetPolicyMap[dataset] = policy
+	dm.datasetMapLock.Lock()
+	defer dm.datasetMapLock.Unlock()
+	dm.datasetMap[datasetId] = dataset
 
 	if dm.datasetPolicyDB != nil {
-		return dm.dbInsertPolicyIntoTable(policy)
+		return dm.dbInsertDatasetIntoTable(dataset)
 	}
 
 	return nil
@@ -190,6 +239,7 @@ func (dm *DatasetManager) InsertDatasetPolicy(dataset string, policy *pb.Policy)
 
 // Populates the in-memory maps with the data in the databases
 func (dm *DatasetManager) reloadMaps() error {
+	log.Printf("Reloading maps...")
 	return nil
 }
 

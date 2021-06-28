@@ -5,7 +5,7 @@ import (
 	"errors"
 	"os"
 	"github.com/tomcat-bit/fifoqueue"
-	//log "github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"encoding/json"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"time"
@@ -33,6 +33,11 @@ type PolicyObserverConfig struct {
 	// The capacity of the in-memory queue. When the capacity is reached, the
 	// least recently element is evicted from the queue. 
 	Capacity int
+}
+
+type observedGossip struct {
+	ArrivedAt 	time.Time
+	MessageID	*pb.GossipMessageID
 }
 
 func NewGossipObserver(config *PolicyObserverConfig) (*GossipObserverUnit, error) {
@@ -96,15 +101,12 @@ func (p *GossipObserverUnit) AddGossip(msg *pb.GossipMessage) error {
 		return fmt.Errorf("Gossip message is nil")
 	}
 
-	pgo := & struct {
-		ArrivedAt 	time.Time
-		MessageID	*pb.GossipMessageID
-	}{
-		time.Now(),
-		msg.GetGossipMessageID(),
+	elem := &observedGossip{
+		ArrivedAt: time.Now(),
+		MessageID: msg.GetGossipMessageID(),
 	}
 
-	p.observedGossipsList.Insert(pgo)
+	p.observedGossipsList.Insert(elem)
 	p.cursor += 1
 
 	if p.cursor == p.config.Capacity {
@@ -118,3 +120,14 @@ func (p *GossipObserverUnit) AddGossip(msg *pb.GossipMessage) error {
 	return nil
 }
 
+// hacky af...
+func (p *GossipObserverUnit) LatestGossip() *pb.GossipMessageID {
+	if p.observedGossipsList.Length() == 0 {
+		return nil
+	}
+	log.Println("KAKE:", p.observedGossipsList.Back())
+	if p.observedGossipsList.Back() != nil {
+		return p.observedGossipsList.Back().(*observedGossip).MessageID
+	}
+	return nil
+}

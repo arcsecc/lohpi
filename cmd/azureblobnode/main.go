@@ -1,42 +1,42 @@
 package main
 
 import (
-	"context"
-	"time"
-	"net/url"
-	"fmt"
 	"bufio"
-	"net/http"
-	"os"
+	"context"
 	"flag"
-	"runtime"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
+	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/jinzhu/configor"
 	"github.com/arcsecc/lohpi"
 	"github.com/arcsecc/lohpi/core/util"
+	"github.com/jinzhu/configor"
+	log "github.com/sirupsen/logrus"
 
-	"github.com/Azure/azure-storage-blob-go/azblob"
 	"github.com/Azure/azure-pipeline-go/pipeline"
+	"github.com/Azure/azure-storage-blob-go/azblob"
 )
 
 var config = struct {
-	HTTPPort			int 		`default:"9000"`
-	PolicyStoreAddr 	string 		`default:"127.0.1.1:8084"`
-	DirectoryServerAddr string		`default:"127.0.1.1:8081"`
-	LohpiCaAddr    		string 		`default:"127.0.1.1:8301"`
-	RemoteBaseURL		string 		`required:"true"`
-	RemotePort			string 		`required:"true"`
-	AzureKeyVaultName 	string 		`required:"true"`
-	AzureKeyVaultSecret	string		`required:"true"`
-	AzureClientSecret	string 		`required:"true"`
-	AzureClientID		string		`required:"true"`
-	AzureKeyVaultBaseURL string		`required:"true"`
-	AzureTenantID		string		`required:"true"`
-	AzureStorageAccountName	string	`required:"true"`
-	AzureStorageAccountKey string	`required:"true"`
+	HTTPPort                int    `default:"9000"`
+	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
+	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
+	LohpiCaAddr             string `default:"127.0.1.1:8301"`
+	RemoteBaseURL           string `required:"true"`
+	RemotePort              string `required:"true"`
+	AzureKeyVaultName       string `required:"true"`
+	AzureKeyVaultSecret     string `required:"true"`
+	AzureClientSecret       string `required:"true"`
+	AzureClientID           string `required:"true"`
+	AzureKeyVaultBaseURL    string `required:"true"`
+	AzureTenantID           string `required:"true"`
+	AzureStorageAccountName string `required:"true"`
+	AzureStorageAccountKey  string `required:"true"`
 }{}
 
 type StorageNode struct {
@@ -83,7 +83,7 @@ func main() {
 		log.Errorln("Need to set the 'new' flag to true. Exiting.")
 		os.Exit(1)
 	}
-	
+
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -107,13 +107,16 @@ func newNodeStorage(name string) (*StorageNode, error) {
 		return nil, err
 	}
 
-	sn := &StorageNode {
+	sn := &StorageNode{
 		node: n,
 	}
 
-	if err := sn.node.JoinNetwork(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
+	if err := sn.node.Start(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
 		return nil, err
 	}
+
+	go sn.node.StartHTTPServer(config.HTTPPort)
+	go sn.node.StartDatasetSyncing(config.PolicyStoreAddr)
 
 	return sn, nil
 }
@@ -154,14 +157,14 @@ func getBlobIdentifiers() ([]string, error) {
 					log.Errorln(err.Error())
 					continue
 				}
-				
+
 				// ListBlobs returns the start of the next segment; you MUST use this to get
 				// the next segment (after processing the current result segment).
 				blobMarker = listBlob.NextMarker
 
 				// Process the blobs returned in this result segment (if the segment is empty, the loop body won't execute)
 				for _, blobInfo := range listBlob.Segment.BlobItems {
-          		
+
 					ids = append(ids, blobInfo.Name)
 				}
 			}
@@ -180,9 +183,9 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 	}
 	p := azblob.NewPipeline(credential, azblob.PipelineOptions{
 		Retry: azblob.RetryOptions{
-			TryTimeout:    time.Hour * 3,        // Maximum time allowed for any single try
-			MaxTries: 3,
-			Policy: azblob.RetryPolicyExponential,
+			TryTimeout: time.Hour * 3, // Maximum time allowed for any single try
+			MaxTries:   3,
+			Policy:     azblob.RetryPolicyExponential,
 		},
 	})
 
@@ -214,9 +217,9 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 
 	reader := bufio.NewReader(responseBody)
 	defer responseBody.Close() // The client must close the response body when finished with it
-	
+
 	// Stream from response to client
-	if err := util.StreamToResponseWriter(reader, w, 1000 * 1024); err != nil {
+	if err := util.StreamToResponseWriter(reader, w, 1000*1024); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
@@ -228,14 +231,14 @@ func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-		
+
 	return &lohpi.NodeConfig{
-		CaAddress: config.LohpiCaAddr,
-		Name: name,
+		CaAddress:           config.LohpiCaAddr,
+		Name:                name,
 		SQLConnectionString: dbConn,
 		//BackupRetentionTime time.Time
-		AllowMultipleCheckouts: true,
-		HostName: "127.0.1.1",
+		AllowMultipleCheckouts:         true,
+		HostName:                       "127.0.1.1",
 		PolicyObserverWorkingDirectory: ".",
 	}, nil
 }

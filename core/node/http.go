@@ -7,7 +7,7 @@ import (
 	"errors"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"fmt"
-	"github.com/arcsecc/lohpi/core/comm"
+//	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/util"
 	"github.com/gorilla/mux"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,7 +47,7 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 		WriteTimeout: time.Hour * 30,
 		ReadTimeout:  time.Hour * 30,
 		IdleTimeout:  time.Hour * 60,
-		TLSConfig:    comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.PrivateKey()),
+		//TLSConfig:    comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.PrivateKey()),
 	}
 
 	/*if err := m.setPublicKeyCache(); err != nil {
@@ -85,7 +85,7 @@ func redirectTLS(w http.ResponseWriter, r *http.Request) {
 func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 	datasetId := strings.Split(r.URL.Path, "/dataset/metadata/")[1]
 	
-	if !n.datasetManager.DatasetPolicyExists(datasetId) {
+	if !n.dsManager.DatasetExists(datasetId) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
@@ -130,7 +130,7 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	datasetId := strings.Split(r.URL.Path, "/dataset/data/")[1]
-	if !n.datasetManager.DatasetPolicyExists(datasetId) {
+	if !n.dsManager.DatasetExists(datasetId) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
@@ -138,7 +138,7 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// TODO: use client attributes to determine access
-	available, err := n.datasetManager.DatasetIsAvailable(datasetId)
+	available, err := n.dsManager.DatasetIsAvailable(datasetId)
 	if err != nil {
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
@@ -153,7 +153,7 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 
 	// If multiple checkouts are allowed, check if the client has checked it out already
 	// TODO: do we really need it? Can we allow multiple checkouts?
-	if !n.config().AllowMultipleCheckouts && n.datasetManager.DatasetIsCheckedOut(datasetId, pbClient) {
+	if !n.config().AllowMultipleCheckouts && n.dsManager.DatasetIsCheckedOut(datasetId, pbClient) {
 		err := errors.New("You have already checked out this dataset")
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
@@ -176,7 +176,7 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		Client: pbClient,
 		DateCheckout: timestamppb.Now(),
 	}
-	if err := n.datasetManager.CheckoutDataset(datasetId, checkout); err != nil {
+	if err := n.dsManager.CheckoutDataset(datasetId, checkout); err != nil {
 		log.Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
@@ -188,7 +188,7 @@ func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request)
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
-	ids := n.datasetManager.DatasetIdentifiers()
+	ids := n.dsManager.DatasetIdentifiers()
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(ids); err != nil {
 		log.Errorln(err.Error())
@@ -221,7 +221,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !n.datasetManager.DatasetPolicyExists(dataset) {
+	if !n.dsManager.DatasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
@@ -229,7 +229,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the policy
-	policy := n.datasetManager.DatasetPolicy(dataset)
+	policy := n.dsManager.DatasetPolicy(dataset)
 	if policy == nil {
 		log.Errorln("Policy is nil")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -237,7 +237,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the clients that have checked out the dataset
-	_, err := n.datasetManager.DatasetCheckouts(dataset)
+	_, err := n.dsManager.DatasetCheckouts(dataset)
 	if err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -302,7 +302,7 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if dataset exists in the external repository
-	if !n.datasetManager.DatasetPolicyExists(dataset) {
+	if !n.dsManager.DatasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in this node", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
@@ -327,7 +327,7 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 
-/*	if err := n.datasetManager.SetDatasetPolicy(dataset, reqBody.Policy); err != nil {
+/*	if err := n.dsManager.SetDatasetPolicy(dataset, reqBody.Policy); err != nil {
 		log.Warnln(err.Error())
 	}*/
 
