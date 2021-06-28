@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"database/sql"
 	"github.com/arcsecc/lohpi/core/cache"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
@@ -63,6 +64,10 @@ type DirectoryServerCore struct {
 
 	invalidatedDatasets     map[string]struct{}
 	invalidatedDatasetsLock sync.RWMutex
+
+	// directory server database
+	datasetDB *sql.DB
+	checkoutDB *sql.DB
 
 	// Fetch the JWK
 	pubKeyCache *jwk.AutoRefresh
@@ -123,6 +128,14 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 	//ifritClient.RegisterGossipHandler(self.GossipMessageHandler)
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
+	// Initialize the PostgreSQL directory server database
+	fmt.Println(config.PostgresSQLConnectionString)
+	if err := ds.initializeDirectorydb(/*"user=lohpi_dev_user password=password! dbname=directory_server_db sslmode=disable"*/config.PostgresSQLConnectionString); err != nil {
+		panic(err)
+		return nil, err
+	}
+
+
 	return ds, nil
 }
 
@@ -166,7 +179,11 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
+		// Caches dataset node
 		d.memCache.AddDatasetNode(msg.GetStringValue(), msg.GetSender())
+
+		// Inserts dataset into directory server db
+		d.dbInsertDataset(msg.GetStringValue())
 
 	case message.MSG_POLICY_REVOCATION_UPDATE:
 		d.updateRevocationState(msg)

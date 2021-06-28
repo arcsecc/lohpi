@@ -43,6 +43,12 @@ func DirectoryServerWithPrivateKey(privateKeyFile string) DirectoryServerOption 
 	}
 }
 
+func DirectoryServerWithConnectionString( connectionString string) DirectoryServerOption {
+	return func( d *DirectoryServer) {
+		d.conf.PostgresSQLConnectionString = connectionString
+	}
+}
+
 // TODO: enable ifrit config in the similar way
 
 type DirectoryServer struct {
@@ -60,6 +66,7 @@ func NewDirectoryServer(opts ...DirectoryServerOption) (*DirectoryServer, error)
 		defaultUseTLS = false
 		defaultCertificateFile = ""
 		defaultPrivateKey = ""
+		defaultPostgresSQLConnectionString = ""
 	)
 
 	// Default configuration

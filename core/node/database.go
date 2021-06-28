@@ -117,6 +117,7 @@ func (n *NodeCore) initializeDatasetCheckoutTable(connectionString string) error
 func (n *NodeCore) createSchema(connectionString string) error {
 	log.Println("connectionString:", connectionString)
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
+	
 	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
 		return err

@@ -35,6 +35,8 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 	dRouter.HandleFunc("/data/{id:.*}", n.getDataset).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", n.getMetadata).Methods("GET")
 
+	
+
 	// Middlewares used for validation
 	//dRouter.Use(n.middlewareValidateTokenSignature)
 	//dRouter.Use(n.middlewareValidateTokenClaims)
