@@ -1,0 +1,7 @@
+muxip: 127.0.1.1:8081
+lohpicaaddr: 127.0.1.1:8301
+policystoregitrepository: "/var/tmp/lohpi/policy_store/policies"
+httpport: 8083
+multicastacceptancelevel: 0.5
+gossipinterval: 10                  # measured in seconds
+numdirectrecipients: 1

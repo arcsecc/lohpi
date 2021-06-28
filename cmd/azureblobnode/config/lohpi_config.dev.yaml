@@ -1,0 +1,12 @@
+muxip: 127.0.1.1:8081
+policystoreaddr: 127.0.1.1:8084
+lohpicaaddr: 127.0.1.1:8301
+httpport: 8090
+azurekeyvaultname: "lohpi-key-vault"
+azurekeyvaultsecret: "node-db-connection-string-dev"
+azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
+azuretenantid: "c628abe3-0fe1-4381-bcc0-4721d4387973"
+azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
+azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
+azurestorageaccountname: "lohpistorageaccount"
+azurestorageaccountkey: "LjLw/vAflQW0gy2Q+l9laYacNKl+fUr2C7X3PQAwax9syamdO1C5xtyBwr2SQFxVTJ7PWpMPDLqJP9cGUAU5ww=="

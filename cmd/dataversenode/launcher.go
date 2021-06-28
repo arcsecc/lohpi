@@ -124,57 +124,45 @@ func exists(name string) bool {
 }
 
 func newNodeStorage(name string) (*StorageNode, error) {
-	opts, err := getNodeConfiguration(name)
+	c, err := getNodeConfiguration(name)
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := lohpi.NewNode(opts...)
+	n, err := lohpi.NewNode(c)
 	if err != nil {
 		return nil, err
 	}
 
-	sn := &StorageNode {
+	sn := &StorageNode{
 		node: n,
 	}
 
-	// TODO: revise the call stack starting from here
-	if err := sn.node.JoinNetwork(); err != nil {
+	if err := sn.node.Start(config.DirectoryServerAddress, config.PolicyStoreAddress); err != nil {
 		return nil, err
 	}
+
+	go sn.node.StartHTTPServer(config.HTTPPort)
+	go sn.node.StartDatasetSyncing(config.PolicyStoreAddress)
 
 	return sn, nil
 }
 
-func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
-	dbConn, err := getDatabaseConnectionString()
+func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
+	dbConnectionString, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
 
-	opts := []lohpi.NodeOption{
-		lohpi.NodeWithHTTPPort(config.HTTPPort),
-		lohpi.NodeWithHostName(config.HostName),
-		lohpi.NodeWithName(name),
-		lohpi.NodeWithPostgresSQLConnectionString(dbConn), 
-		lohpi.NodeWithMultipleCheckouts(config.MultipleCheckouts), 
-		lohpi.NodeWithPolicyStoreAddress(config.PolicyStoreAddress),
-		lohpi.NodeWithDirectoryServerAddress(config.DirectoryServerAddress),
-		lohpi.NodeWithLohpiCaAddress(config.LohpiCaAddress),
-	}
-
-	log.WithFields(log.Fields{
-		"remote-url": config.RemoteBaseURL,
-		"hostname": config.HostName,
-		"node-name": name,
-		"policy-store-address": config.PolicyStoreAddress,
-		"directory-server-address": config.DirectoryServerAddress,
-		"lohpi-ca-address": config.LohpiCaAddress,
-		"multiple-checkouts": config.MultipleCheckouts,
-		"http-port": config.HTTPPort,
-	}).Infoln("Configuration")
-
-	return opts, nil
+	return &lohpi.NodeConfig{
+		CaAddress:           config.LohpiCaAddress,
+		Name:                name,
+		SQLConnectionString: dbConnectionString,
+		//BackupRetentionTime time.Time
+		AllowMultipleCheckouts:         true,
+		HostName:                       "127.0.1.1",
+		PolicyObserverWorkingDirectory: ".",
+	}, nil
 }
 
 func getDatabaseConnectionString() (string, error) {
@@ -191,7 +179,6 @@ func getDatabaseConnectionString() (string, error) {
 	return resp.Value, nil
 }
 
-
 func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 	c := &lohpi.AzureKeyVaultClientConfig{
 		AzureKeyVaultClientID:     config.AzureClientID,
@@ -203,15 +190,14 @@ func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 }
 
 func (sn *StorageNode) Start() {
-	if err := sn.initializePolicies(); err != nil {
+	if err := sn.indexDataset(); err != nil {
 		panic(err)
 	}
 
 	sn.node.RegisterDatasetHandler(dataHandler)
-	sn.node.RegisterMetadataHandler(metadataHandler)
 }
 
-func (sn *StorageNode) initializePolicies() error {
+func (sn *StorageNode) indexDataset() error {
 	ids, err := remoteDatasetIdentifiers()
 	if err != nil {
 		return err
@@ -224,49 +210,6 @@ func (sn *StorageNode) initializePolicies() error {
 	}
 
 	return nil
-}
-
-func metadataHandler(id string, w http.ResponseWriter, r *http.Request) {
-	metadataUrl := config.RemoteBaseURL + ":" + config.RemotePort + "/api/datasets/export?exporter=dataverse_json&persistentId=" + id
-
-	request, err := http.NewRequest("GET", metadataUrl, nil)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	httpClient := &http.Client{
-		Timeout: time.Duration(20 * time.Second),
-	}
-
-	response, err := httpClient.Do(request)
-	if err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	defer response.Body.Close()
-	
-	if response.StatusCode != http.StatusOK {
-		log.Errorf("Response from remote data repository\n")
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch metadata from host.", http.StatusInternalServerError)
-		return
-	}
-
-	m := util.CopyHeaders(response.Header)
-	util.SetHeaders(m, w.Header())
-	w.WriteHeader(response.StatusCode)
-
-	reader := bufio.NewReader(response.Body)
-
-	// Stream from response to client
-	if err := util.StreamToResponseWriter(reader, w, 100 * 1024); err != nil {
-		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
-		return
-	}
 }
 
 func dataHandler(id string, w http.ResponseWriter, r *http.Request) {

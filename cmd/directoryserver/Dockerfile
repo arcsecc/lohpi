@@ -26,16 +26,19 @@ COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
 COPY ./core/comm ./core/comm
 COPY ./protobuf ./protobuf
-COPY ./cmd/dataverse/directoryserver/main.go ./cmd/dataverse/directoryserver/main.go
-COPY ./cmd/dataverse/directoryserver/lohpi_config.yaml ./cmd/dataverse/directoryserver/lohpi_config.yaml
-COPY ./cmd/dataverse/directoryserver/ifrit_config.yaml ./cmd/dataverse/directoryserver/ifrit_config.yaml
+COPY ./core/util ./core/util
+COPY ./keyvault.go ./keyvault.go
+COPY ./cmd/directoryserver/main.go ./cmd/directoryserver/main.go
+COPY ./cmd/directoryserver/config/lohpi_config.dev.yaml ./cmd/directoryserver/config/lohpi_config.dev.yaml
+COPY ./cmd/directoryserver/config/lohpi_config.yaml ./cmd/directoryserver/config/lohpi_config.yaml
+COPY ./cmd/directoryserver/config/ifrit_config.yaml ./cmd/directoryserver/config/ifrit_config.yaml
 
 # Run test
 #RUN go test ./...
 
 # Build the application
 #RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
-RUN go build -o directoryserver ./cmd/dataverse/directoryserver/main.go 
+RUN go build -o directoryserver ./cmd/directoryserver/main.go 
 
 # Move to /dist directory as the place for resulting binary folder
 WORKDIR /dist
@@ -49,8 +52,9 @@ RUN cp /build/directoryserver .
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /dist/directoryserver /
-COPY ./cmd/dataverse/directoryserver/ifrit_config.yaml /var/tmp/ifrit_config.yaml
-COPY ./cmd/dataverse/directoryserver/lohpi_config.yaml .
+COPY ./cmd/directoryserver/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
+COPY ./cmd/directoryserver/config/lohpi_config.yaml ./cmd/directoryserver/config/lohpi_config.yaml
+COPY ./cmd/directoryserver/config/lohpi_config.dev.yaml ./cmd/directoryserver/config/lohpi_config.dev.yaml
 
 # Command to run the executable
 ENTRYPOINT ["/directoryserver"]

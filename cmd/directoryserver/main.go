@@ -29,9 +29,14 @@ func main() {
 	var createNew bool
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&configFile, "c", "lohpi_config/lohpi_config.dev.yaml", "Directory server's configuration file.")
+	args.StringVar(&configFile, "c", "", "Directory server's configuration file.")
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi directory server instance.")
 	args.Parse(os.Args[1:])
+
+	if configFile == "" {
+		log.Errorln(")Configuration file must be provided. Exiting.")
+		os.Exit(2)
+	}
 
 	configor.New(&configor.Config{
 		Debug: true, 
@@ -42,9 +47,7 @@ func main() {
 	var err error
 	
 	if createNew {
-		fmt.Printf("1\n")
 		opts := getDirectoryServerConfiguration()
-		fmt.Printf("2\n")
 		d, err = lohpi.NewDirectoryServer(opts...)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())

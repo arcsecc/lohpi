@@ -27,8 +27,6 @@ var config = struct {
 	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
 	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
 	LohpiCaAddr             string `default:"127.0.1.1:8301"`
-	RemoteBaseURL           string `required:"true"`
-	RemotePort              string `required:"true"`
 	AzureKeyVaultName       string `required:"true"`
 	AzureKeyVaultSecret     string `required:"true"`
 	AzureClientSecret       string `required:"true"`

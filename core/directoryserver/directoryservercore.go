@@ -27,10 +27,14 @@ import (
 )
 
 type Config struct {
-	HTTPPort       int
-	GRPCPort       int
-	LohpiCaAddress string
-	LohpiCaPort    int
+    HTTPPort                    int
+    GRPCPort                    int
+    LohpiCaAddress              string
+    LohpiCaPort                 int
+    UseTLS                         bool
+    CertificateFile             string
+    PrivateKeyFile              string
+    PostgresSQLConnectionString string
 }
 
 type DirectoryServerCore struct {
@@ -129,12 +133,9 @@ func NewDirectoryServerCore(config *Config) (*DirectoryServerCore, error) {
 	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
 
 	// Initialize the PostgreSQL directory server database
-	fmt.Println(config.PostgresSQLConnectionString)
-	if err := ds.initializeDirectorydb(/*"user=lohpi_dev_user password=password! dbname=directory_server_db sslmode=disable"*/config.PostgresSQLConnectionString); err != nil {
-		panic(err)
+	if err := ds.initializeDirectorydb(config.PostgresSQLConnectionString); err != nil {
 		return nil, err
 	}
-
 
 	return ds, nil
 }

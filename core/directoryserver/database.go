@@ -3,27 +3,26 @@ package directoryserver
 import (
 	"database/sql"
 	//"encoding/json"
-	//"errors"
+	"errors"
 	//"fmt"
 	//"github.com/lestrrat-go/jwx/jws"
 	_ "github.com/lib/pq"
 	log "github.com/sirupsen/logrus"
 )
 
-
-
 var (
 	dbName          = "directory_server_db"
 	schemaName      = "directory_server_schema"
 	checkoutTable   = "checkout_table"
 	datasetTable	= "dataset_table"
-)
 
+	errNoConnectionString = errors.New("No connection string provided")
+)
 
 // Main entry point for initializing the database schema and its tables on Microsoft Azure
 func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) error {
 	if connectionString == "" {
-		log.Warnln("Connection string is empty")
+		return errNoConnectionString
 	}
 	
 	// Create schema
@@ -47,6 +46,10 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 // Creates the table in the database that assigns policies to datasets
 // TODO: refine this to perform boolean operations as a temp fix
 func (d *DirectoryServerCore) initializeDatasetTable(connectionString string) error {
+	if connectionString == "" {
+		return errNoConnectionString
+	}
+
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetTable + ` (
 		dataset_id VARCHAR(200) PRIMARY KEY,
 		project_description VARCHAR(10000),	
@@ -73,6 +76,10 @@ func (d *DirectoryServerCore) initializeDatasetTable(connectionString string) er
 
 // Creates the table in the database that tracks which client has checked out datasets
 func (d *DirectoryServerCore) initializeCheckoutTable(connectionString string) error {
+	if connectionString == "" {
+		return errNoConnectionString
+	}
+
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + checkoutTable + ` (
 		c_id VARCHAR(200) PRIMARY KEY, 
 		c_name VARCHAR(200), 
@@ -104,6 +111,9 @@ func (d *DirectoryServerCore) initializeCheckoutTable(connectionString string) e
 
 // Creates the schema, given the connection string
 func (d *DirectoryServerCore) createSchema(connectionString string) error {
+	if connectionString == "" {
+		return errNoConnectionString
+	}
 
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
 	db, err := sql.Open("postgres", connectionString)
@@ -139,7 +149,6 @@ func (d *DirectoryServerCore) dbInsertDataset(dataSetId string) error {
 }
 
 func (d *DirectoryServerCore) updateProjectDescription(id string, project_description string) error {
-
 	q := `INSERT INTO ` + schemaName + `.` + datasetTable + ` 
 	(dataset_id, project_description) VALUES ($1, $2)
 	ON CONFLICT (dataset_id)
@@ -156,7 +165,6 @@ func (d *DirectoryServerCore) updateProjectDescription(id string, project_descri
 }
 
 func (d *DirectoryServerCore) getProjectDescriptionDB(id string) (string, error) {
-
 	q := `SELECT project_description FROM ` + schemaName + `.` + datasetTable + ` 
 	WHERE dataset_id = $1;`
 
