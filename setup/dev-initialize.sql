@@ -15,10 +15,24 @@ $do$;
 SELECT 'CREATE DATABASE dataset_policy_db'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'dataset_policy_db')\gexec
 
+SELECT 'CREATE DATABASE directory_server_db'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'directory_server_db')\gexec
+
 -- Set dummy password
 --ALTER USER lohpi_dev_user PASSWORD 'password!';
 
 -- Assign user to DATABASE
 GRANT ALL PRIVILEGES ON DATABASE dataset_policy_db TO lohpi_dev_user;
+GRANT ALL PRIVILEGES ON DATABASE directory_server_db TO lohpi_dev_user;
+
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA directory_server_schema TO lohpi_dev_user;
+--GRANT ALL PRIVILEGES ON TABLE directory_server_schema.dataset_table TO lohpi_dev_user;
+
+-- Not working
+--GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO lohpi_dev_user;
+--GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO lohpi_dev_user;
+--GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO lohpi_dev_user;
 
 ALTER ROLE "lohpi_dev_user" WITH LOGIN;
+
+
