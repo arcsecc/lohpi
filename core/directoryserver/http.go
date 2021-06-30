@@ -1,6 +1,7 @@
 package directoryserver
 
 import (
+	"github.com/rs/cors"
 	"bufio"
 	"bytes"
 	"context"
@@ -34,12 +35,14 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 	// Main dataset router exposed to the clients
 	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(false)
-	dRouter.HandleFunc("/ids", d.getNetworkDatasetIdentifiers).Methods("GET")
+	dRouter.HandleFunc("/ids", d.getNetworkDatasetIdentifiers).Methods("GET", "OPTIONS")
 	dRouter.HandleFunc("/metadata/{id:.*}", d.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", d.getDataset).Methods("GET")
 	dRouter.HandleFunc("/verify/{id:.*}", d.getDatasetPolicyVerification).Methods("GET")
 	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
+
+	handler := cors.AllowAll().Handler(r)
 
 	// Middlewares used for validation
 	//dRouter.Use(d.middlewareValidateTokenSignature)
@@ -47,7 +50,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 	d.httpServer = &http.Server{
 		Addr:         addr,
-		Handler:      r,
+		Handler:      handler,
 		WriteTimeout: time.Hour * 1,
 		//ReadTimeout:  time.Second * 30,
 		//IdleTimeout:  time.Second * 60,
@@ -91,11 +94,16 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
-
+	
 	// Project description as argument to updatePD, string?
 	if err := d.updateProjectDescription(dataset, clientReq.ProjectDescription); err != nil {
 		panic(err)
 	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w,"Successful")
+
 }
 
 // Gets project description form the dataset given as 'id'
@@ -292,6 +300,7 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
