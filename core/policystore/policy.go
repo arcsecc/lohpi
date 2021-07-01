@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"time"
 )
 
@@ -61,10 +62,8 @@ type datasetManager interface {
 }
 
 type stateSyncer interface {
-	RegisterIfritClient(client *ifrit.Client) 
-	SynchronizeDatasetIdentifiers(ctx context.Context, datasetIdentifiers []string, remoteAddr string) error
-	ResolveDatasetIdentifiers(ctx context.Context, inputIdentifiers []string, s *pb.DatasetIdentifierStateRequest) ([]string, error)
-	IsSyncing() bool
+	RegisterIfritClient(client *ifrit.Client)
+	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
 }
 
 type membershipManager interface {
@@ -75,7 +74,6 @@ type membershipManager interface {
 	DeleteDatasetFromNode(datasetId string) error
 	DeleteStorageNode(nodeId string) error
 	StorageNodes() []*pb.Node
-
 }
 
 type PolicyStoreCore struct {
@@ -225,8 +223,8 @@ func (ps *PolicyStoreCore) RunPolicyBatcher() {
 						Mode:    multicast.RandomMembers,
 						Members: ps.ifritMembersAddress(),
 					}); err != nil {
-					log.Println(err.Error())
-				}
+						log.Println(err.Error())
+					}
 			}()
 			case <-ps.stopBatching:
 				// TODO garbage collect timer
@@ -376,54 +374,35 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 	}
 
 	switch msgType := msg.GetType(); msgType {
+		
+	// TODO: refine me a lot. Move sync logic to a sidecart module
 	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
-		currentIdentifiers := ps.dsManager.DatasetIdentifiers()
-		sets, err := ps.stateSync.ResolveDatasetIdentifiers(context.Background(), currentIdentifiers, msg.GetDatasetIdentifierStateRequest())
+		incomingDatasets := msg.GetDatasetCollectionSummary().GetDatasetMap()
+		deltaSet, err := ps.resolveDatasetDeltas(context.Background(), incomingDatasets)
 		if err != nil {
-			panic(err)
+			log.Errorln(err.Error())
+			return nil, err
 		}
 
-		// Add missing identifiers
-		for _, id := range sets {
-			if !ps.dsManager.DatasetExists(id) {
-				newPolicy := &pb.Policy{
-					Issuer:            ps.PolicyStoreConfig().Name,
-					DatasetIdentifier: id,
-					Content:           false,
-				}
-				if err := ps.dsManager.SetDatasetPolicy(id, newPolicy); err != nil {
-					return nil, err
-				}
-			}
-		}
-
-		// Remove superfluous identifiers. Note that we call this after adding missing identifiers
-		// We might implement this as an append only system, but for now we remove it, but not from Git.
-		for _, id := range currentIdentifiers { 
-			if !ps.dsManager.DatasetExists(id) {
-				ps.dsManager.RemoveDataset(id)
-			}
-		}
-
+		// Returns a correct set of datasets, along with their policies, to the node. 
+		return ps.pbMarshalDatasetsMap(deltaSet)
 
 	case message.MSG_TYPE_GET_DATASET_POLICY:
-		// If the dataset has not been found in the in-memory map, ask Git. If it is known to Git, insert it into the map
-		// and return the policy. If it is not known to Git, set a default policy, insert it into the and return the policy.
-		// TODO: consider simplifying all of this
+		// If the dataset has not been found in the in-memory map, restore it.
 		if p := ps.dsManager.DatasetPolicy(msg.GetPolicyRequest().GetIdentifier()); p == nil {
 			if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
-				newPolicy, err := ps.getInitialDatasetPolicy(msg.GetPolicyRequest())
-				if err != nil {
-					log.Errorln(err.Error())
-					return nil, err
-				}
-
+				newPolicy := ps.getInitialDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
 				if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
 					log.Errorln(err.Error())
 					return nil, err
 				}
+
+				newDataset := &pb.Dataset{
+					Identifier: msg.GetPolicyRequest().GetIdentifier(),
+					Policy: newPolicy,
+				}
 				
-				if err := ps.dsManager.SetDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
+				if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
 					log.Errorln(err.Error())
 					return nil, err
 				}
@@ -443,22 +422,25 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 					return nil, err
 				}
 
-				newPolicy := &pb.Policy{
-					Issuer:            ps.PolicyStoreConfig().Name,
-					DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),
-					Content:           b,
+				newDataset := &pb.Dataset{
+					Identifier: msg.GetPolicyRequest().GetIdentifier(),
+					Policy: &pb.Policy{
+						Issuer:            ps.PolicyStoreConfig().Name,
+						DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),
+						Content:           b,
+					},
 				}
 				
-				if err := ps.dsManager.SetDatasetPolicy(msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
+				if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
 					log.Errorln(err.Error())
 					return nil, err
 				}
 
-				// REPLACE ME
+				// REPLACE ME WITH INTERFACE INVOCATION
 				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
 			}
 		} 
-		return ps.pbMarshalDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest())
+		return ps.pbMarshalDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
 
 	case message.MSG_TYPE_PROBE_ACK:
 		log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
@@ -477,17 +459,74 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 	return resp, nil
 }
 
-// Set the initial policy of a dataset. REMOVE ME
-func (ps *PolicyStoreCore) getInitialDatasetPolicy(policyReq *pb.PolicyRequest) (*pb.Policy, error) {
-	if policyReq == nil {
-		return nil, errors.New("Policy request is nil")
+// Resolves the deltas in the policy store's dataset and the incoming datasets. It removes the superfluous
+// datasets that are no longer stored at the node. Returns a map of the datasets that are new to the policy store. 
+func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error) {
+	if incomingDatasets == nil {
+		return nil, errors.New("Incoming dataset is nil")
 	}
-	
+
+	currentDatasets := ps.dsManager.Datasets()
+	deltaSet := make(map[string]*pb.Dataset)
+
+	// Add missing policies. Insert them into the collection and add default policy
+	for datasetId, incomingDataset := range incomingDatasets {
+		if !ps.dsManager.DatasetExists(incomingDataset.GetIdentifier()) {
+			newDataset := &pb.Dataset{
+				Identifier: datasetId,
+				Policy: ps.getInitialDatasetPolicy(incomingDataset.GetIdentifier()),
+			}
+			
+			if err := ps.dsManager.InsertDataset(incomingDataset.GetIdentifier(), newDataset); err != nil {
+				log.Errorln(err.Error())
+				continue
+			}
+			deltaSet[incomingDataset.GetIdentifier()] = newDataset
+		}
+
+		// Add datasets with stale policies
+		currentDataset := ps.dsManager.Dataset(datasetId)
+		if incomingDataset.GetPolicy().GetVersion() < currentDataset.GetPolicy().GetVersion() {
+			currentDataset.Policy.DateApplied = pbtime.Now()
+			deltaSet[datasetId] = currentDataset
+		}
+	}
+
+	superfluous := make([]string, 0)
+
+	// Find superfluous datasets in the collection and remove them. Use identifier as key
+	for _, currentDataset := range currentDatasets {
+		found := false
+		for _, incomingDataset := range incomingDatasets {
+			if currentDataset.GetIdentifier() == incomingDataset.GetIdentifier() {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		} else {
+			superfluous = append(superfluous, currentDataset.GetIdentifier())
+		}
+	}
+
+	for _, s := range superfluous {
+		ps.dsManager.RemoveDataset(s)
+	}
+
+	return deltaSet, nil
+}
+
+// Set the initial policy of a dataset
+func (ps *PolicyStoreCore) getInitialDatasetPolicy(datasetId string) *pb.Policy {
 	return &pb.Policy{
-		Issuer:           ps.PolicyStoreConfig().Name,
-		DatasetIdentifier: policyReq.GetIdentifier(),
-		Content:          false,
-	}, nil
+		Issuer:          	ps.PolicyStoreConfig().Name,
+		DatasetIdentifier:  datasetId,
+		Content:          	false,
+		DateCreated: 		pbtime.Now(),
+		DateApplied:   		pbtime.Now(),
+	}
 }
 
 // Ifrit gossip handler

@@ -153,7 +153,7 @@ func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.
 		Identifiers: make([]string, 0),
 	}
 
-	for i := range ps.memCache.DatasetNodes() {
+	for _, i := range ps.dsManager.DatasetIdentifiers() {
 		respBody.Identifiers = append(respBody.Identifiers, i)
 	}
 
@@ -273,18 +273,20 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var version uint64 = 1
-	// Get the latest policy and increment the version number by one.
-	if currentPolicy := ps.dsManager.DatasetPolicy(datasetId); currentPolicy != nil {
-		version = currentPolicy.GetVersion()
-	} 
-
 	policy := &pb.Policy{
 		Issuer:           	ps.PolicyStoreConfig().Name, // should get name of client instead
 		DatasetIdentifier: 	datasetId,
 		Content:          	reqBody.Policy,
-		Version: 		  	version + 1,
-		DateCreated: 	  	pbtime.Now(),
+	}
+
+	// Get the latest policy and increment the version number by one.
+	if currentPolicy := ps.dsManager.DatasetPolicy(datasetId); currentPolicy != nil {
+		policy.Version = currentPolicy.GetVersion() + 1
+		policy.DateApplied = pbtime.Now()
+	} else{
+		policy.Version = 0
+		policy.DateCreated = pbtime.Now()
+		policy.DateApplied = pbtime.Now()
 	}
 
 	// Store the dataset entry in map

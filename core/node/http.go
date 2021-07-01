@@ -24,8 +24,7 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 	router := mux.NewRouter()
 	log.WithFields(log.Fields{
 		"entity": "Lohpi directory server",
-		//"host-name": n.config().HostName,
-		//"port-number": n.config().HTTPPort,
+		"address": addr,
 	}).Infoln("Started HTTP server")
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
@@ -34,8 +33,8 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 	dRouter.HandleFunc("/new_policy/{id:.*}", n.setDatasetPolicy).Methods("PUT")
 	dRouter.HandleFunc("/data/{id:.*}", n.getDataset).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", n.getMetadata).Methods("GET")
-
-	
+	dRouter.HandleFunc("/addset/{id:.*}", n.addDataset).Methods("POST")
+	dRouter.HandleFunc("/removeset/{id:.*}", n.removeDataset).Methods("GET")
 
 	// Middlewares used for validation
 	//dRouter.Use(n.middlewareValidateTokenSignature)
@@ -84,6 +83,57 @@ func redirectTLS(w http.ResponseWriter, r *http.Request) {
 }*/
 
 // defer r.Body.Close()?
+
+func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	datasetId := strings.Split(r.URL.Path, "/dataset/removeset/")[1]
+	if datasetId == "" {
+		err := fmt.Errorf("Dataset identifier must not be empty.")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}	
+
+	if !n.dsManager.DatasetExists(datasetId) {
+		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return
+	}
+
+	n.dsManager.RemoveDataset(datasetId)
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Sucsessfully removed dataset '%s' to the node\n", datasetId);
+}
+
+func (n *NodeCore) addDataset(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	datasetId := strings.Split(r.URL.Path, "/dataset/addset/")[1]
+	if datasetId == "" {
+		err := fmt.Errorf("Dataset identifier must not be empty.")
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}	
+
+	newDataset := &pb.Dataset{
+		Identifier: datasetId,
+		Policy: &pb.Policy{},
+	}
+
+	if err := n.dsManager.InsertDataset(datasetId, newDataset); err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Sucsessfully added dataset '%s' to the node\n", datasetId);
+}
+
 func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 	datasetId := strings.Split(r.URL.Path, "/dataset/metadata/")[1]
 	

@@ -10,28 +10,37 @@ import (
 )
 
 // Returns the correct policy assoicated with a dataset to the node that stores it.
-func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(nodeIdentifier string, policyReq *pb.PolicyRequest) ([]byte, error) {
-	if policyReq == nil {
-		return nil, errors.New("Policy request is nil")
-	}
-
-	if nodeIdentifier == "" {
-		return nil, errors.New("Polciy identifier is empty")
-	}
-
-	// Build the response message
+func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, error) {
 	resp := &pb.Message{
 		Sender: ps.pbNode(),
 		Policy: &pb.Policy{},
 	}
 
-	p := ps.dsManager.DatasetPolicy(policyReq.GetIdentifier())
-	if p != nil {
+	if p := ps.dsManager.DatasetPolicy(datasetId); p != nil {
 		resp.Policy = p
 	} else {
-		return nil, fmt.Errorf("No such dataset '%s' indexed by policy store", policyReq.GetIdentifier())
+		return nil, fmt.Errorf("No such dataset '%s' indexed by policy store", datasetId)
 	}
 
+	if err := ps.pbAddMessageSignature(resp); err != nil {
+		return nil, err
+	}
+
+	return proto.Marshal(resp)
+}
+
+func (ps *PolicyStoreCore) pbMarshalDatasetsMap(datasetsMap map[string]*pb.Dataset) ([]byte, error) {
+	if datasetsMap == nil {
+		return nil, errors.New("Datasets map cannot be nil")
+	}
+
+	resp := &pb.Message{
+		Sender: ps.pbNode(), 
+		DatasetCollectionSummary: &pb.DatasetCollectionSummary{
+			DatasetMap: datasetsMap,
+		},
+	}
+	
 	if err := ps.pbAddMessageSignature(resp); err != nil {
 		return nil, err
 	}

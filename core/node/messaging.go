@@ -54,6 +54,27 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 	return nil, fmt.Errorf("Error in pbRequestPolicyStoreUpdate")
 }
 
+func (n *NodeCore) pbResolveDatsetIdentifiers(recipient string) error {
+	msg := &pb.Message{
+		Type:        message.MSG_TYPE_RESOLVE_DATASET_IDENTIFIERS,
+		Sender:      n.PbNode(),
+		StringSlice: n.dsManager.DatasetIdentifiers(),
+	}
+
+	if err := n.pbAddMessageSignature(msg); err != nil {
+		return err
+	}
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	n.ifritClient.SendTo(recipient, data)
+	return nil
+}
+
+
 // Sends the dataset identfier given bu 'id' to the recipient
 func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 	msg := &pb.Message{
@@ -70,8 +91,6 @@ func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 	if err != nil {
 		return err
 	}
-
-	log.Debug("recipient:", recipient)
 
 	n.ifritClient.SendTo(recipient, data)
 	return nil

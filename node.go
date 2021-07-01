@@ -179,7 +179,7 @@ func (n *Node) Start(directoryServerAddress, policyStoreAddress string) error {
 		return err
 	}
 
-	go n.nodeCore.StartDatasetSyncer(time.Second * 5, policyStoreAddress)
+	go n.nodeCore.StartStateSyncer(5 * time.Second)
 	
 	return nil
 }

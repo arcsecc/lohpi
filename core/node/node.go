@@ -58,9 +58,6 @@ type NodeCore struct {
 
 	exitChan chan bool
 
-	// Crypto unit
-	cu *comm.CryptoUnit
-
 	// Configuration 
 	conf *Config
 	configLock sync.RWMutex
@@ -129,10 +126,11 @@ type datasetManager interface {
 
 type stateSyncer interface {
 	RegisterIfritClient(client *ifrit.Client) 
-	SynchronizeDatasetIdentifiers(ctx context.Context, datasetIdentifiers []string, remoteAddr string) error
-	IsSyncing() bool
+	SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error)
+	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
 }
 
+// TODO: reload dateapplied and datecreated from the databases on boot time.
 func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetManager, stateSync stateSyncer, config *Config) (*NodeCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration is nil")
@@ -194,18 +192,29 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 }
 
 // TODO: refine me! Fix the abstraction boundaries
-func (n *NodeCore) StartDatasetSyncer(syncInterval time.Duration, remoteAddr string) {
+func (n *NodeCore) StartStateSyncer(syncInterval time.Duration) {
 	for {
 		select {
 		case <-n.exitChan:
 			log.Info("Exiting sync")
 			return
 		case <-time.After(syncInterval):
-			if !n.stateSync.IsSyncing() {
-				if err := n.stateSync.SynchronizeDatasetIdentifiers(context.Background(), n.dsManager.DatasetIdentifiers(), remoteAddr); err != nil {
-					log.Error(err.Error())
-					continue
+			deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
+			if err != nil {
+				log.Errorln(err.Error())
+			}
+
+			if deltaMap != nil {
+				for id, ds := range deltaMap {
+					if err := n.dsManager.SetDatasetPolicy(id, ds.GetPolicy()); err != nil {
+						log.Error(err.Error())
+					}
 				}
+			}
+
+			// Send the correct identifiers to the directory server
+			if err := n.pbResolveDatsetIdentifiers(n.directoryServerIP); err != nil {
+				log.Error(err.Error())
 			}
 		}
 	}

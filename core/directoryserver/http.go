@@ -51,7 +51,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 		WriteTimeout: time.Hour * 1,
 		//ReadTimeout:  time.Second * 30,
 		//IdleTimeout:  time.Second * 60,
-		TLSConfig: comm.ServerConfig(d.cu.Certificate(), d.cu.CaCertificate(), d.cu.PrivateKey()),
+		TLSConfig: comm.ServerConfig(d.cm.Certificate(), d.cm.CaCertificate(), d.cm.PrivateKey()),
 	}
 
 	if err := d.setPublicKeyCache(); err != nil {
@@ -84,7 +84,7 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	}
 
 	// Check if dataset is known to network
-	node := d.memCache.DatasetNodes()[dataset]
+	node := d.ddService.DatasetNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -110,7 +110,7 @@ func (d *DirectoryServerCore) getProjectDescription(w http.ResponseWriter, r *ht
 	}
 
 	// Check if dataset is known to network
-	node := d.memCache.DatasetNodes()[dataset]
+	node := d.ddService.DatasetNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -276,11 +276,7 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 	resp := struct {
 		Identifiers []string
 	}{
-		Identifiers: make([]string, 0),
-	}
-
-	for id := range d.memCache.DatasetNodes() {
-		resp.Identifiers = append(resp.Identifiers, id)
+		Identifiers: d.ddService.DatasetIdentifiers(),
 	}
 
 	b := new(bytes.Buffer)
@@ -317,7 +313,7 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 	defer cancel()*/
 
 	// Check if dataset is known to network
-	node := d.memCache.DatasetNodes()[dataset]
+	node := d.ddService.DatasetNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -381,7 +377,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Get the node that stores it
-	node := d.memCache.DatasetNodes()[dataset]
+	node := d.ddService.DatasetNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -400,7 +396,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		Header: http.Header{},
 	}
 
-	req.Header.Add("Authorization", "Bearer "+string(token))
+	req.Header.Add("Authorization", "Bearer " + string(token))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)

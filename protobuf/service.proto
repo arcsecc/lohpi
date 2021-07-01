@@ -28,10 +28,10 @@ message Message {
     DatasetResponse datasetResponse = 9;
     PolicyRequest policyRequest = 10;
     
-    DatasetIdentifierStateRequest datasetIdentifierStateRequest = 11;
+    //DatasetIdentifierStateRequest datasetIdentifierStateRequest = 11;
 //    DatasetDeltaRequest datasetDeltaRequest = 11;
 //    DatasetDeltaResponse DatasetDeltaResponse = 12;
-//    DatasetCollectionSummary datasetCollectionSummary = 13;
+    DatasetCollectionSummary datasetCollectionSummary = 13;
 
     // Other fields
     string stringValue = 14;
@@ -106,7 +106,7 @@ message Policy {
     bool content = 3; // Acutal policy content
     uint64 version = 4; // Version number set by policy store when a new policy is set.
     google.protobuf.Timestamp DateCreated = 5; // Time of creation of policy. Timezone?
-    //google.protobuf.Timestamp DateApplied = 5; // Set by recipient when policy is applied.
+    google.protobuf.Timestamp DateApplied = 6; // Set by recipient when policy is applied.
 }
 
 message MsgSignature {
@@ -154,14 +154,13 @@ message MembershipState {
 // DEFINITIONS BELOW THIS LINE: MOVE TO ANOTHER PACKAGE/FILE
 
 // Send from the node to LDS/PS
-message DatasetIdentifierStateRequest {
-    uint64 datasetIdentifiersHash = 1;  // hash of the list of dataset identifiers
-    repeated string datasetIdentifiers = 2;
+message DatasetCollectionSummary {
+    map<string, Dataset> datasetMap = 2;
 }
 
-message DatasetIdentifierStateResponse {
+/*message DatasetIdentifierStateResponse {
     repeated string CorrectSetOfIdentifiers = 1;
-}
+}*/
 
 // Request by node to PS. Includes policies as well
 /*message DatasetDeltaRequest {

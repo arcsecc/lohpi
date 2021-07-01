@@ -69,6 +69,12 @@ type DatasetManager struct {
 	// Only applicable in high load environments, but we should take a look into it at some point.
 }
 
+type DatasetLookup struct {
+	datasetNodesMap map[string]*pb.Node
+	datasetNodesMapLock sync.RWMutex
+	datasetCheckoutDB *sql.DB
+}
+
 // Returns a new DatasetManager, given the configuration
 func NewDatasetManager(config *DatasetManagerConfig) (*DatasetManager, error) {
 	if config == nil {
@@ -104,6 +110,73 @@ func NewDatasetManager(config *DatasetManagerConfig) (*DatasetManager, error) {
 
 	return dm, nil
 }
+
+func NewDatasetLookup(config *DatasetManagerConfig) (*DatasetLookup, error) {
+	if config == nil {
+		return nil, errNilConfig
+	}
+
+	dm := &DatasetLookup{
+		datasetNodesMap: make(map[string]*pb.Node),
+	}
+
+	if config.SQLConnectionString != "" {
+		// A LOT MORE TO DO HERE
+	}
+
+	return dm, nil
+}
+
+func (dl *DatasetLookup) InsertDatasetNode(datasetId string, node *pb.Node) error {
+	if node == nil {
+		return errors.New("protobuf node is nil")
+	}
+	dl.datasetNodesMapLock.Lock()
+	defer dl.datasetNodesMapLock.Unlock()
+	dl.datasetNodesMap[datasetId] = node
+	return nil
+}
+
+func (dl *DatasetLookup) DatasetNode(datasetId string) *pb.Node {
+	dl.datasetNodesMapLock.RLock()
+	defer dl.datasetNodesMapLock.RUnlock()
+	return dl.datasetNodesMap[datasetId]
+}
+
+func (dl *DatasetLookup) DatasetNodes() map[string]*pb.Node {
+	dl.datasetNodesMapLock.RLock()
+	defer dl.datasetNodesMapLock.RUnlock()
+	return dl.datasetNodesMap
+}
+
+func (dl *DatasetLookup) CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error {
+	return fmt.Errorf("Implement CheckoutDataset!")
+}
+
+func (dl *DatasetLookup) DatasetIdentifiers() []string {
+	ids := make([]string, 0)
+	dl.datasetNodesMapLock.RLock()
+	defer dl.datasetNodesMapLock.RUnlock()
+	for id := range dl.datasetNodesMap {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (dl *DatasetLookup) DatasetExists(datasetId string) bool {
+	dl.datasetNodesMapLock.RLock()
+	defer dl.datasetNodesMapLock.RUnlock()
+	_, ok := dl.datasetNodesMap[datasetId]
+	return ok	
+}
+
+func (dl *DatasetLookup) RemoveDataset(datasetId string) {
+	dl.datasetNodesMapLock.Lock()
+	defer dl.datasetNodesMapLock.Unlock()
+	delete(dl.datasetNodesMap, datasetId)
+}
+
+
 
 func (dm *DatasetManager) Dataset(datasetId string) *pb.Dataset {
 	dm.datasetMapLock.RLock()

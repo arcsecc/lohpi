@@ -2,18 +2,19 @@ package statesync
 
 import (
 	"errors"
+_	"time"
 	"github.com/golang/protobuf/proto"
 	"context"
 	"github.com/joonnna/ifrit"
 	"sync"
-	"github.com/mitchellh/hashstructure/v2"
-	//log "github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
 )
 
 var (
-	errNoRecipient = errors.New("Recipient cannot be empty")
+	errNoDatasets = errors.New("Dataset map cannot be nil")
+	errNoTargetAddr = errors.New("Target address cannot be empty")
 	errNoInputMap = errors.New("No input map")
 	errNoIfritClient = errors.New("Ifrit client cannot be nil")
 	errSyncInterval = errors.New("Sync interval must be positive")
@@ -22,59 +23,62 @@ var (
 	errNoPgMsg = errors.New("No protobuf message")
 )
 
+type Collection int
+
+const (
+    Datasets Collection = iota
+	CheckoutDatasetPolicies
+)
+
 // TODO: consider separating syncing-related types into another pb package 
 
 // Describes the synchronization of the types defined in this package.
 // It uses protobuf types and syncs
 type StateSyncUnit struct {
-	isSyncing bool
-	isSyncingMutex sync.RWMutex
+	datasetIsSyncing bool
+	datasetIsSyncingMutex sync.RWMutex
 	
 	ifritClient *ifrit.Client
 	ifritClientMutex sync.RWMutex
-}
 
-type DatasetIdentifiersSnapshot struct {
-	// Map to sync with remote. Do not pass a reference to the original map; pass a deep copy of it. 
-	DatasetIdentifiers []string
-}	
+	syncState string
+	syncStateMutex sync.RWMutex
+}
 
 func NewStateSyncUnit() (*StateSyncUnit, error) {
 	return &StateSyncUnit{}, nil
 }
 
-func (d *StateSyncUnit) SynchronizeDatasetIdentifiers(ctx context.Context, datasetIdentifiers []string, remoteAddr string) error {
+func (d *StateSyncUnit) SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error) {
 	if d.getIfritClient() == nil {
-		return errNoIfritClient
+		return nil, errNoIfritClient
 	}
 
-	d.setIsSyncing(true)
-	defer d.setIsSyncing(false)
-
-	if datasetIdentifiers == nil {
-		return errNoDatasetIdentifiers
+	if d.getDatasetIsSyncing() {
+		return nil, errors.New("Datasets are already in sync process")
 	}
 
-	if remoteAddr == "" {
-		return errNoRecipient
+	d.setDatasetIsSyncing(true)
+	defer d.setDatasetIsSyncing(false)
+
+	if datasets == nil {
+		return nil, errNoDatasets
 	}
 
-	datasetTableHash, err := hashstructure.Hash(datasetIdentifiers, hashstructure.FormatV2, nil)
-	if err != nil {
-		return err
-	}				
+	if targetAddr == "" {
+		return nil, errNoTargetAddr
+	}
 
 	msg := &pb.Message{
 		Type: message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS,
-		DatasetIdentifierStateRequest: &pb.DatasetIdentifierStateRequest{
-			DatasetIdentifiersHash: datasetTableHash,
-			DatasetIdentifiers: datasetIdentifiers,
+		DatasetCollectionSummary: &pb.DatasetCollectionSummary{
+			DatasetMap: datasets,
 		},
 	}
 
-	ch, err := d.sendToRemote(msg, remoteAddr)
+	ch, err := d.sendToRemote(msg, targetAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	select {
@@ -83,39 +87,13 @@ func (d *StateSyncUnit) SynchronizeDatasetIdentifiers(ctx context.Context, datas
 		respMsg := &pb.Message{}
 		err := proto.Unmarshal(resp, respMsg)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		//case context deadline...
-		// case 1: identifiers are equal. nothing to do
-		// case 2: send deltas: add and remove identifiers
-
+		return respMsg.GetDatasetCollectionSummary().GetDatasetMap(), nil
 	}
 
-	return nil
-}
-
-// Given the inputIdentifiers, resolve any differences by parsing the DatasetIdentifierStateRequest message. Returns a list of correct identifiers. 
-func (d *StateSyncUnit) ResolveDatasetIdentifiers(ctx context.Context, inputIdentifiers []string, s *pb.DatasetIdentifierStateRequest) ([]string, error) {
-	if s == nil {
-		return nil, errors.New("DatasetIdentifierStateRequest is nil")
-	}
-
-	h1, err := hashstructure.Hash(inputIdentifiers, hashstructure.FormatV2, nil)
-	if err != nil {
-		return nil, err
-	}				
-
-	h2, err := hashstructure.Hash(s.GetDatasetIdentifiers(), hashstructure.FormatV2, nil)
-	if err != nil {
-		return nil, err
-	}				
-
-	if h1 != h2 {
-		return s.GetDatasetIdentifiers(), nil
-	}
-
-	return nil, nil 
+	return nil, errors.New("Other error")
 }
 
 func (d *StateSyncUnit) RegisterIfritClient(c *ifrit.Client) {
@@ -124,16 +102,28 @@ func (d *StateSyncUnit) RegisterIfritClient(c *ifrit.Client) {
 	d.ifritClient = c
 }
 
-func (d *StateSyncUnit) IsSyncing() bool {
-	d.isSyncingMutex.RLock()
-	defer d.isSyncingMutex.RUnlock()
-	return d.isSyncing
+func (d *StateSyncUnit) getDatasetIsSyncing() bool {
+	d.datasetIsSyncingMutex.RLock()
+	defer d.datasetIsSyncingMutex.RUnlock()
+	return d.datasetIsSyncing
 }
 
-func (d *StateSyncUnit) setIsSyncing(syncing bool) {
-	d.isSyncingMutex.Lock()
-	defer d.isSyncingMutex.Unlock()	
-	d.isSyncing = syncing
+func (d *StateSyncUnit) SyncState() string {
+	d.syncStateMutex.RLock()
+	defer d.syncStateMutex.RUnlock()
+	return d.syncState
+}
+
+func (d *StateSyncUnit) setSyncState(s string) {
+	d.syncStateMutex.Lock()
+	defer d.syncStateMutex.Unlock()
+	d.syncState = s
+}
+
+func (d *StateSyncUnit) setDatasetIsSyncing(syncing bool) {
+	d.datasetIsSyncingMutex.Lock()
+	defer d.datasetIsSyncingMutex.Unlock()	
+	d.datasetIsSyncing = syncing
 }
 
 func (d *StateSyncUnit) getIfritClient() *ifrit.Client {
@@ -155,6 +145,9 @@ func (d *StateSyncUnit) sendToRemote(msg *pb.Message, remoteAddr string) (chan [
 	if err != nil {
 		return nil, err
 	}
+
+	log.Println("MESSAGE:", msg)
+	log.Println("Size of message:", len(data))
 
 	r, s, err := d.getIfritClient().Sign(data)
 	if err != nil {

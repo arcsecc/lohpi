@@ -47,8 +47,8 @@ func main() {
 	var err error
 	
 	if createNew {
-		opts := getDirectoryServerConfiguration()
-		d, err = lohpi.NewDirectoryServer(opts...)
+		config := getDirectoryServerConfiguration()
+		d, err = lohpi.NewDirectoryServer(&config)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
@@ -67,16 +67,19 @@ func main() {
 	d.Stop()
 }
 
-func getDirectoryServerConfiguration() []lohpi.DirectoryServerOption {
+func getDirectoryServerConfiguration() lohpi.DirectoryServerConfig {
 	constring, err := getDatabaseConnectionString()
 	if err != nil {
 		panic(err)
 	}
 
-	return []lohpi.DirectoryServerOption{
-		lohpi.DirectoryServerWithHTTPPort(config.HTTPPort),
-		lohpi.DirectoryServerWithConnectionString(constring),
-	}	
+	return lohpi.DirectoryServerConfig{
+		CaAddress: config.LohpiCaAddr,
+		Name: "Lohpi directory server",
+		SQLConnectionString: constring,
+		HTTPPort:config.HTTPPort,
+		GRPCPort:config.GRPCPort,
+	}
 }
 
 func initializeLogging(logToFile bool) error {
