@@ -76,7 +76,9 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	}{}
 
 	if err := util.DecodeJSONBody(w, r, "application/json", &clientReq); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	dataset := mux.Vars(r)["id"]
@@ -97,12 +99,14 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	
 	// Project description as argument to updatePD, string?
 	if err := d.updateProjectDescription(dataset, clientReq.ProjectDescription); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": Failed to update project description", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w,"Successful")
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w,"Successfully updated description of dataset %s\n", dataset)
 
 }
 
