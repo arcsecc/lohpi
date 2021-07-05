@@ -20,6 +20,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"net"
 	"net/http"
 	"strconv"
@@ -247,7 +248,11 @@ func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb
 	}
 
 	if _, ok := d.memCache.Nodes()[node.GetName()]; !ok {
+		node.JoinTime = pbtime.Now()
+		log.Warnln(node.GetJoinTime().AsTime())
+
 		d.memCache.AddNode(node.GetName(), node)
+	
 		log.Infof("DirectoryServerCore added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n",
 			node.GetName(), node.GetIfritAddress(), node.GetHttpsAddress())
 	} else {
