@@ -43,6 +43,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
 	dRouter.HandleFunc("/node_ids", d.nodeIds).Methods("GET")
 	dRouter.HandleFunc("/node_info/{id:.*}", d.nodeInfo).Methods("GET")
+	dRouter.HandleFunc("/checkouts/{id:.*}", d.datasetCheckouts).Methods("GET")
 	handler := cors.AllowAll().Handler(r)
 
 	// Middlewares used for validation
@@ -66,9 +67,53 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	return d.httpServer.ListenAndServe()
 }
 
+func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Request) {
+	// Destination struct
+	resp := struct {
+		Clients []string	
+		Timestamps []string
+	}{
+		Clients: make([]string, 0),
+		Timestamps: make([]string, 0),
+	}
+
+	dataset := mux.Vars(r)["id"]
+	if dataset == "" {
+		errMsg := fmt.Errorf("Missing dataset identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		return
+	}
+
+	for id, checkout := range d.getCheckedOutDatasetMap() {
+		log.Warnln(id)
+		resp.Timestamps  = append(resp.Timestamps, id)
+		if id == dataset {
+			resp.Clients = checkout
+		}
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+}
 
 func (d *DirectoryServerCore) nodeInfo(w http.ResponseWriter, r *http.Request) {
-
 	// Destination struct
 	resp := struct {
 		Identifiers []string
@@ -104,9 +149,7 @@ func (d *DirectoryServerCore) nodeInfo(w http.ResponseWriter, r *http.Request) {
 			resp.LastJoined = node.GetJoinTime().AsTime().Format("2006-01-02 15:04:05")
 			resp.Uptime = time.Now().Sub(node.GetJoinTime().AsTime()).Round(time.Second).String() // Subs 'last joined' from 'time.Now()', rounds it to 'seconds' minimum, and returns a string
 		}
-	}
-	
-	
+	}	
 
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
