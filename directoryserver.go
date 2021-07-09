@@ -1,17 +1,15 @@
 package lohpi
 
 import (
+	"crypto/x509/pkix"
 	"errors"
-	"github.com/arcsecc/lohpi/core/directoryserver"
-	"time"
+	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
+	"github.com/arcsecc/lohpi/core/directoryserver"
 	"github.com/arcsecc/lohpi/core/netutil"
-	"github.com/arcsecc/lohpi/core/comm"
-	"crypto/x509/pkix"
+	"time"
 )
-
-type DirectoryServerOption func(*DirectoryServer)
 
 type DirectoryServerConfig struct {
 	// The address of the CA. Default value is "127.0.0.1:8301"
@@ -24,7 +22,7 @@ type DirectoryServerConfig struct {
 	// will not be used. This means that only the in-memory maps will be used for storage.
 	SQLConnectionString string
 
-	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued. 
+	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued.
 	// NOT USED
 	BackupRetentionTime time.Time
 
@@ -41,15 +39,15 @@ type DirectoryServerConfig struct {
 	GRPCPort int
 
 	CertificateFile string
-	PrivateKey 	string
+	PrivateKey      string
 }
 
 type DirectoryServer struct {
 	dsCore *directoryserver.DirectoryServerCore
-	conf *directoryserver.Config
+	conf   *directoryserver.Config
 }
 
-// Returns a new DirectoryServer using the given directory server options. Returns a non-nil error, if any. 
+// Returns a new DirectoryServer using the given directory server options. Returns a non-nil error, if any.
 func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error) {
 	if config == nil {
 		return nil, errors.New("Directory server configuration is nil")
@@ -81,10 +79,10 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 
 	ds := &DirectoryServer{
 		conf: &directoryserver.Config{
-			Name: config.Name,
-			HTTPPort: config.HTTPPort,
-			GRPCPort: config.GRPCPort,
-			CaAddress: config.CaAddress,
+			Name:                config.Name,
+			HTTPPort:            config.HTTPPort,
+			GRPCPort:            config.GRPCPort,
+			CaAddress:           config.CaAddress,
 			SQLConnectionString: config.SQLConnectionString,
 		},
 	}
@@ -106,21 +104,33 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 	}
 
 	// Dataset manager
-	datasetManagerConfig := &datasetmanager.DatasetManagerConfig{
-		SQLConnectionString: 	config.SQLConnectionString,
-		Reload: 				true,
+	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
+		SQLConnectionString: config.SQLConnectionString,
+		UseDB: true,
 	}
-	dsManager, err := datasetmanager.NewDatasetLookup(datasetManagerConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService(datasetLookupServiceConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	memManager, err := membershipmanager.NewMembershipManager()
+	memManagerConfig := &membershipmanager.MembershipManagerUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
+		UseDB: true,
+	}
+	memManager, err := membershipmanager.NewMembershipManager(memManagerConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	dsCore, err := directoryserver.NewDirectoryServerCore(cu, dsManager, memManager, ds.conf)
+	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
+	}
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(dsCheckoutManagerConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	dsCore, err := directoryserver.NewDirectoryServerCore(cu, datasetLookupService, memManager, dsCheckoutManager, ds.conf)
 	if err != nil {
 		return nil, err
 	}
@@ -129,8 +139,8 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 
 	return ds, nil
 }
- 
-// Starts the directory server by running the Ifrit server, gRPC server and HTTP server. The call will return when 
+
+// Starts the directory server by running the Ifrit server, gRPC server and HTTP server. The call will return when
 // these services have been started.
 func (d *DirectoryServer) Start() {
 	d.dsCore.Start()

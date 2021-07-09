@@ -2,13 +2,12 @@ package directoryserver
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
 	"github.com/arcsecc/lohpi/core/node"
 	log "github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
 	"testing"
-
-//	pb "github.com/arcsecc/lohpi/protobuf"
+	//	pb "github.com/arcsecc/lohpi/protobuf"
 	//"github.com/stretchr/testify/assert"
 )
 
@@ -50,29 +49,29 @@ func (suite *DirectoryServerSuite) SetupTest() {
 	suite.nodes = nodes
 }
 
-// Returns a set of dummy nodes used to test the directory server. Assume the 
+// Returns a set of dummy nodes used to test the directory server. Assume the
 // bootstrap parameters to be correct.
 func nodes() ([]*node.NodeCore, error) {
 	nodes := make([]*node.NodeCore, 0)
-	
+
 	nodeConfigs := []*node.Config{
-		&node.Config {
-			HostName: "127.0.1.1",
-			HTTPPort: 8020,
-			PolicyStoreAddress: "127.0.1.1:8081",
-			LohpiCaAddress: "127.0.1.1:8301",
-			Name: "First node",
-			AllowMultipleCheckouts: true,
-			PolicyObserverWorkingDirectory: ".", 
+		&node.Config{
+			HostName:                       "127.0.1.1",
+			HTTPPort:                       8020,
+			PolicyStoreAddress:             "127.0.1.1:8081",
+			LohpiCaAddress:                 "127.0.1.1:8301",
+			Name:                           "First node",
+			AllowMultipleCheckouts:         true,
+			PolicyObserverWorkingDirectory: ".",
 		},
 		&node.Config{
-			HostName: "127.0.1.1",
-			HTTPPort: 8022,
-			PolicyStoreAddress: "127.0.1.1:8081",
-			LohpiCaAddress: "127.0.1.1:8301",
-			Name: "Second node",
-			AllowMultipleCheckouts: true,
-			PolicyObserverWorkingDirectory: ".", 
+			HostName:                       "127.0.1.1",
+			HTTPPort:                       8022,
+			PolicyStoreAddress:             "127.0.1.1:8081",
+			LohpiCaAddress:                 "127.0.1.1:8301",
+			Name:                           "Second node",
+			AllowMultipleCheckouts:         true,
+			PolicyObserverWorkingDirectory: ".",
 		},
 	}
 

@@ -1,27 +1,27 @@
 package main
 
 import (
-	"fmt"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/jinzhu/configor"
 	"github.com/arcsecc/lohpi"
+	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
 )
 
 var config = struct {
-	HTTPPort   				int     `default:"8080"`
-	GRPCPort 				int     `default:"8081"`
-	LohpiCaAddr 			string 	`default:"127.0.1.1:8301"`
-	AzureKeyVaultName 	string 		`required:"true"`
-	AzureKeyVaultSecret	string		`required:"true"`
-	AzureClientSecret	string 		`required:"true"`
-	AzureClientID		string		`required:"true"`
-	AzureKeyVaultBaseURL string		`required:"true"`
-	AzureTenantID		string		`required:"true"`
+	HTTPPort             int    `default:"8080"`
+	GRPCPort             int    `default:"8081"`
+	LohpiCaAddr          string `default:"127.0.1.1:8301"`
+	AzureKeyVaultName    string `required:"true"`
+	AzureKeyVaultSecret  string `required:"true"`
+	AzureClientSecret    string `required:"true"`
+	AzureClientID        string `required:"true"`
+	AzureKeyVaultBaseURL string `required:"true"`
+	AzureTenantID        string `required:"true"`
 }{}
 
 func main() {
@@ -39,13 +39,13 @@ func main() {
 	}
 
 	configor.New(&configor.Config{
-		Debug: true, 
-		ENVPrefix: "DIRECTORYSERVER", 
+		Debug:                true,
+		ENVPrefix:            "DIRECTORYSERVER",
 		ErrorOnUnmatchedKeys: true}).Load(&config, configFile)
 
 	var d *lohpi.DirectoryServer
 	var err error
-	
+
 	if createNew {
 		config := getDirectoryServerConfiguration()
 		d, err = lohpi.NewDirectoryServer(&config)
@@ -74,11 +74,11 @@ func getDirectoryServerConfiguration() lohpi.DirectoryServerConfig {
 	}
 
 	return lohpi.DirectoryServerConfig{
-		CaAddress: config.LohpiCaAddr,
-		Name: "Lohpi directory server",
+		CaAddress:           config.LohpiCaAddr,
+		Name:                "Lohpi directory server",
 		SQLConnectionString: constring,
-		HTTPPort:config.HTTPPort,
-		GRPCPort:config.GRPCPort,
+		HTTPPort:            config.HTTPPort,
+		GRPCPort:            config.GRPCPort,
 	}
 }
 

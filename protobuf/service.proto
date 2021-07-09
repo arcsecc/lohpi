@@ -13,7 +13,9 @@ service PolicyStore {
 
 message Client {
     string name = 1;
-    bytes ID = 2;
+    string ID = 2; // microsoft id
+    string emailAddress = 3;
+    string macAddress = 4;
 }
 
 // Used in direct messaging
@@ -53,11 +55,10 @@ message Response {
 message Node {
     string name = 1;            // String identifier
     string ifritAddress = 2;    // Ifrit IP address
-    string role = 3;            // What type of node is it? storage node, compliance engine etc
-    string contactEmail = 4;    // Contact of person/entity responsible for the node, preferably an email alias, for non-compliance reports. 
-    bytes id = 5;               // Ifrit id
-    string httpsAddress = 6;     // IP address
-    int32 port = 7; //
+    bytes id = 3;               // Ifrit id
+    string httpsAddress = 4;     // IP address
+    int32 port = 5; // Port
+    google.protobuf.Timestamp bootTime = 6; // Join time
 }
 
 message DatasetRequest {
@@ -72,9 +73,9 @@ message Dataset {
 }
 
 message DatasetCheckout {
-    string identifier = 1;
-    Client client = 2;
+    string datasetIdentifier = 1;
     google.protobuf.Timestamp DateCheckout = 3;
+    Client client = 4;
 }
 
 message DatasetResponse {
@@ -83,6 +84,11 @@ message DatasetResponse {
     bool isAllowed = 3;
     string errorMessage = 4;
     MsgSignature signature = 5;
+}
+
+message ClientState {
+    google.protobuf.Timestamp LastPolicyUpdate = 1;
+    google.protobuf.Timestamp LastComplyCheck = 2;
 }
 
 message PolicyRequest {
@@ -101,7 +107,6 @@ message MetadataResponse {
 }
 
 message Policy {
-    string issuer = 1;
     string datasetIdentifier = 2;
     bool content = 3; // Acutal policy content
     uint64 version = 4; // Version number set by policy store when a new policy is set.

@@ -16,12 +16,20 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, err
 		Policy: &pb.Policy{},
 	}
 
-	if p := ps.dsManager.DatasetPolicy(datasetId); p != nil {
-		resp.Policy = p
-	} else {
-		return nil, fmt.Errorf("No such dataset '%s' indexed by policy store", datasetId)
+	ds := ps.dsManager.Dataset(datasetId)
+	if ds == nil {
+		err := fmt.Errorf("Dataset entry is nil")
+		log.Error(err.Error())
+		return nil, err
 	}
 
+	policy := ds.GetPolicy()
+	if policy == nil {
+		err := fmt.Errorf("Policy for dataset '%s' is nil\n", datasetId)
+		return nil, err
+	}
+
+	resp.Policy = policy
 	if err := ps.pbAddMessageSignature(resp); err != nil {
 		return nil, err
 	}

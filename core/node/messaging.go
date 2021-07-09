@@ -18,7 +18,7 @@ import (
 func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP string) (*pb.Policy, error) {
 	msg := &pb.Message{
 		Type:   message.MSG_TYPE_GET_DATASET_POLICY,
-		Sender: n.PbNode(),
+		Sender: n.getPbNode(),
 		PolicyRequest: &pb.PolicyRequest{
 			Identifier: datasetId,
 		},
@@ -34,8 +34,9 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 		return nil, err
 	}
 
+	
 	ch := n.ifritClient.SendTo(policyStoreIP, data)
-
+	
 	select {
 	case resp := <-ch:
 		respMsg := &pb.Message{}
@@ -57,8 +58,8 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 func (n *NodeCore) pbResolveDatsetIdentifiers(recipient string) error {
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_RESOLVE_DATASET_IDENTIFIERS,
-		Sender:      n.PbNode(),
-		StringSlice: n.dsManager.DatasetIdentifiers(),
+		Sender:      n.getPbNode(),
+//		StringSlice: n.dsManager.DatasetIdentifiers(),
 	}
 
 	if err := n.pbAddMessageSignature(msg); err != nil {
@@ -79,7 +80,7 @@ func (n *NodeCore) pbResolveDatsetIdentifiers(recipient string) error {
 func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 	msg := &pb.Message{
 		Type:        message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
-		Sender:      n.PbNode(),
+		Sender:      n.getPbNode(),
 		StringValue: id,
 	}
 
@@ -115,7 +116,7 @@ func (n *NodeCore) pbAddMessageSignature(msg *pb.Message) error {
 // Returns the protobuf message of the indexed identifiers in this node.
 func (n *NodeCore) pbMarshalDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{
-		StringSlice: n.dsManager.DatasetIdentifiers(),
+//		StringSlice: n.dsManager.DatasetIdentifiers(),
 	}
 
 	if err := n.pbAddMessageSignature(respMsg); err != nil {
@@ -177,7 +178,7 @@ func (n *NodeCore) pbSendDatasetRevocationUpdate(dataset, policyContent string) 
 
 	msg := &pb.Message{
 		Type:        message.MSG_POLICY_REVOCATION_UPDATE,
-		Sender:      n.PbNode(),
+		Sender:      n.getPbNode(),
 		StringValue: dataset,
 		BoolValue:   b,
 	}

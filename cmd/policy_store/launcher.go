@@ -2,10 +2,10 @@ package main
 
 import (
 	"flag"
+	"time"
 	"os"
 	"os/signal"
 	"syscall"
-	"fmt"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/arcsecc/lohpi"
@@ -15,21 +15,25 @@ import (
 var DefaultPermission = os.FileMode(0750)
 
 // Config contains all configurable parameters for the Ifrit CA daemon.
-var psConfig = struct {
-	Name         				string 	`default:"Lohpi Policy store"`
-	Version      				string 	`default:"1.0.0"`
-	Host         				string 	`default:"127.0.1.1"`
-	Port         				int    	`default:"8083"`
-	GRPCPort					int 	`default:"8084"`
-	Path         				string 	`default:"./policy-store"`
-	BatchSize    				uint32 	`default:"3"`
-	GossipInterval 				uint32 	`default:"60"`
-	LogFile      				string 	`default:""`
-	MulticastAcceptanceLevel 	float64 `default:0.5`
-	LohpiCaAddr 				string 	`default:"127.0.1.1:8301"`
-	MuxAddress 					string 	`default:"127.0.1.1:8081"`
+var config = struct {
+	CaAddress 					string 	`default:"127.0.1.1:8301"`
+	Name        				string 	`default:"Lohpi Policy store"`
 	PolicyStoreGitRepository  	string 	`default:"/tmp/lohpi/policy_store/policies"`
+	Host         				string 	`default:"127.0.1.1"`
+	GossipInterval 				uint32 	`default:"60"`
+	HTTPPort      				int    	`default:"8083"`
+	GRPCPort					int 	`default:"8084"`
+	MulticastAcceptanceLevel 	float64 `default:0.5`
 	NumDirectRecipients			int		`default:"1"`
+	DirectoryServerAddress      string 	`default:"127.0.1.1:8081"`
+	AzureKeyVaultName       	string 	`required:"true"`
+	AzureKeyVaultSecret     	string 	`required:"true"`
+	AzureClientSecret       	string 	`required:"true"`
+	AzureClientID           	string 	`required:"true"`
+	AzureKeyVaultBaseURL    	string 	`required:"true"`
+	AzureTenantID           	string 	`required:"true"`
+	AzureStorageAccountName 	string 	`required:"true"`
+	AzureStorageAccountKey  	string 	`required:"true"`
 }{}
 
 func main() {
@@ -37,19 +41,23 @@ func main() {
 	var createNew bool
 
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&psConfigFile, "c", "lohpi_config.yaml", `Configuration file for policy store. If not set, use default configuration values.`)
+	args.StringVar(&psConfigFile, "c", "./config/lohpi_config.yaml", `Configuration file for policy store. If not set, use default configuration values.`)
 	args.BoolVar(&createNew, "new", false, "Initialize new Policy store instance")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS"}).Load(&psConfig, psConfigFile, "./lohpi_config.yaml")
+	configor.New(&configor.Config{Debug: true, ENVPrefix: "PS"}).Load(&config, psConfigFile, "./config/lohpi_config.yaml")
 
 	var policyStore *lohpi.PolicyStore
 
 	if createNew {
-		policyStore, err := lohpi.NewPolicyStore(lohpi.PolicyStoreWithGitRepository(psConfig.PolicyStoreGitRepository))
+		config, err := getPolicyStoreConfig()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
+			log.Fatalln(err.Error())
+		}
+
+		policyStore, err := lohpi.NewPolicyStore(config)
+		if err != nil {
+			log.Fatalln(err.Error())
 		}
 
 		go policyStore.Start()
@@ -66,21 +74,46 @@ func main() {
 	policyStore.Stop()
 }
 
-func setConfigurations(configFile string) error {
-	conf := configor.New(&configor.Config{
-		ErrorOnUnmatchedKeys: true,
-		Verbose: true,
-		Debug: true,
-	})
+func getPolicyStoreConfig() (*lohpi.PolicyStoreConfig, error) {
+	dbConnString, err := getDatabaseConnectionString()
+	if err != nil {
+		return nil, err
+	}
 
-	return conf.Load(&psConfig, configFile)
+	return &lohpi.PolicyStoreConfig{
+		CaAddress: config.CaAddress,
+		Name: "Policy store",
+		PolicyStoreGitRepository: config.PolicyStoreGitRepository,		
+		GossipInterval: time.Duration(config.GossipInterval) * time.Second,
+		HTTPPort: config.HTTPPort,
+		GRPCPort: config.GRPCPort,
+		MulticastAcceptanceLevel: config.MulticastAcceptanceLevel,
+		NumDirectRecipients: config.NumDirectRecipients,
+		DirectoryServerAddress: config.DirectoryServerAddress,
+		SQLConnectionString: dbConnString,
+	}, nil
 }
 
-func exists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
+func getDatabaseConnectionString() (string, error) {
+	kvClient, err := newAzureKeyVaultClient()
+	if err != nil {
+		return "", err
 	}
-	return true
+
+	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
+	if err != nil {
+		return "", err
+	}
+
+	return resp.Value, nil
+}
+
+func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
+	c := &lohpi.AzureKeyVaultClientConfig{
+		AzureKeyVaultClientID:     config.AzureClientID,
+		AzureKeyVaultClientSecret: config.AzureClientSecret,
+		AzureKeyVaultTenantID:     config.AzureTenantID,
+	}
+
+	return lohpi.NewAzureKeyVaultClient(c)
 }

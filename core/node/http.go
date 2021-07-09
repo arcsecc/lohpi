@@ -7,24 +7,29 @@ import (
 	"errors"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"fmt"
+	"context"
 //	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/util"
 	"github.com/gorilla/mux"
-	"google.golang.org/protobuf/types/known/timestamppb"
+_	"google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/rs/cors"
+	"github.com/lestrrat-go/jwx/jwk"
+	"github.com/lestrrat-go/jwx/jws"
+	"github.com/lestrrat-go/jwx/jwa"
 	log "github.com/sirupsen/logrus"
 	"net/http"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"strconv"
 	"time"
 )
 
-const PROJECTS_DIRECTORY = "projects"
-
-func (n *NodeCore) startHTTPServer(addr string) error {
+func (n *NodeCore) startHTTPServer() error {
 	router := mux.NewRouter()
+	addr := fmt.Sprintf(":%d", n.config().Port)
+	
 	log.WithFields(log.Fields{
 		"entity": "Lohpi directory server",
-		"address": addr,
+		"port": n.config().Port,
 	}).Infoln("Started HTTP server")
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
@@ -37,7 +42,7 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 	dRouter.HandleFunc("/removeset/{id:.*}", n.removeDataset).Methods("GET")
 
 	// Middlewares used for validation
-	//dRouter.Use(n.middlewareValidateTokenSignature)
+	dRouter.Use(n.middlewareValidateTokenSignature)
 	//dRouter.Use(n.middlewareValidateTokenClaims)
 
 	handler := cors.AllowAll().Handler(router)
@@ -51,10 +56,10 @@ func (n *NodeCore) startHTTPServer(addr string) error {
 		//TLSConfig:    comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.PrivateKey()),
 	}
 
-	/*if err := m.setPublicKeyCache(); err != nil {
+	if err := n.setPublicKeyCache(); err != nil {
 		log.Errorln(err.Error())
 		return err
-	}*/
+	}
 
 	return n.httpServer.ListenAndServe()
 }
@@ -64,25 +69,90 @@ func redirectTLS(w http.ResponseWriter, r *http.Request) {
     //http.Redirect(w, r, "https://IPAddr:443"+r.RequestURI, http.StatusMovedPermanently)
 }
 
-/*func (n *NodeCore) setPublicKeyCache() error {
+func (n *NodeCore) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	m.ar = jwk.NewAutoRefresh(ctx)
+	n.pubKeyCache = jwk.NewAutoRefresh(ctx)
 	const msCerts = "https://login.microsoftonline.com/common/discovery/v2.0/keys" // TODO: config me
 
-	m.ar.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
+	n.pubKeyCache.Configure(msCerts, jwk.WithRefreshInterval(time.Minute * 5))
 
 	// Keep the cache warm
-	_, err := m.ar.Refresh(ctx, msCerts)
+	_, err := n.pubKeyCache.Refresh(ctx, msCerts)
 	if err != nil {
 		log.Println("Failed to refresh Microsoft Azure JWKS")
 		return err
 	}
 	return nil
-}*/
+}
 
 // defer r.Body.Close()?
+
+func (n *NodeCore) middlewareValidateTokenSignature(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, err := getBearerToken(r)
+		if err != nil {
+			panic(err)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		_ = token
+		/*
+		if err := n.validateTokenSignature(token); err != nil {
+			panic(err)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+			return
+		}*/
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (n *NodeCore) validateTokenSignature(token []byte) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// TODO: fetch keys again if it fails
+	// TODO: add clock skew. Use jwt.WithAcceptableSkew
+	set, err := n.pubKeyCache.Fetch(ctx, "https://login.microsoftonline.com/common/discovery/v2.0/keys")
+	if err != nil {
+		return err
+	}
+
+	// Note: see https://github.com/lestrrat-go/jwx/blob/a7f076fc6eadb44380d41b5e30eb5a85a91de864/jws/jws.go#L186
+	// There is no guarantee that the algorithm is RS256
+	for it := set.Iterate(context.Background()); it.Next(context.Background()); {
+		_, err := jws.Verify(token, jwa.RS256, it.Pair().Value)
+		if err == nil {
+			return nil
+		}
+	}
+
+	// Fetch the public keys again from URL if the verification failed.
+	// Fetching it again will guarantee a best-effort to verify the request.
+	/*ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// This doesn't work!
+	// TODO: this doesn't work
+	set, err := d.ar.Refresh(ctx, msCerts)
+	if err != nil {
+		log.Println("Failed to refresh Microsoft Azure JWKS")
+		return err
+	}
+
+	// Note: see https://github.com/lestrrat-go/jwx/blob/a7f076fc6eadb44380d41b5e30eb5a85a91de864/jws/jws.go#L186
+	// There is no guarantee that algorithm is RS256
+	for it := set.Iterate(context.Background()); it.Next(context.Background()); {
+		_, err := jws.Verify(token, jwa.RS256, it.Pair().Value)
+		if err == nil {
+			return nil
+		}
+	}*/
+
+	return errors.New("Could not verify token")
+}
 
 func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
@@ -174,7 +244,7 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pbClient, err := n.jwtTokenToPbClient(string(token))
+	pbClient, err := jwtTokenToPbClient(string(token))
 	if err != nil {
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
@@ -189,15 +259,9 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: use client attributes to determine access
-	available, err := n.dsManager.DatasetIsAvailable(datasetId)
-	if err != nil {
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if !available {
+	// TODO: use client attributes to determine access. nil here??
+	policy := n.dsManager.GetDatasetPolicy(datasetId)
+	if !policy.GetContent() {
 		err := fmt.Errorf("You do not have access to this dataset")
 		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
 		return
@@ -205,7 +269,14 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 
 	// If multiple checkouts are allowed, check if the client has checked it out already
 	// TODO: do we really need it? Can we allow multiple checkouts?
-	if !n.config().AllowMultipleCheckouts && n.dsManager.DatasetIsCheckedOut(datasetId, pbClient) {
+	checkedOut, err := n.dcManager.DatasetIsCheckedOut(datasetId, pbClient)
+	if err != nil {
+		log.Warnln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if checkedOut {
 		err := errors.New("You have already checked out this dataset")
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
@@ -217,18 +288,18 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		handler(datasetId, w, r)
 		// TODO: write to responseWriter only once. What happens if anything goes wrong at any point in time?
 	} else {
-		err := fmt.Errorf("Metadata handler is nil")
+		err := fmt.Errorf("Dataset download is not implemented for this service")
 		log.Warnln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotImplemented) + ": " + err.Error(), http.StatusNotImplemented)
 		return
 	}
 
 	checkout := &pb.DatasetCheckout{
-		Identifier: datasetId,
+		DatasetIdentifier: datasetId,
+		DateCheckout: pbtime.Now(),
 		Client: pbClient,
-		DateCheckout: timestamppb.Now(),
 	}
-	if err := n.dsManager.CheckoutDataset(datasetId, checkout); err != nil {
+	if err := n.dcManager.CheckoutDataset(datasetId, checkout); err != nil {
 		log.Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
@@ -262,7 +333,7 @@ func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request)
 
 // Returns a JSON object containing the metadata assoicated with a dataset
 func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
-	log.Infoln("Got request to", r.URL.String())
+	/*log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
 
 	dataset := mux.Vars(r)["id"]
@@ -289,7 +360,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the clients that have checked out the dataset
-	_, err := n.dsManager.DatasetCheckouts(dataset)
+	_, err := n.dcManager.DatasetCheckouts(dataset)
 	if err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -323,7 +394,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
-	}
+	}*/
 }
 
 /* Assigns a new policy to the dataset. The request body must be a JSON object with a string similar to this:

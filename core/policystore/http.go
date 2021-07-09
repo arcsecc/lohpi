@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"errors"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
@@ -19,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	pbtime "google.golang.org/protobuf/types/known/timestamppb"
+//	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (ps *PolicyStoreCore) startHttpServer(addr string) error {
@@ -150,11 +151,7 @@ func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.
 	respBody := struct {
 		Identifiers []string
 	}{
-		Identifiers: make([]string, 0),
-	}
-
-	for _, i := range ps.dsManager.DatasetIdentifiers() {
-		respBody.Identifiers = append(respBody.Identifiers, i)
+		Identifiers: ps.dsManager.DatasetIdentifiers(),
 	}
 
 	b := new(bytes.Buffer)
@@ -182,17 +179,19 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 	defer r.Body.Close()
 
 	datasetId := mux.Vars(r)["id"]
-	if datasetId == "" {
-		err := errors.New("Missing dataset identifier")
+
+	// Get the node that stores the dataset
+	ds := ps.dsManager.Dataset(datasetId)
+	if ds == nil {
+		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
-	// Get the node that stores the dataset
-	policy := ps.dsManager.DatasetPolicy(datasetId)
+	policy := ds.GetPolicy()
 	if policy == nil {
-		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
+		err := fmt.Errorf("Policy for dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
@@ -201,9 +200,9 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 	// Destination struct
 	resp := struct {
 		Policy string
-	}{}
-
-	resp.Policy = strconv.FormatBool(policy.GetContent())
+	}{
+		Policy: strconv.FormatBool(policy.GetContent()),
+	}
 
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
@@ -240,17 +239,9 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	defer r.Body.Close()
 
 	datasetId := mux.Vars(r)["id"]
-	if datasetId == "" {
-		err := errors.New("Missing dataset identifier")
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Get the node that stores the dataset
-	node, exists := ps.memCache.DatasetNodes()[datasetId]
-	if !exists {
-		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
+	dataset := ps.dsManager.Dataset(datasetId)
+	if dataset == nil {
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
@@ -273,37 +264,47 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	policy := &pb.Policy{
-		Issuer:           	ps.PolicyStoreConfig().Name, // should get name of client instead
-		DatasetIdentifier: 	datasetId,
-		Content:          	reqBody.Policy,
-	}
-
 	// Get the latest policy and increment the version number by one.
-	if currentPolicy := ps.dsManager.DatasetPolicy(datasetId); currentPolicy != nil {
-		policy.Version = currentPolicy.GetVersion() + 1
-		policy.DateApplied = pbtime.Now()
-	} else{
-		policy.Version = 0
-		policy.DateCreated = pbtime.Now()
-		policy.DateApplied = pbtime.Now()
-	}
-
-	// Store the dataset entry in map
-	if err := ps.dsManager.SetDatasetPolicy(datasetId, policy); err != nil {
+	oldPolicy := dataset.GetPolicy()
+	if oldPolicy == nil {
+		err := fmt.Errorf("Policy for dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
-	// Store the dataset policy in Git
-	if err := ps.gitStorePolicy(node.GetName(), datasetId, policy); err != nil {
-		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+	newPolicy := &pb.Policy{
+		DatasetIdentifier: 	datasetId,
+		Content:          	reqBody.Policy,
+		Version:			oldPolicy.GetVersion() + 1,
+		DateCreated:		oldPolicy.GetDateCreated(),
+		DateApplied:        pbtime.Now(),
+	}
+
+	// Store the dataset entry in map
+	if err := ps.dsManager.SetDatasetPolicy(datasetId, newPolicy); err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	go ps.submitPolicyForDistribution(policy)
+	// Get the node's identifier
+	node := ps.networkService.DatasetNode(datasetId)
+	if node == nil {
+		err := fmt.Errorf("The network node that stores the dataset is not available anymore")
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// Store the dataset policy in Git
+	if err := ps.gitStorePolicy(node.GetName(), datasetId, newPolicy); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	go ps.submitPolicyForDistribution(newPolicy)
 
 	respMsg := "Successfully set a new policy for " + datasetId + "\n"
 	w.WriteHeader(http.StatusOK)

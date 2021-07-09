@@ -205,7 +205,7 @@ func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) 
 	c, err := worktree.Commit(fPath, &git.CommitOptions{
 		All: true,
 		Author: &object.Signature{
-			Name: p.GetIssuer(),
+			Name: "Policy store",
 			//Email: "john@doe.org",
 			When: time.Now(),
 		},

@@ -2,15 +2,15 @@ package directoryserver
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/tls"
+	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"database/sql"
-	"crypto/x509"
+	_"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
-	"crypto/ecdsa"
 	"github.com/arcsecc/lohpi/core/netutil"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
@@ -21,20 +21,21 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"net"
+//	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"net/http"
 	"strconv"
 	"sync"
 )
 
 type Config struct {
-	Name 				string
-    HTTPPort                    int
-    GRPCPort                    int
-    CaAddress              string
-    UseTLS                         bool
-    CertificateFile             string
-    PrivateKeyFile              string
-    SQLConnectionString string
+	Name                string
+	HTTPPort            int
+	GRPCPort            int
+	CaAddress           string
+	UseTLS              bool
+	CertificateFile     string
+	PrivateKeyFile      string
+	SQLConnectionString string
 }
 
 type DirectoryServerCore struct {
@@ -69,7 +70,7 @@ type DirectoryServerCore struct {
 	invalidatedDatasetsLock sync.RWMutex
 
 	// directory server database
-	datasetDB *sql.DB
+	datasetDB  *sql.DB
 	checkoutDB *sql.DB
 
 	// Fetch the JWK
@@ -77,26 +78,33 @@ type DirectoryServerCore struct {
 
 	pb.UnimplementedDirectoryServerServer
 
-	ddService datasetDirectoryService
-	cm certManager
+	networkService  networkLookupService
+	cm         certManager
 	memManager membershipManager
+	dsManager  datasetCheckoutManager
 }
 
-type datasetDirectoryService interface {
-	DatasetNode(datasetId string) *pb.Node
-	DatasetNodes() map[string]*pb.Node
-	DatasetIdentifiers() []string
-	DatasetExists(datasetId string) bool
-	RemoveDataset(datasetId string)
-	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
+type networkLookupService interface {
+	DatasetNodeExists(datasetId string) bool
+	RemoveDatasetNode(datasetId string) error
 	InsertDatasetNode(datasetId string, node *pb.Node) error
+	DatasetNode(datasetId string) *pb.Node
+	DatasetIdentifiers() []string
 }
 
 type membershipManager interface {
+	NetworkNodes() map[string]*pb.Node
 	NetworkNode(nodeId string) *pb.Node
-	AddNetworkNode(nodeid string, network *pb.Node)
-	NetworkExists(id string) bool
-	RemoveNetworkNode(id string)
+	AddNetworkNode(nodeId string, node *pb.Node) error
+	NetworkNodeExists(id string) bool
+	RemoveNetworkNode(id string) error 
+}
+
+type datasetCheckoutManager interface {
+	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
+	DatasetCheckouts() ([]*pb.DatasetCheckout, error)
+	CheckinDataset(datasetId string, client *pb.Client) error
+	DatasetIsCheckedOut(datasetId string, client *pb.Client) (bool, error)
 }
 
 type certManager interface {
@@ -107,7 +115,7 @@ type certManager interface {
 }
 
 // Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
-func NewDirectoryServerCore(cm certManager, ddService datasetDirectoryService, memManager membershipManager, config *Config) (*DirectoryServerCore, error) {
+func NewDirectoryServerCore(cm certManager, networkService networkLookupService, memManager membershipManager, dcManager datasetCheckoutManager, config *Config) (*DirectoryServerCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration for directory server is nil")
 	}
@@ -138,9 +146,9 @@ func NewDirectoryServerCore(cm certManager, ddService datasetDirectoryService, m
 		clientCheckoutMap:   make(map[string][]string, 0),
 		invalidatedDatasets: make(map[string]struct{}),
 
-		ddService: ddService,
-		memManager: memManager,
-		cm: cm,
+		networkService:  networkService,
+		cm:         	 cm,
+		memManager: 	 memManager,
 	}
 
 	ds.grpcs.Register(ds)
@@ -193,11 +201,11 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
 		log.Println("Added dataset to map", msg.GetPolicyRequest().GetIdentifier())
-		if err := d.ddService.InsertDatasetNode(msg.GetStringValue(), msg.GetSender()); err != nil {
+		if err := d.networkService.InsertDatasetNode(msg.GetStringValue(), msg.GetSender()); err != nil {
 			log.Errorln(err.Error())
 			return nil, err
 		}
-	
+
 	case message.MSG_TYPE_RESOLVE_DATASET_IDENTIFIERS:
 		if err := d.resolveDatasetIdentifiersDeltas(msg.GetStringSlice(), msg.GetSender()); err != nil {
 			log.Errorln(err.Error())
@@ -230,9 +238,9 @@ func (d *DirectoryServerCore) resolveDatasetIdentifiersDeltas(newIdentifiers []s
 		return errors.New("node is nil")
 	}
 
-	currentIdentifiers := d.ddService.DatasetIdentifiers()
+	currentIdentifiers := d.networkService.DatasetIdentifiers()
 	for _, id := range newIdentifiers {
-		if err := d.ddService.InsertDatasetNode(id, node); err != nil {
+		if err := d.networkService.InsertDatasetNode(id, node); err != nil {
 			log.Errorln(err.Error())
 		}
 	}
@@ -257,7 +265,7 @@ func (d *DirectoryServerCore) resolveDatasetIdentifiersDeltas(newIdentifiers []s
 	}
 
 	for _, s := range superfluous {
-		d.ddService.RemoveDataset(s)
+		d.networkService.RemoveDatasetNode(s)
 	}
 
 	return nil
@@ -306,14 +314,10 @@ func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb
 		return nil, status.Error(codes.InvalidArgument, "pb node is nil")
 	}
 
-	currentNode := d.ddService.DatasetNode(node.GetName())
-	if currentNode == nil {
-		d.memManager.AddNetworkNode(node.GetName(), node)
-		log.Infof("DirectoryServerCore added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n",
-			node.GetName(), node.GetIfritAddress(), node.GetHttpsAddress())
-	} else {
-		return nil, fmt.Errorf("DirectoryServerCore: node '%s' already exists in network\n", node.GetName())
+	if err := d.memManager.AddNetworkNode(node.GetName(), node); err != nil {
+		return nil, err
 	}
+	log.Infof("Added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n", node.GetName(), node.GetIfritAddress(), node.GetHttpsAddress())
 	return &pb.HandshakeResponse{
 		Ip: d.ifritClient.Addr(),
 		Id: []byte(d.ifritClient.Id()),
@@ -353,7 +357,6 @@ func (d *DirectoryServerCore) pbNode() *pb.Node {
 	return &pb.Node{
 		Name:         "Lohpi directory server",
 		IfritAddress: d.ifritClient.Addr(),
-		Role:         "Directory server",
 		Id:           []byte(d.ifritClient.Id()),
 	}
 }

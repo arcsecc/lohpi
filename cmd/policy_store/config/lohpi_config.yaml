@@ -1,7 +1,10 @@
-muxip: 127.0.1.1:8081
-lohpicaaddr: 127.0.1.1:8301
-policystoregitrepository: "/var/tmp/lohpi/policy_store/policies"
-httpport: 8083
+name: "Policy Store"
+host: "127.0.0.1"
+httport: 8083
+grpcport: 8084
+gossipinterval: 10
 multicastacceptancelevel: 0.5
-gossipinterval: 10                  # measured in seconds
+caaddress: "127.0.1.1:8301"
+directoryserveraddress: "127.0.1.1:8081"
+policyStoregitrepository: "/var/tmp/lohpi/policy_store/policies"
 numdirectrecipients: 1

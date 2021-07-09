@@ -24,6 +24,7 @@ import (
 
 var config = struct {
 	HTTPPort                int    `default:"9000"`
+	HostName         		string `default:"127.0.1.1"`
 	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
 	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
 	LohpiCaAddr             string `default:"127.0.1.1:8301"`
@@ -109,12 +110,9 @@ func newNodeStorage(name string) (*StorageNode, error) {
 		node: n,
 	}
 
-	if err := sn.node.Start(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
+	if err := sn.node.HandshakeNetwork(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
 		return nil, err
 	}
-
-	go sn.node.StartHTTPServer(config.HTTPPort)
-	go sn.node.StartDatasetSyncing(config.PolicyStoreAddr)
 
 	return sn, nil
 }
@@ -236,7 +234,7 @@ func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
 		SQLConnectionString: dbConn,
 		//BackupRetentionTime time.Time
 		AllowMultipleCheckouts:         true,
-		HostName:                       "127.0.1.1",
+		HostName:                       config.HostName,
 		PolicyObserverWorkingDirectory: ".",
 	}, nil
 }
@@ -266,6 +264,8 @@ func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 }
 
 func (sn *StorageNode) Start() {
+	go sn.node.Start()
+	
 	if err := sn.indexDataset(); err != nil {
 		panic(err)
 	}

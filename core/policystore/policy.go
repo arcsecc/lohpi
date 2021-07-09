@@ -2,12 +2,9 @@ package policystore
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
 	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"github.com/arcsecc/lohpi/core/cache"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
@@ -17,6 +14,8 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
 	"github.com/lestrrat-go/jwx/jwk"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	log "github.com/sirupsen/logrus"
 	"net"
 	"net/http"
@@ -30,19 +29,23 @@ import (
 type Config struct {
 	Name                     string 
 	Host                     string 
-	PolicyBatchSize		     int    
 	GossipInterval           time.Duration 
 	HTTPPort                 int    
 	GRPCPort                 int    
 	MulticastAcceptanceLevel float64
-	DirectRecipients	     int    
-	MuxAddress               string 
-	LohpiCaAddress           string 
-	LohpiCaPort				 int			
+	NumDirectRecipients	     int    
+	CaAddress           	 string 
 	DirectoryServerAddress   string 
 	DirectoryServerGPRCPort  int
-	GitRepositoryPath 		string
-	TLSEnabled				 bool
+	GitRepositoryPath 		 string
+}
+
+type networkLookupService interface {
+	DatasetNodeExists(datasetId string) bool
+	RemoveDatasetNode(datasetId string) error
+	InsertDatasetNode(datasetId string, node *pb.Node) error
+	DatasetNode(datasetId string) *pb.Node
+	DatasetIdentifiers() []string
 }
 
 type datasetManager interface {
@@ -50,15 +53,9 @@ type datasetManager interface {
 	Datasets() map[string]*pb.Dataset
 	DatasetIdentifiers() []string
 	DatasetExists(datasetId string) bool
-	RemoveDataset(datasetId string)
-	DatasetIsAvailable(datasetId string) (bool, error)
-	DatasetIsCheckedOut(datasetId string, client *pb.Client) bool
-	DatasetPolicy(datasetId string) *pb.Policy
+	RemoveDataset(datasetId string) error 
 	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
-	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
-	DatasetCheckouts(datasetId string) ([]*pb.Dataset, error)
 	InsertDataset(datasetId string, dataset *pb.Dataset) error
-	SetDatasetPolicies(datasetMap map[string]*pb.Dataset) error
 }
 
 type stateSyncer interface {
@@ -67,13 +64,11 @@ type stateSyncer interface {
 }
 
 type membershipManager interface {
-	StorageNodeExists(datasetId string) bool
-	AddStorageNode(id string, node *pb.Node) error
-	SetDatasetStorageNode(datasetId string, node *pb.Node) error
-	GetDatasetStorageNode(datasetId string) error
-	DeleteDatasetFromNode(datasetId string) error
-	DeleteStorageNode(nodeId string) error
-	StorageNodes() []*pb.Node
+	NetworkNode(nodeId string) *pb.Node
+	AddNetworkNode(nodeid string, network *pb.Node) error 
+	NetworkNodeExists(id string) bool
+	RemoveNetworkNode(id string) error
+	NetworkNodes() map[string]*pb.Node
 }
 
 type PolicyStoreCore struct {
@@ -87,9 +82,6 @@ type PolicyStoreCore struct {
 	// MUX's Ifrit ip
 	directoryServerIfritIP string
 
-	// Cache manager
-	memCache *cache.Cache
-
 	// Go-git
 	repository *git.Repository
 
@@ -99,8 +91,6 @@ type PolicyStoreCore struct {
 
 	// Crypto
 	cu         *comm.CryptoUnit
-	publicKey  crypto.PublicKey
-	privateKey *rsa.PrivateKey
 
 	// gRPC service
 	grpcs *gRPCServer
@@ -116,22 +106,17 @@ type PolicyStoreCore struct {
 	// Fetch the JWK
 	ar *jwk.AutoRefresh
 
-	// Dataset id -> pb policy
-	datasetPolicyMap map[string]*pb.Policy
-	datasetPolicyMapLock sync.RWMutex
-
 	stateSync stateSyncer
 	dsManager datasetManager
+	memManager membershipManager
+	networkService networkLookupService
 }
 
-func NewPolicyStoreCore(dsManager datasetManager, stateSync stateSyncer, config *Config) (*PolicyStoreCore, error) {
-	// Ifrit client
+func NewPolicyStoreCore(networkService networkLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
 	}
-
-	go ifritClient.Start()
 
 	// Local git repository using go-git
 	repository, err := initializeGitRepository(config.GitRepositoryPath)
@@ -147,10 +132,10 @@ func NewPolicyStoreCore(dsManager datasetManager, stateSync stateSyncer, config 
 	// Setup X509 parameters
 	pk := pkix.Name{
 		Locality:   []string{listener.Addr().String()},
-		CommonName: "Policy Store",
+		CommonName: config.Name,
 	}
 
-	cu, err := comm.NewCu(pk, config.LohpiCaAddress + ":" + strconv.Itoa(config.LohpiCaPort))
+	cu, err := comm.NewCu(pk, config.CaAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -160,10 +145,7 @@ func NewPolicyStoreCore(dsManager datasetManager, stateSync stateSyncer, config 
 		return nil, err
 	}
 
-	// In-memory cache
-	memCache := cache.NewCache(ifritClient)
-
-	multicastManager, err := multicast.NewMulticastManager(ifritClient, config.MulticastAcceptanceLevel, config.DirectRecipients)
+	multicastManager, err := multicast.NewMulticastManager(ifritClient, config.MulticastAcceptanceLevel, config.NumDirectRecipients)
 	if err != nil {
 		return nil, err
 	}
@@ -173,16 +155,16 @@ func NewPolicyStoreCore(dsManager datasetManager, stateSync stateSyncer, config 
 		ifritClient:      ifritClient,
 		repository:       repository,
 		exitChan:         make(chan bool, 1),
-		memCache:         memCache,
 		cu:               cu,
 		grpcs:            s,
 		config:           config,
 		configLock:       sync.RWMutex{},
-		datasetPolicyMap: make(map[string]*pb.Policy),
 		multicastManager: multicastManager,
 		stopBatching:     make(chan bool),
-		dsManager: 	      dsManager,
+		networkService:   networkService,
 		stateSync:		  stateSync,
+		memManager:		  memManager,
+		dsManager: 		  dsManager,
 	}
 
 	ps.grpcs.Register(ps)
@@ -195,10 +177,10 @@ func NewPolicyStoreCore(dsManager datasetManager, stateSync stateSyncer, config 
 }
 
 func (ps *PolicyStoreCore) Start() error {
-	// Start the services
 	log.Println("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
 	go ps.grpcs.Start()
 	go ps.startHttpServer(fmt.Sprintf(":%d", ps.PolicyStoreConfig().HTTPPort))
+	go ps.ifritClient.Start()
 	return nil
 }
 
@@ -244,7 +226,7 @@ func (ps *PolicyStoreCore) IfritAddress() string {
 }
 
 func (ps *PolicyStoreCore) ifritMembersAddress() []string {
-	memMap := ps.memCache.Nodes()
+	memMap := ps.memManager.NetworkNodes()
 	members := make([]string, 0)
 	for _, n := range memMap {
 		members = append(members, n.GetIfritAddress())
@@ -347,13 +329,15 @@ func (ps *PolicyStoreCore) Stop() {
 
 // Handshake endpoint for nodes to join the network
 func (ps *PolicyStoreCore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
-	if _, ok := ps.memCache.DatasetNodes()[node.GetName()]; !ok {
-		ps.memCache.AddNode(node.GetName(), node)
-		log.Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n",
-			node.GetName(), node.GetIfritAddress())
-	} else {
-		return nil, fmt.Errorf("Policy store: node '%s' already exists in network\n", node.GetName())
+	if node == nil {
+		return nil, status.Error(codes.InvalidArgument, "pb node is nil")
 	}
+
+	if err := ps.memManager.AddNetworkNode(node.GetName(), node); err != nil {
+		return nil, err
+	}
+
+	log.Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n", node.GetName(), node.GetIfritAddress())
 	return &pb.HandshakeResponse{
 		Ip: ps.ifritClient.Addr(),
 		Id: []byte(ps.ifritClient.Id()),
@@ -388,60 +372,8 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 		return ps.pbMarshalDatasetsMap(deltaSet)
 
 	case message.MSG_TYPE_GET_DATASET_POLICY:
-		// If the dataset has not been found in the in-memory map, restore it.
-		if p := ps.dsManager.DatasetPolicy(msg.GetPolicyRequest().GetIdentifier()); p == nil {
-			if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
-				newPolicy := ps.getInitialDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
-				if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newPolicy); err != nil {
-					log.Errorln(err.Error())
-					return nil, err
-				}
-
-				newDataset := &pb.Dataset{
-					Identifier: msg.GetPolicyRequest().GetIdentifier(),
-					Policy: newPolicy,
-				}
-				
-				if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
-					log.Errorln(err.Error())
-					return nil, err
-				}
-
-				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
-				
-			} else {
-				policyString, err := ps.gitGetDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier())
-				if err != nil {
-					log.Errorln(err.Error())
-					return nil, err
-				}
-
-				b, err := strconv.ParseBool(policyString)
-				if err != nil {
-					log.Errorln(err.Error())
-					return nil, err
-				}
-
-				newDataset := &pb.Dataset{
-					Identifier: msg.GetPolicyRequest().GetIdentifier(),
-					Policy: &pb.Policy{
-						Issuer:            ps.PolicyStoreConfig().Name,
-						DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),
-						Content:           b,
-					},
-				}
-				
-				if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
-					log.Errorln(err.Error())
-					return nil, err
-				}
-
-				// REPLACE ME WITH INTERFACE INVOCATION
-				ps.memCache.AddDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender())
-			}
-		} 
-		return ps.pbMarshalDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
-
+		return ps.processStorageNodePolicyRequest(msg)
+		
 	case message.MSG_TYPE_PROBE_ACK:
 		log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
 		//log.Println("MSG HANDLER IN PS:", msg)
@@ -459,6 +391,68 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 	return resp, nil
 }
 
+func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]byte, error) {
+	if msg == nil {
+		panic("msg is nil!")
+	}
+
+	// If the dataset has not been found in the in-memory map, restore it.
+	if ds := ps.dsManager.Dataset(msg.GetPolicyRequest().GetIdentifier()); ds == nil {
+		newDataset := &pb.Dataset{}
+		if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
+			newDefaultPolicy := ps.getInitialDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
+			if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newDefaultPolicy); err != nil {
+				log.Errorln(err.Error())
+				return nil, err
+			}
+
+			// Insert the policy into git
+			if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newDefaultPolicy); err != nil {
+				log.Errorln(err.Error())
+				return nil, err
+			}
+
+			newDataset.Identifier = msg.GetPolicyRequest().GetIdentifier()
+			newDataset.Policy = newDefaultPolicy
+		} else {
+			// The dataset policy exists in Git. Restore the dataset entry
+			policyString, err := ps.gitGetDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier())
+			if err != nil {
+				log.Errorln(err.Error())
+				return nil, err
+			}
+
+			b, err := strconv.ParseBool(policyString)
+			if err != nil {
+				log.Errorln(err.Error())
+				return nil, err
+			}
+
+			newDataset.Identifier = msg.GetPolicyRequest().GetIdentifier()
+			// TOOO: store the timestamps in git too. Return a complete pb node from git interface?
+			newDataset.Policy = &pb.Policy{DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),Content:b, DateCreated: pbtime.Now(), DateApplied: pbtime.Now()} 
+		}
+
+		// Insert the dataset into the collection, given the dataset identifier
+		if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
+			log.Errorln(err.Error())
+			return nil, err
+		}
+	} else {
+		log.Println("ps.networkService.DatasetIdentifiers:", ps.networkService.DatasetIdentifiers())
+	} 
+
+	// Insert node into lookup table, given the dataset identifier
+	if !ps.networkService.DatasetNodeExists(msg.GetPolicyRequest().GetIdentifier()) {
+		if err := ps.networkService.InsertDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender()); err != nil {
+			log.Errorln(err.Error())
+			return nil, err
+		}
+	}
+
+	return ps.pbMarshalDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
+}
+
 // Resolves the deltas in the policy store's dataset and the incoming datasets. It removes the superfluous
 // datasets that are no longer stored at the node. Returns a map of the datasets that are new to the policy store. 
 func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error) {
@@ -466,7 +460,7 @@ func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDat
 		return nil, errors.New("Incoming dataset is nil")
 	}
 
-	currentDatasets := ps.dsManager.Datasets()
+/*	currentDatasets := ps.dsManager.Datasets()
 	deltaSet := make(map[string]*pb.Dataset)
 
 	// Add missing policies. Insert them into the collection and add default policy
@@ -515,13 +509,14 @@ func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDat
 		ps.dsManager.RemoveDataset(s)
 	}
 
-	return deltaSet, nil
+	return deltaSet, nil*/
+	return nil, nil
 }
 
 // Set the initial policy of a dataset
 func (ps *PolicyStoreCore) getInitialDatasetPolicy(datasetId string) *pb.Policy {
 	return &pb.Policy{
-		Issuer:          	ps.PolicyStoreConfig().Name,
+		//Issuer:          	ps.PolicyStoreConfig().Name,
 		DatasetIdentifier:  datasetId,
 		Content:          	false,
 		DateCreated: 		pbtime.Now(),
@@ -543,7 +538,6 @@ func (ps *PolicyStoreCore) gossipHandler(data []byte) ([]byte, error) {
 	switch msgType := msg.GetType(); msgType {
 	case message.MSG_TYPE_PROBE:
 		ps.ifritClient.SetGossipContent(data)	
-
 	default:
 		fmt.Printf("Unknown message at policy store: %s\n", msgType)
 	}
@@ -572,7 +566,6 @@ func (ps *PolicyStoreCore) pbNode() *pb.Node {
 	return &pb.Node{
 		//Issuer:       ps.PolicyStoreConfig().Name,
 		IfritAddress: ps.ifritClient.Addr(),
-		Role:         "policy store",
 		Id:           []byte(ps.ifritClient.Id()),
 	}
 }

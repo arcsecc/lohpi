@@ -2,19 +2,21 @@ package node
 
 import (
 	"context"
-	"github.com/lestrrat-go/jwx/jws"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"crypto/x509"
 	"crypto/ecdsa"
+	"encoding/json"
+	"github.com/lestrrat-go/jwx/jws"
+	"github.com/lestrrat-go/jwx/jwk"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
-	"encoding/json"
 	"github.com/joonnna/ifrit"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"net/http"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"sync"
 	"time"
 )
@@ -36,6 +38,15 @@ type Config struct {
 
 	// If true, a dataset can be checked out multiple times by the same client
 	AllowMultipleCheckouts bool
+
+	// Port used by the HTTP server
+	Port int32
+
+	// Interval that defines when the synchronization procedure will run
+	SyncInterval time.Duration
+
+	// Hostname used by the HTTP server
+	HostName string
 }
 
 // TODO: use logrus to create machine-readable logs with fields!
@@ -90,8 +101,11 @@ type NodeCore struct {
 	dsManager datasetManager
 	gossipObs gossipObserver
 	stateSync stateSyncer
+	dcManager datasetCheckoutManager
 	
-	joinTime time.Time
+	pbnode *pb.Node
+	boottime *pbtime.Timestamp
+	pubKeyCache *jwk.AutoRefresh
 }
 
 type certManager interface {
@@ -107,21 +121,22 @@ type gossipObserver interface {
 	LatestGossip() *pb.GossipMessageID // TODO fix me!
 }
 
-// TODO: add a client entity as argument to the methods in this interface
 type datasetManager interface {
 	Dataset(datasetId string) *pb.Dataset
 	Datasets() map[string]*pb.Dataset
 	DatasetIdentifiers() []string
 	DatasetExists(datasetId string) bool
-	RemoveDataset(datasetId string)
-	DatasetIsAvailable(datasetId string) (bool, error)
-	DatasetIsCheckedOut(datasetId string, client *pb.Client) bool
-	DatasetPolicy(datasetId string) *pb.Policy
+	RemoveDataset(datasetId string) error 
 	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
-	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
-	DatasetCheckouts(datasetId string) ([]*pb.Dataset, error)
+	GetDatasetPolicy(datasetId string) *pb.Policy
 	InsertDataset(datasetId string, dataset *pb.Dataset) error
-	SetDatasetPolicies(datasetMap map[string]*pb.Dataset) error
+}
+
+type datasetCheckoutManager interface {
+	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
+	DatasetIsCheckedOut(datasetId string, client *pb.Client) (bool, error)
+	CheckinDataset(datasetId string, client *pb.Client) error 
+	DatasetCheckouts() ([]*pb.DatasetCheckout, error)
 }
 
 type stateSyncer interface {
@@ -131,7 +146,7 @@ type stateSyncer interface {
 }
 
 // TODO: reload dateapplied and datecreated from the databases on boot time.
-func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetManager, stateSync stateSyncer, config *Config) (*NodeCore, error) {
+func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetManager, stateSync stateSyncer, dcManager datasetCheckoutManager, config *Config) (*NodeCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration is nil")
 	}
@@ -141,8 +156,6 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 		return nil, err
 	}
 
-	go ifritClient.Start()
-
 	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
 	if err != nil {
 		return nil, err
@@ -151,6 +164,15 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 	psClient, err := comm.NewPolicyStoreClient(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
 	if err != nil {
 		return nil, err
+	}
+
+	pbnode := &pb.Node{
+		Name:         	config.Name,
+		IfritAddress: 	ifritClient.Addr(),
+		Id:           	[]byte(ifritClient.Id()),
+		HttpsAddress:	config.HostName,
+		Port: 			config.Port,
+		BootTime:		pbtime.Now(),
 	}
 
 	node := &NodeCore{
@@ -163,17 +185,10 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 		gossipObs: 	  			  gossipObs,
 		dsManager: 				  dsManager,
 		stateSync: 				  stateSync,
+		dcManager: 				  dcManager,
 		exitChan:				  make(chan bool, 1),
+		pbnode: 			  	  pbnode,	
 	}
-
-	//go node.startDatasetSyncer(time.Second * 5, )
-	// Initialize the PostgresSQL database
-	// TODO: remove me and config me somewhere else :)
-	/*if err := node.initializePostgreSQLdb(config.PostgresSQLConnect
-		ionString); err != nil {
-		panic(err)
-		return nil, err
-	}*/
 
 	// Set the Ifrit handlers
 	node.ifritClient.RegisterMsgHandler(node.messageHandler)
@@ -191,14 +206,20 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 	return n.ifritClient
 }
 
+func (n *NodeCore) Start() {
+	go n.ifritClient.Start()
+	go n.startStateSyncer()
+	go n.startHTTPServer()
+}
+
 // TODO: refine me! Fix the abstraction boundaries
-func (n *NodeCore) StartStateSyncer(syncInterval time.Duration) {
+func (n *NodeCore) startStateSyncer() {
 	for {
 		select {
 		case <-n.exitChan:
 			log.Info("Exiting sync")
 			return
-		case <-time.After(syncInterval):
+		case <-time.After(n.config().SyncInterval):
 			deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
 			if err != nil {
 				log.Errorln(err.Error())
@@ -225,7 +246,7 @@ func (n *NodeCore) StartStateSyncer(syncInterval time.Duration) {
 // You will have to call this method to make the datasets available to the clients. 
 func (n *NodeCore) IndexDataset(datasetId string) error {
 	if n.dsManager.DatasetExists(datasetId) {
-		return fmt.Errorf("Dataset with identifier '%s' is already indexed by the server", datasetId)
+		log.Infof("Dataset with identifier '%s' is already indexed by the server\n", datasetId)
 	}
 
 	// Send policy request to policy store
@@ -233,7 +254,7 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	dataset := &pb.Dataset{
 		Identifier: datasetId,
 		Policy: policyResponse,
@@ -280,7 +301,7 @@ func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	r, err := conn.Handshake(ctx, n.PbNode())
+	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
 		return err
 	}
@@ -288,15 +309,7 @@ func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 	n.directoryServerIP = r.GetIp()
 	n.directoryServerID = r.GetId()
 
-	// TODO: put me somewhere else!
-	n.joinTime = time.Now()
-
 	return nil
-}
-
-// TODO: set proper config here :))
-func (n *NodeCore) StartHTTPServer(port int) {
-	go n.startHTTPServer(fmt.Sprintf(":%d", port))
 }
 
 func (n *NodeCore) IfritAddress() string {
@@ -312,7 +325,7 @@ func (n *NodeCore) HandshakePolicyStore(addr string) error {
 		return errors.New("Address is empty")
 	}
 
-	log.Infof("Performing handshake with policy store at address %s\n")
+	log.Infof("Performing handshake with policy store at address %s\n", addr)
 	conn, err := n.psClient.Dial(addr)
 	if err != nil {
 		return err
@@ -322,7 +335,7 @@ func (n *NodeCore) HandshakePolicyStore(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	r, err := conn.Handshake(ctx, n.PbNode())
+	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
 		return err
 	}
@@ -504,7 +517,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 	// Acknowledge the probe message
 	resp := &pb.Message{
 		Type: message.MSG_TYPE_PROBE_ACK,
-		Sender: n.PbNode(),
+		Sender: n.getPbNode(),
 		Probe: msg.GetProbe(),
 	}
 
@@ -558,17 +571,12 @@ func (n *NodeCore) verifyPolicyStoreMessage(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) PbNode() *pb.Node {
-	return &pb.Node{
-		Name:         	n.config().Name,
-		IfritAddress: 	n.ifritClient.Addr(),
-		Role:         	"Storage node",
-		Id:           	[]byte(n.ifritClient.Id()),
-	}
+func (n *NodeCore) getPbNode() *pb.Node {
+	return n.pbnode
 }
 
 func (n *NodeCore) verifyMessageSignature(msg *pb.Message) error {
-	return nil
+	return nil // try again with sleep time...
 	// Verify the integrity of the node
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
@@ -594,13 +602,21 @@ func (n *NodeCore) verifyMessageSignature(msg *pb.Message) error {
 	return nil
 }
 
-func (n *NodeCore) jwtTokenToPbClient(token string) (*pb.Client, error) {
+// Use this to refer to configuration variables
+func (n *NodeCore) config() *Config {
+	n.configLock.RLock()
+	defer n.configLock.RUnlock()
+	return n.conf
+}
+
+func jwtTokenToPbClient(token string) (*pb.Client, error) {
 	if token == "" {
 		return nil, errors.New("Token string is empty")
 	}
 
 	msg, err := jws.ParseString(token)
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -609,20 +625,20 @@ func (n *NodeCore) jwtTokenToPbClient(token string) (*pb.Client, error) {
 		return nil, errors.New("Payload was nil")
 	}
 
-	c := &Client{}
+	c := struct {
+		Name    		string `json:"name"`
+		Oid 			string `json:"oid"`
+		EmailAddress 	string `json:"email"`
+	}{}
+
 	if err := json.Unmarshal(s, &c); err != nil {
+		panic(err)
 		return nil, err
 	}
 
 	return &pb.Client{
 		Name: c.Name,
-		ID: []byte(c.Oid),
+		ID: c.Oid,
+		EmailAddress: c.EmailAddress,
 	}, nil
-}
-
-// Use this to refer to configuration variables
-func (n *NodeCore) config() *Config {
-	n.configLock.RLock()
-	defer n.configLock.RUnlock()
-	return n.conf
 }

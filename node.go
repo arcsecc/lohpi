@@ -1,16 +1,16 @@
 package lohpi
 
 import (
-	"net/http"
-	"github.com/pkg/errors"
-	"github.com/arcsecc/lohpi/core/node"
 	"crypto/x509/pkix"
-	"github.com/arcsecc/lohpi/core/netutil"
 	"github.com/arcsecc/lohpi/core/comm"
-	"github.com/arcsecc/lohpi/core/gossipobserver"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
+	"github.com/arcsecc/lohpi/core/gossipobserver"
+	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/node"
 	"github.com/arcsecc/lohpi/core/statesync"
+	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"net/http"
 	"time"
 )
 
@@ -20,7 +20,7 @@ var (
 
 type Node struct {
 	nodeCore *node.NodeCore
-	conf *node.Config
+	conf     *node.Config
 }
 
 type NodeConfig struct {
@@ -34,7 +34,7 @@ type NodeConfig struct {
 	// will not be used. This means that only the in-memory maps will be used for storage.
 	SQLConnectionString string
 
-	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued. 
+	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued.
 	// NOT USED
 	BackupRetentionTime time.Time
 
@@ -46,6 +46,12 @@ type NodeConfig struct {
 
 	// Output directory of gossip observation unit. Default value is the current working directory.
 	PolicyObserverWorkingDirectory string
+
+	// HTTP port number. Default value is 9000
+	Port int32
+
+	// Synchronization interval. Default value is 60 seconds.
+	SyncInterval time.Duration
 }
 
 // TODO: consider using intefaces
@@ -65,12 +71,23 @@ func NewNode(config *NodeConfig) (*Node, error) {
 	if config.PolicyObserverWorkingDirectory == "" {
 		config.PolicyObserverWorkingDirectory = "."
 	}
-	
+
+	if config.Port == 0 {
+		config.Port = 9000
+	}
+
+	if config.SyncInterval <= 0 {
+		config.SyncInterval = 60 * time.Second
+	}
+
 	n := &Node{
 		conf: &node.Config{
-			Name: config.Name,
+			Name:                   config.Name,
 			AllowMultipleCheckouts: config.AllowMultipleCheckouts,
-			SQLConnectionString: config.SQLConnectionString,
+			SQLConnectionString:    config.SQLConnectionString,
+			Port:                   config.Port,
+			SyncInterval:			config.SyncInterval,
+			HostName:               config.HostName,
 		},
 	}
 
@@ -93,30 +110,40 @@ func NewNode(config *NodeConfig) (*Node, error) {
 	// Policy observer
 	gossipObsConfig := &gossipobserver.PolicyObserverConfig{
 		OutputDirectory: config.PolicyObserverWorkingDirectory,
-		LogfilePrefix: config.Name,
-		Capacity: 10, //config me
+		LogfilePrefix:   config.Name,
+		Capacity:        10, //config me
 	}
 	gossipObs, err := gossipobserver.NewGossipObserver(gossipObsConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	// Dataset manager
-	datasetManagerConfig := &datasetmanager.DatasetManagerConfig{
-		SQLConnectionString: 	config.SQLConnectionString,
-		Reload: 				true,
+	// Dataset manager service
+	datasetServiceUnitConfig := &datasetmanager.DatasetServiceUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
+		UseDB: true,
 	}
-	dsManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
+	dsManager, err := datasetmanager.NewDatasetServiceUnit(datasetServiceUnitConfig)
 	if err != nil {
 		return nil, err
 	}
 
+	// State sync manager
 	stateSync, err := statesync.NewStateSyncUnit()
 	if err != nil {
 		return nil, err
 	}
 
-	nCore, err := node.NewNodeCore(cu, gossipObs, dsManager, stateSync, n.conf)
+	// Checkout manager
+	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
+	}
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(dsCheckoutManagerConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	nCore, err := node.NewNodeCore(cu, gossipObs, dsManager, stateSync, dsCheckoutManager, n.conf)
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +155,11 @@ func NewNode(config *NodeConfig) (*Node, error) {
 }
 
 func (n *Node) StartDatasetSyncing(remoteAddr string) error {
-	return nil	
+	return nil
 }
 
 // IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
-// it will return when policy requests to the policy store finish. 
+// it will return when policy requests to the policy store finish.
 func (n *Node) IndexDataset(datasetId string) error {
 	if datasetId == "" {
 		return errNoDatasetId
@@ -161,7 +188,7 @@ func (n *Node) RemoveDataset(id string) {
 		log.Errorln("Dataset identifier must not be empty")
 		return
 	}
-	
+
 	n.nodeCore.RemoveDataset(id)
 }
 
@@ -170,7 +197,7 @@ func (n *Node) Shutdown() {
 	n.nodeCore.Shutdown()
 }
 
-func (n *Node) Start(directoryServerAddress, policyStoreAddress string) error {
+func (n *Node) HandshakeNetwork(directoryServerAddress, policyStoreAddress string) error {
 	if err := n.nodeCore.HandshakeDirectoryServer(directoryServerAddress); err != nil {
 		return err
 	}
@@ -179,13 +206,11 @@ func (n *Node) Start(directoryServerAddress, policyStoreAddress string) error {
 		return err
 	}
 
-	go n.nodeCore.StartStateSyncer(5 * time.Second)
-	
 	return nil
 }
 
-func (n *Node) StartHTTPServer(port int) {
-	n.nodeCore.StartHTTPServer(port)	
+func (n *Node) Start() {
+	n.nodeCore.Start()
 }
 
 // Returns the underlying Ifrit address.

@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	dbName          = "directory_server_db"
-	schemaName      = "directory_server_schema"
-	checkoutTable   = "checkout_table"
-	datasetTable	= "dataset_table"
+	dbName        = "directory_server_db"
+	schemaName    = "directory_server_schema"
+	checkoutTable = "checkout_table"
+	datasetTable  = "dataset_table"
 
 	errNoConnectionString = errors.New("No connection string provided")
 )
@@ -24,14 +24,14 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 	if connectionString == "" {
 		return errNoConnectionString
 	}
-	
+
 	// Create schema
-	if err := d.createSchema(connectionString); err != nil {  
+	if err := d.createSchema(connectionString); err != nil {
 		return err
 	}
 
 	// Dataset table
-	if err := d.initializeDatasetTable(connectionString); err != nil { 
+	if err := d.initializeDatasetTable(connectionString); err != nil {
 		return err
 	}
 
@@ -39,7 +39,7 @@ func (d *DirectoryServerCore) initializeDirectorydb(connectionString string) err
 	if err := d.initializeCheckoutTable(connectionString); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -120,7 +120,7 @@ func (d *DirectoryServerCore) createSchema(connectionString string) error {
 	if err != nil {
 		return err
 	}
-	if err := db.Ping(); err != nil {		// Error here ("SSL is not enabled on the server")
+	if err := db.Ping(); err != nil { // Error here ("SSL is not enabled on the server")
 		panic(err)
 		return err
 	}
@@ -131,7 +131,6 @@ func (d *DirectoryServerCore) createSchema(connectionString string) error {
 
 	return nil
 }
-
 
 // Insert datasetId into database, called from `directoryservercore.go, line 162`
 func (d *DirectoryServerCore) dbInsertDataset(dataSetId string) error {
@@ -154,7 +153,6 @@ func (d *DirectoryServerCore) updateProjectDescription(id string, project_descri
 	ON CONFLICT (dataset_id)
 	DO
 		UPDATE SET project_description = $2;`
-
 
 	_, err := d.datasetDB.Exec(q, id, project_description)
 	if err != nil {

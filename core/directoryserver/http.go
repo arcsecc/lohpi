@@ -41,6 +41,9 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
 
+	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
+	networkRouter.HandleFunc("/ndoes", d.getNetworkNodes).Methods("GET")
+
 	// Middlewares used for validation
 	//dRouter.Use(d.middlewareValidateTokenSignature)
 	//dRouter.Use(d.middlewareValidateTokenClaims)
@@ -62,11 +65,24 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	return d.httpServer.ListenAndServe()
 }
 
+func (d *DirectoryServerCore) getNetworkNodes(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	/*nodes := struct {
+		Nodes []struct {
+			Name string `json:"name"`
+			IpAddress string `json:"ip_address"`
+			JoinedAt string `json:"joined_at"`
+			Datasets []string `json:"datasets"`
+			CheckedOutDatasets []string `json:"checked_out_datasets"`
+		}
+	}*/
+}
 
 // Sets project description for the dataset given as 'id'
 func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	
+
 	/* Front end needs to send in json object with project description, with application/json in header */
 	clientReq := struct {
 		ProjectDescription string `json:"project_description"`
@@ -84,8 +100,7 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	}
 
 	// Check if dataset is known to network
-	node := d.ddService.DatasetNode(dataset)
-	if node == nil {
+	if !d.networkService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
@@ -110,8 +125,7 @@ func (d *DirectoryServerCore) getProjectDescription(w http.ResponseWriter, r *ht
 	}
 
 	// Check if dataset is known to network
-	node := d.ddService.DatasetNode(dataset)
-	if node == nil {
+	if !d.networkService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
@@ -127,7 +141,7 @@ func (d *DirectoryServerCore) getProjectDescription(w http.ResponseWriter, r *ht
 	response := struct {
 		ProjectDescription string `json:"project_description"`
 	}{
-		ProjectDescription:	pd,
+		ProjectDescription: pd,
 	}
 
 	b := new(bytes.Buffer)
@@ -148,7 +162,6 @@ func (d *DirectoryServerCore) getProjectDescription(w http.ResponseWriter, r *ht
 		return
 	}
 }
-
 
 func (d *DirectoryServerCore) setPublicKeyCache() error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -276,7 +289,7 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 	resp := struct {
 		Identifiers []string
 	}{
-		Identifiers: d.ddService.DatasetIdentifiers(),
+		Identifiers: d.networkService.DatasetIdentifiers(),
 	}
 
 	b := new(bytes.Buffer)
@@ -313,11 +326,18 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 	defer cancel()*/
 
 	// Check if dataset is known to network
-	node := d.ddService.DatasetNode(dataset)
-	if node == nil {
+	if !d.networkService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	node := d.networkService.DatasetNode(dataset)
+	if node == nil {
+		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusGone)+": "+err.Error(), http.StatusGone)
 		return
 	}
 
@@ -334,9 +354,9 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		err := fmt.Errorf("Failed to fetch dataset\n")
+		err := fmt.Errorf("Service is not available")
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusServiceUnavailable)+": "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -377,11 +397,18 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Get the node that stores it
-	node := d.ddService.DatasetNode(dataset)
-	if node == nil {
+	if !d.networkService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	node := d.networkService.DatasetNode(dataset)
+	if node == nil {
+		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusGone)+": "+err.Error(), http.StatusGone)
 		return
 	}
 
@@ -396,7 +423,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		Header: http.Header{},
 	}
 
-	req.Header.Add("Authorization", "Bearer " + string(token))
+	req.Header.Add("Authorization", "Bearer "+string(token))
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
