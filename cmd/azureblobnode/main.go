@@ -24,7 +24,7 @@ import (
 
 var config = struct {
 	HTTPPort                int    `default:"9000"`
-	HostName         		string `default:"127.0.1.1"`
+	Hostname         		string `default:"127.0.1.1"`
 	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
 	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
 	LohpiCaAddr             string `default:"127.0.1.1:8301"`
@@ -72,17 +72,12 @@ func main() {
 	var sn *StorageNode
 	var err error
 
-	if createNew {
-		sn, err = newNodeStorage(nodeName)
-		if err != nil {
-			log.Errorln(err.Error())
-			os.Exit(1)
-		}
-	} else {
-		log.Errorln("Need to set the 'new' flag to true. Exiting.")
+	sn, err = newNodeStorage(nodeName, createNew)
+	if err != nil {
+		log.Errorln(err.Error())
 		os.Exit(1)
 	}
-
+	
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -95,13 +90,13 @@ func main() {
 	os.Exit(0)
 }
 
-func newNodeStorage(name string) (*StorageNode, error) {
+func newNodeStorage(name string, createNew bool) (*StorageNode, error) {
 	c, err := getNodeConfiguration(name)
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := lohpi.NewNode(c)
+	n, err := lohpi.NewNode(c, createNew)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +229,7 @@ func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
 		SQLConnectionString: dbConn,
 		//BackupRetentionTime time.Time
 		AllowMultipleCheckouts:         true,
-		HostName:                       config.HostName,
+		Hostname:                       config.Hostname,
 		PolicyObserverWorkingDirectory: ".",
 	}, nil
 }

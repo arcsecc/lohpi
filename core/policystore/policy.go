@@ -2,10 +2,10 @@ package policystore
 
 import (
 	"context"
-	"crypto/x509/pkix"
 	"errors"
 	"fmt"
-	"github.com/arcsecc/lohpi/core/comm"
+	"crypto/ecdsa"
+	"crypto/x509"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
 	"github.com/arcsecc/lohpi/core/policystore/multicast"
@@ -28,7 +28,7 @@ import (
 
 type Config struct {
 	Name                     string 
-	Host                     string 
+	Hostname                     string 
 	GossipInterval           time.Duration 
 	HTTPPort                 int    
 	GRPCPort                 int    
@@ -71,6 +71,13 @@ type membershipManager interface {
 	NetworkNodes() map[string]*pb.Node
 }
 
+type certManager interface {
+	Certificate() *x509.Certificate
+	CaCertificate() *x509.Certificate
+	PrivateKey() *ecdsa.PrivateKey
+	PublicKey() *ecdsa.PublicKey
+}
+
 type PolicyStoreCore struct {
 	// Policy store's configuration
 	config     *Config
@@ -89,9 +96,6 @@ type PolicyStoreCore struct {
 	exitChan    chan bool
 	networkLock sync.Mutex
 
-	// Crypto
-	cu         *comm.CryptoUnit
-
 	// gRPC service
 	grpcs *gRPCServer
 
@@ -106,13 +110,14 @@ type PolicyStoreCore struct {
 	// Fetch the JWK
 	ar *jwk.AutoRefresh
 
+	cm certManager
 	stateSync stateSyncer
 	dsManager datasetManager
 	memManager membershipManager
 	networkService networkLookupService
 }
 
-func NewPolicyStoreCore(networkService networkLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
+func NewPolicyStoreCore(cm certManager, networkService networkLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -129,18 +134,7 @@ func NewPolicyStoreCore(networkService networkLookupService, stateSync stateSync
 		return nil, err
 	}
 
-	// Setup X509 parameters
-	pk := pkix.Name{
-		Locality:   []string{listener.Addr().String()},
-		CommonName: config.Name,
-	}
-
-	cu, err := comm.NewCu(pk, config.CaAddress)
-	if err != nil {
-		return nil, err
-	}
-
-	s, err := newPolicyStoreGRPCServer(cu.Certificate(), cu.CaCertificate(), cu.PrivateKey(), listener)
+	s, err := newPolicyStoreGRPCServer(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey(), listener)
 	if err != nil {
 		return nil, err
 	}
@@ -155,10 +149,9 @@ func NewPolicyStoreCore(networkService networkLookupService, stateSync stateSync
 		ifritClient:      ifritClient,
 		repository:       repository,
 		exitChan:         make(chan bool, 1),
-		cu:               cu,
+		cm:               cm,
 		grpcs:            s,
 		config:           config,
-		configLock:       sync.RWMutex{},
 		multicastManager: multicastManager,
 		stopBatching:     make(chan bool),
 		networkService:   networkService,
@@ -460,7 +453,7 @@ func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDat
 		return nil, errors.New("Incoming dataset is nil")
 	}
 
-/*	currentDatasets := ps.dsManager.Datasets()
+	currentDatasets := ps.dsManager.Datasets()
 	deltaSet := make(map[string]*pb.Dataset)
 
 	// Add missing policies. Insert them into the collection and add default policy
@@ -509,8 +502,7 @@ func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDat
 		ps.dsManager.RemoveDataset(s)
 	}
 
-	return deltaSet, nil*/
-	return nil, nil
+	return deltaSet, nil
 }
 
 // Set the initial policy of a dataset

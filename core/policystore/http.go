@@ -40,7 +40,7 @@ func (ps *PolicyStoreCore) startHttpServer(addr string) error {
 		WriteTimeout: time.Second * 30,
 		ReadTimeout:  time.Second * 30,
 		IdleTimeout:  time.Second * 60,
-		TLSConfig:    comm.ServerConfig(ps.cu.Certificate(), ps.cu.CaCertificate(), ps.cu.PrivateKey()),
+		TLSConfig:    comm.ServerConfig(ps.cm.Certificate(), ps.cm.CaCertificate(), ps.cm.PrivateKey()),
 	}
 
 	//router.Use(ps.middlewareValidateTokenSignature)

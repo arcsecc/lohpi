@@ -3,12 +3,13 @@ package lohpi
 import (
 	"crypto/x509/pkix"
 	"errors"
+//	log "github.com/sirupsen/logrus"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
-	"github.com/arcsecc/lohpi/core/netutil"
 	"time"
+	"fmt"
 )
 
 type DirectoryServerConfig struct {
@@ -38,8 +39,8 @@ type DirectoryServerConfig struct {
 	// TCP port used by the gRPC server. Default value is 8081.
 	GRPCPort int
 
-	CertificateFile string
-	PrivateKey      string
+	// Path used to store X.509 certificate and private key
+	CryptoUnitWorkingDirectory string
 }
 
 type DirectoryServer struct {
@@ -48,7 +49,7 @@ type DirectoryServer struct {
 }
 
 // Returns a new DirectoryServer using the given directory server options. Returns a non-nil error, if any.
-func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error) {
+func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServer, error) {
 	if config == nil {
 		return nil, errors.New("Directory server configuration is nil")
 	}
@@ -77,6 +78,10 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 		config.GRPCPort = 8081
 	}
 
+	if config.CryptoUnitWorkingDirectory == "" {
+		config.CryptoUnitWorkingDirectory = "./secrets"
+	}
+
 	ds := &DirectoryServer{
 		conf: &directoryserver.Config{
 			Name:                config.Name,
@@ -87,20 +92,37 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 		},
 	}
 
-	listener, err := netutil.GetListener()
-	if err != nil {
-		return nil, err
-	}
+	// Crypto manager
+	var cu *comm.CryptoUnit
+	var err error
 
-	pk := pkix.Name{
-		CommonName: ds.conf.Name,
-		Locality:   []string{listener.Addr().String()},
-	}
+	if new {
+		// Create a new crypto unit 
+		cryptoUnitConfig := &comm.CryptoUnitConfig{
+			Identity: pkix.Name{
+				Country: []string{"NO"},
+				CommonName: ds.conf.Name,
+				Locality: []string{
+					fmt.Sprintf("%s:%d", config.HostName, config.HTTPPort), 
+					fmt.Sprintf("%s:%d", config.HostName, config.GRPCPort),
+				},
+			},
+			CaAddr: config.CaAddress,
+			Hostnames: []string{config.HostName},
+		}
+		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
+		if err != nil {
+			return nil, err
+		}
 
-	// Crypto unit
-	cu, err := comm.NewCu(pk, config.CaAddress)
-	if err != nil {
-		return nil, err
+		if err := cu.SaveState(); err != nil {
+			return nil, err
+		}	
+	} else {
+		cu, err = comm.LoadCu(config.CryptoUnitWorkingDirectory)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Dataset manager
@@ -113,6 +135,7 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 		return nil, err
 	}
 
+	// Membership manager
 	memManagerConfig := &membershipmanager.MembershipManagerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 		UseDB: true,
@@ -122,6 +145,7 @@ func NewDirectoryServer(config *DirectoryServerConfig) (*DirectoryServer, error)
 		return nil, err
 	}
 
+	// Checkout manager
 	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 	}
@@ -149,4 +173,12 @@ func (d *DirectoryServer) Start() {
 // Performs a graceful shutdown of the directory server.
 func (d *DirectoryServer) Stop() {
 	d.dsCore.Stop()
+}
+
+func (d *DirectoryServer) SavePrivateKey() error {
+	return nil
+}
+
+func (d *DirectoryServer) SaveCertificate() error {
+	return nil
 }

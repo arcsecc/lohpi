@@ -5,7 +5,7 @@ import (
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/gossipobserver"
-	"github.com/arcsecc/lohpi/core/netutil"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/node"
 	"github.com/arcsecc/lohpi/core/statesync"
 	"github.com/pkg/errors"
@@ -42,20 +42,23 @@ type NodeConfig struct {
 	AllowMultipleCheckouts bool
 
 	// Hostname of the node. Default value is "127.0.1.1".
-	HostName string
+	Hostname string
 
 	// Output directory of gossip observation unit. Default value is the current working directory.
 	PolicyObserverWorkingDirectory string
 
 	// HTTP port number. Default value is 9000
-	Port int32
+	Port int
 
 	// Synchronization interval. Default value is 60 seconds.
 	SyncInterval time.Duration
+
+	// Path used to store X.509 certificate and private key
+	CryptoUnitWorkingDirectory string
 }
 
 // TODO: consider using intefaces
-func NewNode(config *NodeConfig) (*Node, error) {
+func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	if config == nil {
 		return nil, errors.New("Node configuration is nil")
 	}
@@ -64,8 +67,8 @@ func NewNode(config *NodeConfig) (*Node, error) {
 		config.CaAddress = "127.0.1.1:8301"
 	}
 
-	if config.HostName == "" {
-		config.HostName = "127.0.1.1"
+	if config.Hostname == "" {
+		config.Hostname = "127.0.1.1"
 	}
 
 	if config.PolicyObserverWorkingDirectory == "" {
@@ -80,6 +83,10 @@ func NewNode(config *NodeConfig) (*Node, error) {
 		config.SyncInterval = 60 * time.Second
 	}
 
+	if config.CryptoUnitWorkingDirectory == "" {
+		config.CryptoUnitWorkingDirectory = "./secrets"
+	}
+
 	n := &Node{
 		conf: &node.Config{
 			Name:                   config.Name,
@@ -87,24 +94,39 @@ func NewNode(config *NodeConfig) (*Node, error) {
 			SQLConnectionString:    config.SQLConnectionString,
 			Port:                   config.Port,
 			SyncInterval:			config.SyncInterval,
-			HostName:               config.HostName,
 		},
 	}
 
-	listener, err := netutil.GetListener()
-	if err != nil {
-		return nil, err
-	}
+	// Crypto manager
+	var cu *comm.CryptoUnit
+	var err error
 
-	pk := pkix.Name{
-		CommonName: n.conf.Name,
-		Locality:   []string{listener.Addr().String()},
-	}
+	if createNew {
+		// Create a new crypto unit 
+		cryptoUnitConfig := &comm.CryptoUnitConfig{
+			Identity: pkix.Name{
+				Country: []string{"NO"},
+				CommonName: config.Name,
+				Locality: []string{
+					fmt.Sprintf("%s:%d", config.Hostname, config.Port), 
+				},
+			},
+			CaAddr: config.CaAddress,
+			Hostnames: []string{config.Hostname},
+		}
+		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
+		if err != nil {
+			return nil, err
+		}
 
-	// Crypto unit
-	cu, err := comm.NewCu(pk, config.CaAddress)
-	if err != nil {
-		return nil, err
+		if err := cu.SaveState(); err != nil {
+			return nil, err
+		}	
+	} else {
+		cu, err = comm.LoadCu(config.CryptoUnitWorkingDirectory)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Policy observer

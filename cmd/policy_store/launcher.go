@@ -45,28 +45,21 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Policy store instance")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: true, ENVPrefix: "PS"}).Load(&config, psConfigFile, "./config/lohpi_config.yaml")
+	configor.New(&configor.Config{Debug: true, ENVPrefix: "PS"}).Load(&config, psConfigFile, psConfigFile)
 
-	var policyStore *lohpi.PolicyStore
-
-	if createNew {
-		config, err := getPolicyStoreConfig()
-		if err != nil {
-			log.Fatalln(err.Error())
-		}
-
-		policyStore, err := lohpi.NewPolicyStore(config)
-		if err != nil {
-			log.Fatalln(err.Error())
-		}
-
-		go policyStore.Start()
-		go policyStore.RunPolicyBatcher()
-	} else {
-		log.Fatalln("Need to set the 'new' flag to true. Exiting")
-		os.Exit(1)
+	config, err := getPolicyStoreConfig()
+	if err != nil {
+		log.Fatalln(err.Error())
 	}
 
+	policyStore, err := lohpi.NewPolicyStore(config, createNew)
+	if err != nil {
+		log.Fatalln(err.Error())
+	}
+
+	go policyStore.Start()
+	go policyStore.RunPolicyBatcher() // place me at a lower level?
+	
 	channel := make(chan os.Signal, 2)
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel

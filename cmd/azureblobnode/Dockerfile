@@ -21,7 +21,14 @@ RUN go mod download
 # Copy the code into the container
 COPY ./node.go ./node.go
 COPY ./keyvault.go ./keyvault.go
-COPY ./core ./core
+COPY ./core/node ./core/node
+COPY ./core/datasetmanager ./core/datasetmanager
+COPY ./core/comm ./core/comm
+COPY ./core/gossipobserver ./core/gossipobserver
+COPY ./core/message ./core/message
+COPY ./core/netutil ./core/netutil
+COPY ./core/util ./core/util
+COPY ./core/statesync ./core/statesync
 COPY ./protobuf ./protobuf
 COPY ./cmd/azureblobnode/main.go ./cmd/azureblobnode/main.go
 
@@ -47,8 +54,8 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy the configuration files
 COPY ./cmd/azureblobnode/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
-COPY ./cmd/azureblobnode/config/lohpi_config.dev.yaml ./cmd/azureblobnode/config/lohpi_config.dev.yaml
-COPY ./cmd/azureblobnode/config/lohpi_config.yaml ./cmd/azureblobnode/config/lohpi_config.yaml
+COPY ./cmd/azureblobnode/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
+COPY ./cmd/azureblobnode/config/lohpi_config.yaml ./config/lohpi_config.yaml
 
 # Command to run the executable
 ENTRYPOINT ["/node"]

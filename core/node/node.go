@@ -40,7 +40,7 @@ type Config struct {
 	AllowMultipleCheckouts bool
 
 	// Port used by the HTTP server
-	Port int32
+	Port int
 
 	// Interval that defines when the synchronization procedure will run
 	SyncInterval time.Duration
@@ -171,7 +171,7 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 		IfritAddress: 	ifritClient.Addr(),
 		Id:           	[]byte(ifritClient.Id()),
 		HttpsAddress:	config.HostName,
-		Port: 			config.Port,
+		Port: 			int32(config.Port),
 		BootTime:		pbtime.Now(),
 	}
 

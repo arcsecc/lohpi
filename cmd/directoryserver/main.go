@@ -46,17 +46,12 @@ func main() {
 	var d *lohpi.DirectoryServer
 	var err error
 
-	if createNew {
-		config := getDirectoryServerConfiguration()
-		d, err = lohpi.NewDirectoryServer(&config)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
-		}
-	} else {
-		log.Fatalln("Need to set the 'new' flag to true. Exiting")
+	config := getDirectoryServerConfiguration()
+	d, err = lohpi.NewDirectoryServer(&config, createNew)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
 	}
-	//m.InitializeLogfile(logging)
 
 	go d.Start()
 

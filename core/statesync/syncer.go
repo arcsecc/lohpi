@@ -7,7 +7,6 @@ _	"time"
 	"context"
 	"github.com/joonnna/ifrit"
 	"sync"
-	log "github.com/sirupsen/logrus"
 	"github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
 )
@@ -145,9 +144,6 @@ func (d *StateSyncUnit) sendToRemote(msg *pb.Message, remoteAddr string) (chan [
 	if err != nil {
 		return nil, err
 	}
-
-	log.Println("MESSAGE:", msg)
-	log.Println("Size of message:", len(data))
 
 	r, s, err := d.getIfritClient().Sign(data)
 	if err != nil {

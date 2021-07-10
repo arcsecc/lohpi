@@ -21,7 +21,8 @@ RUN go mod download
 # Local dependencies
 COPY ./directoryserver.go ./directoryserver.go
 COPY ./core/directoryserver ./core/directoryserver
-COPY ./core/cache ./core/cache
+COPY ./core/datasetmanager ./core/datasetmanager
+COPY ./core/membershipmanager ./core/membershipmanager
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
 COPY ./core/comm ./core/comm
@@ -33,7 +34,7 @@ COPY ./cmd/directoryserver/config/lohpi_config.dev.yaml ./cmd/directoryserver/co
 COPY ./cmd/directoryserver/config/lohpi_config.yaml ./cmd/directoryserver/config/lohpi_config.yaml
 COPY ./cmd/directoryserver/config/ifrit_config.yaml ./cmd/directoryserver/config/ifrit_config.yaml
 
-# Run test
+# Run testb
 #RUN go test ./...
 
 # Build the application
@@ -53,8 +54,8 @@ FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /dist/directoryserver /
 COPY ./cmd/directoryserver/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
-COPY ./cmd/directoryserver/config/lohpi_config.yaml ./cmd/directoryserver/config/lohpi_config.yaml
-COPY ./cmd/directoryserver/config/lohpi_config.dev.yaml ./cmd/directoryserver/config/lohpi_config.dev.yaml
+COPY ./cmd/directoryserver/config/lohpi_config.yaml ./config/lohpi_config.yaml
+COPY ./cmd/directoryserver/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
 
 # Command to run the executable
 ENTRYPOINT ["/directoryserver"]

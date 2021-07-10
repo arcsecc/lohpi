@@ -28,7 +28,7 @@ services:
       context: .
       dockerfile: "./cmd/directoryserver/Dockerfile"
     network_mode: host
-    command: --new -c cmd/directoryserver/config/lohpi_config.dev.yaml
+    command: --new -c ./config/lohpi_config.dev.yaml
     #restart: never
     expose:
     - "8080"
@@ -45,7 +45,7 @@ services:
       context: .
       dockerfile: "./cmd/policy_store/Dockerfile"
     network_mode: host
-    command: -new=true
+    command: -new=true -c ./config/lohpi_config.dev.yaml
     #restart: never
     expose:
       - "8083"
@@ -64,7 +64,7 @@ services:
       dockerfile: "./cmd/azureblobnode/Dockerfile"
     network_mode: host
     #restart: never
-    command: -name "azureblobnode" -new=true -c ./cmd/azureblobnode/config/lohpi_config.dev.yaml
+    command: -name "azureblobnode" -new=true -c ./config/lohpi_config.dev.yaml
     depends_on: 
       - lohpi-ca-dev
       - lohpi-directoryserver-dev

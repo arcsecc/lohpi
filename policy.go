@@ -2,12 +2,19 @@ package lohpi
 
 import (
 	"errors"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policystore"
 	"github.com/arcsecc/lohpi/core/statesync"
-	log "github.com/sirupsen/logrus"
+	"github.com/arcsecc/lohpi/core/comm"
+	"crypto/x509/pkix"
+	//log "github.com/sirupsen/logrus"
 	"time"
+)
+
+var (
+	errNoConnectionString = errors.New("SQL connection is not set")
 )
 
 type PolicyStoreConfig struct {
@@ -21,7 +28,7 @@ type PolicyStoreConfig struct {
 	PolicyStoreGitRepository string
 
 	// Hostname of the policy store. Default value is "127.0.1.1".
-	Host string
+	Hostname string
 
 	// Gossip interval in seconds. Default value is 60 seconds.
 	GossipInterval time.Duration
@@ -47,6 +54,9 @@ type PolicyStoreConfig struct {
 	// The database connection string. Default value is "". If it is not set, the database connection
 	// will not be used. This means that only the in-memory maps will be used for storage.
 	SQLConnectionString string
+
+	// Path used to store X.509 certificate and private key
+	CryptoUnitWorkingDirectory string
 }
 
 type PolicyStore struct {
@@ -54,7 +64,7 @@ type PolicyStore struct {
 	config *policystore.Config
 }
 
-func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
+func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	if config == nil {
 		return nil, errors.New("Policy store configuration is nil")
 	}
@@ -67,8 +77,8 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		config.CaAddress = "127.0.1.1:8301"
 	}
 
-	if config.Host == "" {
-		config.Host = "127.0.1.1"
+	if config.Hostname == "" {
+		config.Hostname = "127.0.1.1"
 	}
 
 	if config.HTTPPort <= 0 {
@@ -104,13 +114,17 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 	}
 
 	if config.SQLConnectionString == "" {
-		log.Warnln("SQL connection string is not set")
+		return nil, errNoConnectionString
+	}
+
+	if config.CryptoUnitWorkingDirectory == "" {
+		config.CryptoUnitWorkingDirectory = "./secrets"
 	}
 
 	p := &PolicyStore{
 		config: &policystore.Config{
 			Name:                     config.Name,
-			Host:                     config.Host,
+			Hostname:                 config.Hostname,
 			GossipInterval:           config.GossipInterval,
 			HTTPPort:                 config.HTTPPort,
 			GRPCPort:                 config.GRPCPort,
@@ -120,6 +134,39 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 			DirectoryServerAddress:   config.DirectoryServerAddress,
 			GitRepositoryPath:        config.PolicyStoreGitRepository,
 		},
+	}
+
+	// Crypto manager
+	var cu *comm.CryptoUnit
+	var err error
+
+	if new {
+		// Create a new crypto unit 
+		cryptoUnitConfig := &comm.CryptoUnitConfig{
+			Identity: pkix.Name{
+				Country: []string{"NO"},
+				CommonName: config.Name,
+				Locality: []string{
+					fmt.Sprintf("%s:%d", config.Hostname, config.HTTPPort), 
+					fmt.Sprintf("%s:%d", config.Hostname, config.GRPCPort),
+				},
+			},
+			CaAddr: config.CaAddress,
+			Hostnames: []string{config.Hostname},
+		}
+		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := cu.SaveState(); err != nil {
+			return nil, err
+		}	
+	} else {
+		cu, err = comm.LoadCu(config.CryptoUnitWorkingDirectory)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Dataset manager
@@ -158,7 +205,7 @@ func NewPolicyStore(config *PolicyStoreConfig) (*PolicyStore, error) {
 		return nil, err
 	}
 	
-	psCore, err := policystore.NewPolicyStoreCore(datasetLookupService, stateSync, memManager, dsManager, p.config)
+	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, stateSync, memManager, dsManager, p.config)
 	if err != nil {
 		return nil, err
 	}
