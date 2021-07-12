@@ -58,12 +58,7 @@ type NodeConfig struct {
 }
 
 // TODO: consider using intefaces
-<<<<<<< HEAD
 func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
-=======
-func NewNode(config *NodeConfig) (*Node, error) {
-	
->>>>>>> sindre
 	if config == nil {
 		return nil, errors.New("Node configuration is nil")
 	}
@@ -150,12 +145,7 @@ func NewNode(config *NodeConfig) (*Node, error) {
 		SQLConnectionString: config.SQLConnectionString,
 		UseDB: true,
 	}
-<<<<<<< HEAD
 	dsManager, err := datasetmanager.NewDatasetServiceUnit(datasetServiceUnitConfig)
-=======
-	
-	dsManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
->>>>>>> sindre
 	if err != nil {
 		// Error occurs here
 		return nil, err
