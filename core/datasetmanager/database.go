@@ -333,19 +333,23 @@ func (d *DatasetServiceUnit) dbInsertDatasetPolicy(datasetId string, policy *pb.
 		policy.GetDateCreated().String(),
 		policy.GetDateApplied().String())
 	if err != nil {
-		panic(err)
 		return err
 	}
 	
 	return nil
-
 }
 
 func toTimestamppb(tString string) (*pbtime.Timestamp, error) {
 	if tString == "" {
 		return nil, fmt.Errorf("Timestamp string is empty!")
-	}
+	})
 	rxp := regexp.MustCompile("[0-9]+").FindAllStringSubmatch(tString, -1)
+	if len(rxp) == 0 {
+		err := fmt.Errorf("Regexp string is empty!")
+		log.Error(err.Error())
+		return nil, err
+	}
+
 	secsAsString := rxp[0][0]
 	nanosAsString := rxp[1][0]		
 
@@ -432,7 +436,6 @@ func (d *DatasetCheckoutServiceUnit) dbGetAllDatasetCheckouts() ([]*pb.DatasetCh
 		// TODO remove 'id'
         if err := rows.Scan(&id, &datasetId, &clientId, &clientName, &macAddress, &emailAddress, &dateCheckout); err != nil {
             log.Errorln(err.Error())
-			panic(err)
 			continue
         }
 
@@ -492,7 +495,6 @@ func (d *DatasetCheckoutServiceUnit) dbDatasetIsCheckedOutByClient(datasetId str
 		client_name = $3 AND mac_address = $4);`
 	err := d.datasetCheckoutDB.QueryRow(q, datasetId, client.GetID(), client.GetName(), client.GetMacAddress()).Scan(&allowed)
 	if err != nil {
-		panic(err)
 		return false, err
 	}
 	return allowed, nil
@@ -511,6 +513,5 @@ func (d *DatasetCheckoutServiceUnit) dbCheckinDataset(datasetId string, client *
 		client_name = $3 AND mac_address = $4);`
 
 	_, err := d.datasetCheckoutDB.Exec(q, datasetId, client.GetID(), client.GetName(), client.GetMacAddress())
-	panic(err)
 	return err
 }

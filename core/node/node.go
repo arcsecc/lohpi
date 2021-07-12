@@ -616,7 +616,6 @@ func jwtTokenToPbClient(token string) (*pb.Client, error) {
 
 	msg, err := jws.ParseString(token)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -632,7 +631,6 @@ func jwtTokenToPbClient(token string) (*pb.Client, error) {
 	}{}
 
 	if err := json.Unmarshal(s, &c); err != nil {
-		panic(err)
 		return nil, err
 	}
 

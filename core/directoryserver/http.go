@@ -19,6 +19,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	pb "github.com/arcsecc/lohpi/protobuf"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"time"
 )
 
@@ -531,11 +533,6 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 
 	// Get dataset identifier
 	dataset := mux.Vars(r)["id"]
-	if dataset == "" {
-		err := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
 
 	// Get the node that stores it
 	if !d.networkService.DatasetNodeExists(dataset) {
@@ -551,6 +548,13 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusGone)+": "+err.Error(), http.StatusGone)
 		return
+	}
+
+	pbClient, err := jwtTokenToPbClient(string(token))
+	if err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return	
 	}
 
 	// Prepare the request. Beginning of pipeline
@@ -590,29 +594,23 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// How do we rollback checkout as an atomic operation?
-	// Get client-related fields
-	_, oid, err := d.getClientIdentifier(token)
-	if err != nil {
-		if err := d.rollbackCheckout(node.GetIfritAddress(), dataset, context.Background()); err != nil {
-			log.Errorln(err.Error())
-		}
-		return
+	dsCheckout := &pb.DatasetCheckout{
+		DatasetIdentifier: dataset,
+    	DateCheckout: pbtime.Now(),
+    	Client: pbClient,
 	}
 
-	d.insertCheckedOutDataset(dataset, oid)
+	if err := d.dsManager.CheckoutDataset(dataset, dsCheckout); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	dataset := mux.Vars(r)["id"]
-	if dataset == "" {
-		err := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
 	isInvalidated := d.datasetIsInvalidated(dataset)
 	b := new(bytes.Buffer)
 	c := struct {

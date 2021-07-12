@@ -3,7 +3,7 @@ package lohpi
 import (
 	"crypto/x509/pkix"
 	"errors"
-//	log "github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
