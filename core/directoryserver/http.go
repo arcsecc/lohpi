@@ -1,6 +1,7 @@
 package directoryserver
 
 import (
+	"github.com/rs/cors"
 	"bufio"
 	"bytes"
 	"context"
@@ -34,12 +35,16 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 	// Main dataset router exposed to the clients
 	dRouter := r.PathPrefix("/dataset").Schemes("HTTP").Subrouter().SkipClean(false)
-	dRouter.HandleFunc("/ids", d.getNetworkDatasetIdentifiers).Methods("GET")
+	dRouter.HandleFunc("/ids", d.getNetworkDatasetIdentifiers).Methods("GET", "OPTIONS")
 	dRouter.HandleFunc("/metadata/{id:.*}", d.getDatasetMetadata).Methods("GET")
 	dRouter.HandleFunc("/data/{id:.*}", d.getDataset).Methods("GET")
 	dRouter.HandleFunc("/verify/{id:.*}", d.getDatasetPolicyVerification).Methods("GET")
 	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
+	dRouter.HandleFunc("/node_ids", d.nodeIds).Methods("GET")
+	dRouter.HandleFunc("/node_info/{id:.*}", d.nodeInfo).Methods("GET")
+	dRouter.HandleFunc("/checkouts/{id:.*}", d.datasetCheckouts).Methods("GET")
+	handler := cors.AllowAll().Handler(r)
 
 	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
 	networkRouter.HandleFunc("/ndoes", d.getNetworkNodes).Methods("GET")
@@ -50,7 +55,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 	d.httpServer = &http.Server{
 		Addr:         addr,
-		Handler:      r,
+		Handler:      handler,
 		WriteTimeout: time.Hour * 1,
 		//ReadTimeout:  time.Second * 30,
 		//IdleTimeout:  time.Second * 60,
@@ -65,19 +70,145 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	return d.httpServer.ListenAndServe()
 }
 
-func (d *DirectoryServerCore) getNetworkNodes(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Request) {
+	// Destination struct
+	resp := struct {
+		Clients []string	
+		Timestamps []string
+	}{
+		Clients: make([]string, 0),
+		Timestamps: make([]string, 0),
+	}
+
+	dataset := mux.Vars(r)["id"]
+	if dataset == "" {
+		errMsg := fmt.Errorf("Missing dataset identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		return
+	}
+
+	for id, checkout := range d.getCheckedOutDatasetMap() {
+		log.Warnln(id)
+		resp.Timestamps  = append(resp.Timestamps, id)
+		if id == dataset {
+			resp.Clients = checkout
+		}
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+}
+
+func (d *DirectoryServerCore) nodeInfo(w http.ResponseWriter, r *http.Request) {
+	// Destination struct
+	resp := struct {
+		Identifiers []string
+		NumDataset int
+		IpAddr string
+		Uptime string
+		LastJoined string	
+	}{
+		Identifiers: make([]string, 0),
+	}
+
+	nodeId := mux.Vars(r)["id"]
+	if nodeId == "" {
+		errMsg := fmt.Errorf("Missing node identifier")
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Loops through dataset-node mapping to set the counter and the list of datasets in node
+	counter := 0
+	for id, node := range d.memCache.DatasetNodes() {
+		if node.GetName() == nodeId {
+			counter += 1
+			resp.Identifiers = append(resp.Identifiers, id)
+		}
+	}
+	resp.NumDataset = counter
+
+	// Gets the rest of the updated data from the node map itself
+	for _, node := range d.memCache.Nodes() {
+		if node.GetName() == nodeId {
+			resp.IpAddr = node.GetIfritAddress()
+			resp.LastJoined = node.GetJoinTime().AsTime().Format("2006-01-02 15:04:05")
+			resp.Uptime = time.Now().Sub(node.GetJoinTime().AsTime()).Round(time.Second).String() // Subs 'last joined' from 'time.Now()', rounds it to 'seconds' minimum, and returns a string
+		}
+	}	
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+}
+// Sets project description for the dataset given as 'id'
+func (d *DirectoryServerCore) nodeIds(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	/*nodes := struct {
-		Nodes []struct {
-			Name string `json:"name"`
-			IpAddress string `json:"ip_address"`
-			JoinedAt string `json:"joined_at"`
-			Datasets []string `json:"datasets"`
-			CheckedOutDatasets []string `json:"checked_out_datasets"`
-		}
-	}*/
+	// Destination struct
+	resp := struct {
+		Identifiers []string
+	}{
+		Identifiers: make([]string, 0),
+	}
+
+	for id := range d.memCache.Nodes() {
+		resp.Identifiers = append(resp.Identifiers, id)
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
+
 
 // Sets project description for the dataset given as 'id'
 func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +220,9 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	}{}
 
 	if err := util.DecodeJSONBody(w, r, "application/json", &clientReq); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	dataset := mux.Vars(r)["id"]
@@ -106,11 +239,18 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
-
+	
 	// Project description as argument to updatePD, string?
 	if err := d.updateProjectDescription(dataset, clientReq.ProjectDescription); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": Failed to update project description", http.StatusInternalServerError)
+		return
 	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w,"Successfully updated description of dataset %s\n", dataset)
+
 }
 
 // Gets project description form the dataset given as 'id'
@@ -301,6 +441,7 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
 	_, err := w.Write(b.Bytes())
