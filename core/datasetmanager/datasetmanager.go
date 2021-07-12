@@ -74,25 +74,25 @@ func NewDatasetManager(config *DatasetManagerConfig) (*DatasetManager, error) {
 	if config == nil {
 		return nil, errNilConfig
 	}
-
+	
 	dm := &DatasetManager{
 		datasetMap: 		make(map[string]*pb.Dataset),
 		datasetCheckoutMap: make(map[string]*pb.DatasetCheckout),
 	}
 
 	if config.SQLConnectionString != "" {
+		
 		if err := dm.createSchema(config.SQLConnectionString); err != nil {
+			// Error occurs here
 			return nil, err
 		}
-
 		if err := dm.createDatasetTable(config.SQLConnectionString); err != nil {
 			return nil, err
 		}
-
+		
 		if err := dm.createDatasetCheckoutTable(config.SQLConnectionString); err != nil {
 			return nil, err
 		}
-
 		if config.Reload {
 			if err := dm.reloadMaps(); err != nil {
 				return nil, err

@@ -50,10 +50,11 @@ type NodeConfig struct {
 
 // TODO: consider using intefaces
 func NewNode(config *NodeConfig) (*Node, error) {
+	
 	if config == nil {
 		return nil, errors.New("Node configuration is nil")
 	}
-
+	
 	if config.CaAddress == "" {
 		config.CaAddress = "127.0.1.1:8301"
 	}
@@ -106,8 +107,10 @@ func NewNode(config *NodeConfig) (*Node, error) {
 		SQLConnectionString: 	config.SQLConnectionString,
 		Reload: 				true,
 	}
+	
 	dsManager, err := datasetmanager.NewDatasetManager(datasetManagerConfig)
 	if err != nil {
+		// Error occurs here
 		return nil, err
 	}
 

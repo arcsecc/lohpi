@@ -97,6 +97,7 @@ func main() {
 func newNodeStorage(name string) (*StorageNode, error) {
 	c, err := getNodeConfiguration(name)
 	if err != nil {
+		log.Warnln("yoyooyoooooooooooooooooooooooooo")
 		return nil, err
 	}
 

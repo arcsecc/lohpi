@@ -22,11 +22,12 @@ func (dm *DatasetManager) createSchema(connectionString string) error {
 	if err != nil {
 		return err
 	}
-
+	
 	if err := db.Ping(); err != nil {
+		// Error occurs here
 		return err
 	}
-
+	
 	_, err = db.Exec(q)
 	if err != nil {
 		return err
