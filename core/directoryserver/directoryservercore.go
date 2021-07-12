@@ -21,7 +21,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"net"
-//	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"net/http"
 	"strconv"
 	"sync"
@@ -115,7 +114,7 @@ type certManager interface {
 }
 
 // Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
-func NewDirectoryServerCore(cm certManager, networkService networkLookupService, memManager membershipManager, dcManager datasetCheckoutManager, config *Config) (*DirectoryServerCore, error) {
+func NewDirectoryServerCore(cm certManager, networkService networkLookupService, memManager membershipManager, dsManager datasetCheckoutManager, config *Config) (*DirectoryServerCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration for directory server is nil")
 	}
@@ -149,6 +148,7 @@ func NewDirectoryServerCore(cm certManager, networkService networkLookupService,
 		networkService:  networkService,
 		cm:         	 cm,
 		memManager: 	 memManager,
+		dsManager: 	     dsManager,
 	}
 
 	ds.grpcs.Register(ds)
@@ -361,30 +361,6 @@ func (d *DirectoryServerCore) pbNode() *pb.Node {
 	}
 }
 
-// Returns the name and ID of the client in the Azure AD.
-func (d *DirectoryServerCore) getClientIdentifier(token []byte) (string, string, error) {
-	msg, err := jws.ParseString(string(token))
-	if err != nil {
-		return "", "", err
-	}
-
-	s := msg.Payload()
-	if s == nil {
-		return "", "", errors.New("Payload was nil")
-	}
-
-	c := struct {
-		Name string `json:"name"`
-		Oid  string `json:"oid"`
-	}{}
-
-	if err := json.Unmarshal(s, &c); err != nil {
-		return "", "", err
-	}
-
-	return c.Name, c.Oid, nil
-}
-
 // TODO: handle ctx
 // Rollbacks the checkout of a dataset. This is useful if any errors occur somewhere in the pipeline.
 func (d *DirectoryServerCore) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
@@ -449,4 +425,36 @@ func (d *DirectoryServerCore) getCheckedOutDatasetMap() map[string][]string {
 func (d *DirectoryServerCore) datasetIsInvalidated(dataset string) bool {
 	_, exists := d.revokedDatasets()[dataset]
 	return exists
+}
+
+func jwtTokenToPbClient(token string) (*pb.Client, error) {
+	if token == "" {
+		return nil, errors.New("Token string is empty")
+	}
+
+	msg, err := jws.ParseString(token)
+	if err != nil {
+		return nil, err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return nil, errors.New("Payload was nil")
+	}
+
+	c := struct {
+		Name    		string `json:"name"`
+		Oid 			string `json:"oid"`
+		EmailAddress 	string `json:"email"`
+	}{}
+
+	if err := json.Unmarshal(s, &c); err != nil {
+		return nil, err
+	}
+
+	return &pb.Client{
+		Name: c.Name,
+		ID: c.Oid,
+		EmailAddress: c.EmailAddress,
+	}, nil
 }
