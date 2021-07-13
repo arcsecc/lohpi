@@ -24,6 +24,15 @@ import (
 	"time"
 )
 
+type checkoutInfo struct {
+	ClientId string	
+	ClientName string
+	MacAddress string
+	EmailAddress string
+	Timestamp string
+	Dataset string
+}
+
 type azureConfig struct {
 	appId  string // Validate me!
 	issuer string // Validate me?
@@ -48,8 +57,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/checkouts/{id:.*}", d.datasetCheckouts).Methods("GET")
 	handler := cors.AllowAll().Handler(r)
 
-	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
-	networkRouter.HandleFunc("/ndoes", d.getNetworkNodes).Methods("GET")
+//	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
 
 	// Middlewares used for validation
 	//dRouter.Use(d.middlewareValidateTokenSignature)
@@ -73,28 +81,34 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 }
 
 func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Request) {
-	// Destination struct
-	resp := struct {
-		Clients []string	
-		Timestamps []string
-	}{
-		Clients: make([]string, 0),
-		Timestamps: make([]string, 0),
-	}
-
-	dataset := mux.Vars(r)["id"]
-	if dataset == "" {
-		errMsg := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
+	dataset := mux.Vars(r)["id"]	
+	arr, err := d.dsManager.DatasetCheckouts()
+	if err != nil {
+		errMsg := fmt.Errorf("Checkout error")
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+errMsg.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	for id, checkout := range d.getCheckedOutDatasetMap() {
-		log.Warnln(id)
-		resp.Timestamps  = append(resp.Timestamps, id)
-		if id == dataset {
-			resp.Clients = checkout
+	res := make([]*checkoutInfo, 0)
+
+	for _, checkout := range arr {
+		if checkout.DatasetIdentifier == dataset {
+			elem := &checkoutInfo{
+				ClientId: checkout.GetClient().GetID(),
+				ClientName: checkout.GetClient().GetName(),
+				MacAddress:	checkout.GetClient().GetMacAddress(),
+				EmailAddress: checkout.GetClient().GetEmailAddress(),
+				Timestamp: checkout.GetDateCheckout().AsTime().Format("2006-01-02 15:04:05"),
+				Dataset: checkout.GetDatasetIdentifier(),
+			}
+			res = append(res, elem)
 		}
+	}
+
+	resp := struct {
+		Arr []*checkoutInfo `json:"checkout_info"`
+	}{
+		Arr: res,
 	}
 
 	b := new(bytes.Buffer)
@@ -109,7 +123,7 @@ func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Re
 	
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
-	_, err := w.Write(b.Bytes())
+	_, err = w.Write(b.Bytes())
 	if err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
@@ -139,7 +153,7 @@ func (d *DirectoryServerCore) nodeInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Loops through dataset-node mapping to set the counter and the list of datasets in node
 	counter := 0
-	for id, node := range d.memCache.DatasetNodes() {
+	for id, node := range d.networkService.DatasetNodes() {
 		if node.GetName() == nodeId {
 			counter += 1
 			resp.Identifiers = append(resp.Identifiers, id)
@@ -148,11 +162,11 @@ func (d *DirectoryServerCore) nodeInfo(w http.ResponseWriter, r *http.Request) {
 	resp.NumDataset = counter
 
 	// Gets the rest of the updated data from the node map itself
-	for _, node := range d.memCache.Nodes() {
+	for _, node := range d.memManager.NetworkNodes() {
 		if node.GetName() == nodeId {
 			resp.IpAddr = node.GetIfritAddress()
-			resp.LastJoined = node.GetJoinTime().AsTime().Format("2006-01-02 15:04:05")
-			resp.Uptime = time.Now().Sub(node.GetJoinTime().AsTime()).Round(time.Second).String() // Subs 'last joined' from 'time.Now()', rounds it to 'seconds' minimum, and returns a string
+			resp.LastJoined = node.GetBootTime().AsTime().Format("2006-01-02 15:04:05")
+			resp.Uptime = time.Now().Sub(node.GetBootTime().AsTime()).Round(time.Second).String() // Subs 'last joined' from 'time.Now()', rounds it to 'seconds' minimum, and returns a string
 		}
 	}	
 
@@ -187,7 +201,7 @@ func (d *DirectoryServerCore) nodeIds(w http.ResponseWriter, r *http.Request) {
 		Identifiers: make([]string, 0),
 	}
 
-	for id := range d.memCache.Nodes() {
+	for id := range d.memManager.NetworkNodes() {
 		resp.Identifiers = append(resp.Identifiers, id)
 	}
 

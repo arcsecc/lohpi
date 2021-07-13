@@ -42,7 +42,7 @@ func (n *NodeCore) startHTTPServer() error {
 	dRouter.HandleFunc("/removeset/{id:.*}", n.removeDataset).Methods("GET")
 
 	// Middlewares used for validation
-	dRouter.Use(n.middlewareValidateTokenSignature)
+	//dRouter.Use(n.middlewareValidateTokenSignature)
 	//dRouter.Use(n.middlewareValidateTokenClaims)
 
 	handler := cors.AllowAll().Handler(router)
@@ -93,7 +93,6 @@ func (n *NodeCore) middlewareValidateTokenSignature(next http.Handler) http.Hand
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
-			panic(err)
 			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 			return
 		}

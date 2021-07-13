@@ -20,7 +20,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"net"
 	"net/http"
 	"strconv"
@@ -90,6 +89,7 @@ type networkLookupService interface {
 	InsertDatasetNode(datasetId string, node *pb.Node) error
 	DatasetNode(datasetId string) *pb.Node
 	DatasetIdentifiers() []string
+	DatasetNodes() map[string]*pb.Node
 }
 
 type membershipManager interface {

@@ -135,6 +135,12 @@ func (d *DatasetLookupService) DatasetStorageNode(datasetId string) *pb.Node {
 	return d.datasetNodeMap[datasetId]
 }
 
+func (d *DatasetLookupService) DatasetNodes() map[string]*pb.Node {
+	d.datasetNodeMapLock.RLock()
+	defer d.datasetNodeMapLock.RUnlock()
+	return d.datasetNodeMap
+}
+
 func (d *DatasetLookupService) reloadMaps() error {
 	maps, err := d.dbGetAllDatasetNodes()
 	if err != nil {

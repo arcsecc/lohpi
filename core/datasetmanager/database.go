@@ -342,7 +342,7 @@ func (d *DatasetServiceUnit) dbInsertDatasetPolicy(datasetId string, policy *pb.
 func toTimestamppb(tString string) (*pbtime.Timestamp, error) {
 	if tString == "" {
 		return nil, fmt.Errorf("Timestamp string is empty!")
-	})
+	}
 	rxp := regexp.MustCompile("[0-9]+").FindAllStringSubmatch(tString, -1)
 	if len(rxp) == 0 {
 		err := fmt.Errorf("Regexp string is empty!")
