@@ -55,6 +55,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/node_ids", d.nodeIds).Methods("GET")
 	dRouter.HandleFunc("/node_info/{id:.*}", d.nodeInfo).Methods("GET")
 	dRouter.HandleFunc("/checkouts/{id:.*}", d.datasetCheckouts).Methods("GET")
+	dRouter.HandleFunc("/num_datasets", d.getNetworkDatasetNum).Methods("GET")
 	handler := cors.AllowAll().Handler(r)
 
 //	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
@@ -79,6 +80,38 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 	return d.httpServer.ListenAndServe()
 }
+// Gets number of datasets available
+func (d *DirectoryServerCore) getNetworkDatasetNum(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
+	//	defer cancel()
+
+	// Destination struct
+	
+	var resp int = 0
+	resp = len(d.networkService.DatasetIdentifiers())
+	
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 
 func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Request) {
 	dataset := mux.Vars(r)["id"]	
@@ -437,15 +470,19 @@ func (d *DirectoryServerCore) shutdownHttpServer() {
 // Lazily fetch objects from all the nodes
 func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-
+	
+	keys := r.URL.Query()
+	indexStart, _ := strconv.Atoi(keys.Get("index_start"))
 	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
 	//	defer cancel()
 
 	// Destination struct
 	resp := struct {
 		Identifiers []string
+		IndexStart int
 	}{
 		Identifiers: d.networkService.DatasetIdentifiers(),
+		IndexStart: indexStart,
 	}
 
 	b := new(bytes.Buffer)
