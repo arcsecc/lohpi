@@ -22,6 +22,7 @@ import (
 	pb "github.com/arcsecc/lohpi/protobuf"
 	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"time"
+	"sort"
 )
 
 type checkoutInfo struct {
@@ -53,9 +54,12 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
 	dRouter.HandleFunc("/node_ids", d.nodeIds).Methods("GET")
+	dRouter.HandleFunc("/num_nodes", d.numNodes).Methods("GET")
 	dRouter.HandleFunc("/node_info/{id:.*}", d.nodeInfo).Methods("GET")
 	dRouter.HandleFunc("/checkouts/{id:.*}", d.datasetCheckouts).Methods("GET")
-	dRouter.HandleFunc("/num_datasets", d.getNetworkDatasetNum).Methods("GET")
+	dRouter.HandleFunc("/num_checkouts/{id:.*}", d.numCheckouts).Methods("GET")
+	dRouter.HandleFunc("/num_datasets", d.numDatasets).Methods("GET")
+	
 	handler := cors.AllowAll().Handler(r)
 
 //	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
@@ -81,7 +85,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	return d.httpServer.ListenAndServe()
 }
 // Gets number of datasets available
-func (d *DirectoryServerCore) getNetworkDatasetNum(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServerCore) numDatasets(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
@@ -112,8 +116,50 @@ func (d *DirectoryServerCore) getNetworkDatasetNum(w http.ResponseWriter, r *htt
 	}
 }
 
+func (d *DirectoryServerCore) numCheckouts(w http.ResponseWriter, r *http.Request) {
+	dataset := mux.Vars(r)["id"]	
+	arr, err := d.dsManager.DatasetCheckouts()
+	if err != nil {
+		errMsg := fmt.Errorf("Checkout error")
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+errMsg.Error(), http.StatusInternalServerError)
+		return
+	}
+	counter := 0
+	for _, checkout := range arr {
+		if checkout.DatasetIdentifier == dataset {
+			counter += 1
+		}
+	}
+	// Response : number of checkouts on this dataset
+	resp := counter
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err = w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+}
 
 func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Request) {
+	// Get URL params
+	keys := r.URL.Query()
+	indexStart, _ := strconv.Atoi(keys.Get("index_start"))
+	indexRange, _ := strconv.Atoi(keys.Get("index_range"))
+
 	dataset := mux.Vars(r)["id"]	
 	arr, err := d.dsManager.DatasetCheckouts()
 	if err != nil {
@@ -136,6 +182,20 @@ func (d *DirectoryServerCore) datasetCheckouts(w http.ResponseWriter, r *http.Re
 			}
 			res = append(res, elem)
 		}
+	}
+	// Sort by name
+	sort.Slice(res, func(i, j int) bool {
+		return res[i].ClientName < res[j].ClientName
+	})
+
+	// Adjust slice range
+	if len(res) < (indexStart + indexRange){
+		indexRange = len(res) - indexStart
+	}
+
+	// Create slice of slice
+	if indexRange != 0 {
+		res = res[indexStart : (indexStart + indexRange)]
 	}
 
 	resp := struct {
@@ -223,9 +283,44 @@ func (d *DirectoryServerCore) nodeInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 }
-// Sets project description for the dataset given as 'id'
+// returns all nodes
+func (d *DirectoryServerCore) numNodes(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	// Destination struct
+	resp := 0
+	for _ = range d.memManager.NetworkNodes() {
+		resp += 1
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(resp); err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// returns all nodes
 func (d *DirectoryServerCore) nodeIds(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
+
+	// Gets the url query parameters if there are any
+	keys := r.URL.Query()
+	indexStart, _ := strconv.Atoi(keys.Get("index_start"))
+	indexRange, _ := strconv.Atoi(keys.Get("index_range"))
 
 	// Destination struct
 	resp := struct {
@@ -233,10 +328,19 @@ func (d *DirectoryServerCore) nodeIds(w http.ResponseWriter, r *http.Request) {
 	}{
 		Identifiers: make([]string, 0),
 	}
-
+	idSlice := make([]string, 0)
 	for id := range d.memManager.NetworkNodes() {
-		resp.Identifiers = append(resp.Identifiers, id)
+		idSlice = append(resp.Identifiers, id)
 	}
+	sort.Strings(idSlice)
+
+	if len(idSlice) < (indexStart + indexRange){
+		indexRange = len(idSlice) - indexStart
+	}
+	if indexRange != 0 {
+		idSlice = idSlice[indexStart : (indexStart + indexRange)]
+	}
+	resp.Identifiers = idSlice
 
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
@@ -471,18 +575,28 @@ func (d *DirectoryServerCore) shutdownHttpServer() {
 func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	
+	// Gets the url query parameters if there are any
 	keys := r.URL.Query()
 	indexStart, _ := strconv.Atoi(keys.Get("index_start"))
+	indexRange, _ := strconv.Atoi(keys.Get("index_range"))
 	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
 	//	defer cancel()
+
+	identifierSlice := d.networkService.DatasetIdentifiers()
+	sort.Strings(identifierSlice)
+
+	if len(identifierSlice) < (indexStart + indexRange){
+		indexRange = len(identifierSlice) - indexStart
+	}
+	if indexRange != 0 {
+		identifierSlice = identifierSlice[indexStart : (indexStart + indexRange)]
+	}
 
 	// Destination struct
 	resp := struct {
 		Identifiers []string
-		IndexStart int
 	}{
-		Identifiers: d.networkService.DatasetIdentifiers(),
-		IndexStart: indexStart,
+		Identifiers: identifierSlice, 
 	}
 
 	b := new(bytes.Buffer)
