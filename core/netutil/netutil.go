@@ -39,7 +39,7 @@ func GetOpenPort() int {
 }
 
 func ListenOnPort(port int) (net.Listener, error) {
-	return net.Listen("tcp4", fmt.Sprintf(":%d", port))
+	return net.Listen("tcp4", fmt.Sprintf("127.0.1.1:%d", port))
 }
 
 func GetListener() (net.Listener, error) {

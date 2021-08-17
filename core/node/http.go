@@ -41,6 +41,8 @@ func (n *NodeCore) startHTTPServer() error {
 	dRouter.HandleFunc("/addset/{id:.*}", n.addDataset).Methods("POST")
 	dRouter.HandleFunc("/removeset/{id:.*}", n.removeDataset).Methods("GET")
 
+	dRouter.HandleFunc("/test/{id:.*}", n.test).Methods("GET")
+
 	// Middlewares used for validation
 	dRouter.Use(n.middlewareValidateTokenSignature)
 	//dRouter.Use(n.middlewareValidateTokenClaims)
@@ -154,6 +156,12 @@ func (n *NodeCore) validateTokenSignature(token []byte) error {
 	return errors.New("Could not verify token")
 }
 
+func (n *NodeCore) test(w http.ResponseWriter, r *http.Request) {
+	datasetId := mux.Vars(r)["id"]
+	d := n.dsManager.Dataset(datasetId)
+	fmt.Fprintf(w, "DS: %+v\n", d)
+}
+
 func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
@@ -172,7 +180,11 @@ func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n.dsManager.RemoveDataset(datasetId)
+	if err := n.dsManager.RemoveDataset(datasetId); err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Sucsessfully removed dataset '%s' to the node\n", datasetId);
@@ -261,24 +273,9 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 
 	// TODO: use client attributes to determine access. nil here??
 	policy := n.dsManager.GetDatasetPolicy(datasetId)
+	log.Println("POLICY: ", policy)
 	if !policy.GetContent() {
 		err := fmt.Errorf("You do not have access to this dataset")
-		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	// If multiple checkouts are allowed, check if the client has checked it out already
-	// TODO: do we really need it? Can we allow multiple checkouts?
-	checkedOut, err := n.dcManager.DatasetIsCheckedOut(datasetId, pbClient)
-	if err != nil {
-		log.Warnln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if checkedOut {
-		err := errors.New("You have already checked out this dataset")
-		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
 		return
 	}
@@ -329,6 +326,11 @@ func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request)
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+func (n *NodeCore) DatasetIsCheckedOut(datasetId string, client *pb.Client) (bool, error) {
+	//return n.dcManager.DatasetIsCheckedOut(datasetId, pbClient)
+	return false, nil
 }
 
 // Returns a JSON object containing the metadata assoicated with a dataset

@@ -269,11 +269,13 @@ func (cu *CryptoUnit) DecodePublicKey(key []byte) (*ecdsa.PublicKey, error) {
 func sendCertRequest(privKey *ecdsa.PrivateKey, caAddr string, pk pkix.Name, hostnames []string) (*certSet, error) {
 	var certs certResponse
 	set := &certSet{}
+	ip := net.ParseIP("127.0.1.1")
 
 	template := x509.CertificateRequest{
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 		Subject:            pk,
 		DNSNames: 			hostnames,
+		IPAddresses:		[]net.IP{ip},
 	}
 
 	certReqBytes, err := x509.CreateCertificateRequest(rand.Reader, &template, privKey)

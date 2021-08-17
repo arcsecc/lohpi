@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	_"fmt"
-	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -31,10 +30,9 @@ type Config struct {
 	HTTPPort            int
 	GRPCPort            int
 	CaAddress           string
-	UseTLS              bool
-	CertificateFile     string
-	PrivateKeyFile      string
 	SQLConnectionString string
+	Hostname 			string
+	CertificatePath 	string
 }
 
 type DirectoryServerCore struct {
@@ -48,8 +46,6 @@ type DirectoryServerCore struct {
 	// In-memory cache structures
 	nodeMapLock sync.RWMutex
 	nodeMap     map[string]*pb.Node
-
-	cu *comm.CryptoUnit
 
 	// HTTP-related stuff. Used by the demonstrator using cURL
 	httpListener net.Listener
@@ -77,13 +73,13 @@ type DirectoryServerCore struct {
 
 	pb.UnimplementedDirectoryServerServer
 
-	networkService  networkLookupService
+	dsLookupService  datasetLookupService
 	cm         certManager
 	memManager membershipManager
-	dsManager  datasetCheckoutManager
+	checkoutManager  datasetCheckoutManager
 }
 
-type networkLookupService interface {
+type datasetLookupService interface {
 	DatasetNodeExists(datasetId string) bool
 	RemoveDatasetNode(datasetId string) error
 	InsertDatasetNode(datasetId string, node *pb.Node) error
@@ -102,8 +98,9 @@ type membershipManager interface {
 type datasetCheckoutManager interface {
 	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
 	DatasetCheckouts() ([]*pb.DatasetCheckout, error)
-	CheckinDataset(datasetId string, client *pb.Client) error
+	//CheckinDataset(datasetId string, client *pb.Client) error
 	DatasetIsCheckedOut(datasetId string, client *pb.Client) (bool, error)
+	DatasetCheckout(datasetId string, client *pb.Client) *pb.DatasetCheckout
 }
 
 type certManager interface {
@@ -114,7 +111,7 @@ type certManager interface {
 }
 
 // Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
-func NewDirectoryServerCore(cm certManager, networkService networkLookupService, memManager membershipManager, dsManager datasetCheckoutManager, config *Config) (*DirectoryServerCore, error) {
+func NewDirectoryServerCore(cm certManager, dsLookupService datasetLookupService, memManager membershipManager, checkoutManager datasetCheckoutManager, config *Config) (*DirectoryServerCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration for directory server is nil")
 	}
@@ -145,10 +142,10 @@ func NewDirectoryServerCore(cm certManager, networkService networkLookupService,
 		clientCheckoutMap:   make(map[string][]string, 0),
 		invalidatedDatasets: make(map[string]struct{}),
 
-		networkService:  networkService,
-		cm:         	 cm,
-		memManager: 	 memManager,
-		dsManager: 	     dsManager,
+		dsLookupService: 	dsLookupService,
+		cm:         	 	cm,
+		memManager: 		memManager,
+		checkoutManager:	checkoutManager,
 	}
 
 	ds.grpcs.Register(ds)
@@ -171,11 +168,6 @@ func (d *DirectoryServerCore) Start() {
 	go d.ifritClient.Start()
 	go d.startHttpServer(":" + strconv.Itoa(d.config.HTTPPort))
 	go d.grpcs.Start()
-
-	// TODO: in the event of a warm restart, sync with the rest of the network to restore the state of the directory server
-	// back to where it was before the crash.
-	// Suggestion: load cached data from disk and ask the nodes and PS about their state.
-	// Consider
 }
 
 // Create a node that performs a handshake with
@@ -200,8 +192,7 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
-		log.Println("Added dataset to map", msg.GetPolicyRequest().GetIdentifier())
-		if err := d.networkService.InsertDatasetNode(msg.GetStringValue(), msg.GetSender()); err != nil {
+		if err := d.dsLookupService.InsertDatasetNode(msg.GetStringValue(), msg.GetSender()); err != nil {
 			log.Errorln(err.Error())
 			return nil, err
 		}
@@ -238,9 +229,9 @@ func (d *DirectoryServerCore) resolveDatasetIdentifiersDeltas(newIdentifiers []s
 		return errors.New("node is nil")
 	}
 
-	currentIdentifiers := d.networkService.DatasetIdentifiers()
+	currentIdentifiers := d.dsLookupService.DatasetIdentifiers()
 	for _, id := range newIdentifiers {
-		if err := d.networkService.InsertDatasetNode(id, node); err != nil {
+		if err := d.dsLookupService.InsertDatasetNode(id, node); err != nil {
 			log.Errorln(err.Error())
 		}
 	}
@@ -265,7 +256,7 @@ func (d *DirectoryServerCore) resolveDatasetIdentifiersDeltas(newIdentifiers []s
 	}
 
 	for _, s := range superfluous {
-		d.networkService.RemoveDatasetNode(s)
+		d.dsLookupService.RemoveDatasetNode(s)
 	}
 
 	return nil

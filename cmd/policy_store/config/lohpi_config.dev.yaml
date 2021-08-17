@@ -1,5 +1,5 @@
 name: "Policy Store"
-host: "127.0.0.1"
+host: "127.0.1.1"
 httport: 8083
 grpcport: 8084
 gossipinterval: 10

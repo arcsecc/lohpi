@@ -31,9 +31,23 @@ services:
     command: --new -c ./config/lohpi_config.dev.yaml
     #restart: never
     expose:
-    - "8080"
+      - "8080"
+      - "8081"
+      - "5000"
+      - "8000"
     depends_on: 
-    - lohpi-ca-dev
+      - lohpi-ca-dev
+
+  # Directory server Redis cache
+  lohpi-directoryserver-redis:
+    image: "redis:alpine"
+    command: redis-server --port 6302
+    ports:
+     - "6302:6302"
+    environment:
+      - REDIS_HOST=redis
+    depends_on: 
+      - lohpi-directoryserver-dev
 
   # Lohpi-DV 
   lohpi-policy-store-dev:
@@ -49,9 +63,21 @@ services:
     #restart: never
     expose:
       - "8083"
+      - "8084"
     depends_on:
       - lohpi-ca-dev
       - lohpi-directoryserver-dev
+ 
+  # Policy store Redis cache
+  lohpi-policy-store-redis:
+    image: "redis:alpine"
+    command: redis-server --port 6301
+    ports:
+     - "6301:6301"
+    environment:
+      - REDIS_HOST=redis   
+    depends_on:
+      - lohpi-policy-store-dev
 
   # Lohpi-DV     
   lohpi-azureblobnode-dev:
@@ -63,9 +89,22 @@ services:
       context: .
       dockerfile: "./cmd/azureblobnode/Dockerfile"
     network_mode: host
-    #restart: never
+    restart: always
     command: -name "azureblobnode" -new=true -c ./config/lohpi_config.dev.yaml
+    expose:
+      - "8090"
     depends_on: 
       - lohpi-ca-dev
       - lohpi-directoryserver-dev
       - lohpi-policy-store-dev
+  
+  # Policy store Redis cache
+  lohpi-azureblobnode-redis:
+    image: "redis:alpine"
+    command: redis-server --port 6300
+    ports:
+     - "6300:6300"
+    environment:
+      - REDIS_HOST=redis
+    depends_on: 
+      - lohpi-azureblobnode-dev

@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sort"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"time"
@@ -43,6 +44,8 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
 
+	dRouter.HandleFunc("/test/{id:.*}", d.testGetDataset).Methods("GET")
+
 	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
 	networkRouter.HandleFunc("/ndoes", d.getNetworkNodes).Methods("GET")
 
@@ -65,6 +68,13 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	}
 
 	return d.httpServer.ListenAndServe()
+}
+
+func (d *DirectoryServerCore) testGetDataset(w http.ResponseWriter, r *http.Request) {
+	datasetId := mux.Vars(r)["id"]
+	node := d.dsLookupService.DatasetNode(datasetId)
+	log.Printf("node: %v\n", node)
+	fmt.Fprintf(w, "node: %v\n", node)
 }
 
 func (d *DirectoryServerCore) getNetworkNodes(w http.ResponseWriter, r *http.Request) {
@@ -95,14 +105,9 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	}
 
 	dataset := mux.Vars(r)["id"]
-	if dataset == "" {
-		errMsg := fmt.Errorf("Missing dataset identifier")
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+errMsg.Error(), http.StatusBadRequest)
-		return
-	}
 
 	// Check if dataset is known to network
-	if !d.networkService.DatasetNodeExists(dataset) {
+	if !d.dsLookupService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
@@ -127,7 +132,7 @@ func (d *DirectoryServerCore) getProjectDescription(w http.ResponseWriter, r *ht
 	}
 
 	// Check if dataset is known to network
-	if !d.networkService.DatasetNodeExists(dataset) {
+	if !d.dsLookupService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
@@ -287,11 +292,14 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 	//	ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(time.Second * 10))
 	//	defer cancel()
 
+	ids := d.dsLookupService.DatasetIdentifiers()
+	sort.Strings(ids)
+	
 	// Destination struct
 	resp := struct {
 		Identifiers []string
 	}{
-		Identifiers: d.networkService.DatasetIdentifiers(),
+		Identifiers: ids,
 	}
 
 	b := new(bytes.Buffer)
@@ -328,14 +336,14 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 	defer cancel()*/
 
 	// Check if dataset is known to network
-	if !d.networkService.DatasetNodeExists(dataset) {
+	if !d.dsLookupService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
-	node := d.networkService.DatasetNode(dataset)
+	node := d.dsLookupService.DatasetNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
 		log.Infoln(err.Error())
@@ -394,14 +402,14 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	dataset := mux.Vars(r)["id"]
 
 	// Get the node that stores it
-	if !d.networkService.DatasetNodeExists(dataset) {
+	if !d.dsLookupService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
 	}
 
-	node := d.networkService.DatasetNode(dataset)
+	node := d.dsLookupService.DatasetNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
 		log.Infoln(err.Error())
@@ -459,7 +467,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
     	Client: pbClient,
 	}
 
-	if err := d.dsManager.CheckoutDataset(dataset, dsCheckout); err != nil {
+	if err := d.checkoutManager.CheckoutDataset(dataset, dsCheckout); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return

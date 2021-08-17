@@ -222,14 +222,11 @@ func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	
 	return &lohpi.NodeConfig{
 		CaAddress:           config.LohpiCaAddr,
 		Name:                name,
 		SQLConnectionString: dbConn,
-		//BackupRetentionTime time.Time
-		AllowMultipleCheckouts:         true,
-		Hostname:                       config.Hostname,
 		PolicyObserverWorkingDirectory: ".",
 	}, nil
 }
@@ -275,7 +272,7 @@ func (sn *StorageNode) indexDataset() error {
 	}
 
 	for _, id := range ids {
-		if err := sn.node.IndexDataset(id); err != nil {
+		if err := sn.node.IndexDataset(id, &lohpi.DatasetIndexingOptions{AllowMultipleCheckouts: true}); err != nil {
 			return err
 		}
 	}

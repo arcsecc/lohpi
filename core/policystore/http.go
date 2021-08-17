@@ -151,7 +151,7 @@ func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.
 	respBody := struct {
 		Identifiers []string
 	}{
-		Identifiers: ps.dsManager.DatasetIdentifiers(),
+		Identifiers: ps.dsLookupService.DatasetIdentifiers(),
 	}
 
 	b := new(bytes.Buffer)
@@ -241,7 +241,7 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	datasetId := mux.Vars(r)["id"]
 	dataset := ps.dsManager.Dataset(datasetId)
 	if dataset == nil {
-		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", datasetId)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
 		return
@@ -289,7 +289,7 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get the node's identifier
-	node := ps.networkService.DatasetNode(datasetId)
+	node := ps.dsLookupService.DatasetNode(datasetId)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset is not available anymore")
 		log.Errorln(err.Error())

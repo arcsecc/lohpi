@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
+	"github.com/go-redis/redis"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policystore"
 	"github.com/arcsecc/lohpi/core/statesync"
@@ -172,9 +173,14 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	// Dataset manager
 	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		UseDB:               true,
+		RedisClientOptions: &redis.Options{
+			Network: "tcp",
+			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6301),
+			Password: "",
+			DB: 0,
+		},
 	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService(datasetLookupServiceConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService("policystore", datasetLookupServiceConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -196,11 +202,16 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	}
 
 	// Dataset manager service
-	datasetServiceUnitConfig := &datasetmanager.DatasetServiceUnitConfig{
+	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		UseDB: true,
+		RedisClientOptions: &redis.Options{
+			Network: "tcp",
+			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6301),
+			Password: "",
+			DB: 1,
+		},
 	}
-	dsManager, err := datasetmanager.NewDatasetServiceUnit(datasetServiceUnitConfig)
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit("policystore", datasetIndexerUnitConfig)
 	if err != nil {
 		return nil, err
 	}

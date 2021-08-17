@@ -7,3 +7,8 @@ azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
 azuretenantid: "c628abe3-0fe1-4381-bcc0-4721d4387973"
 azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
 azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
+ifrittcpport: 5000
+ifritudpport: 8000
+hostname: "127.0.1.1"
+lohpicryptodirectory: "crypto/lohpi"
+ifritcryptodirectory: "crypto/ifrit"

@@ -9,6 +9,8 @@ import (
 	"github.com/arcsecc/lohpi/core/node"
 	"github.com/arcsecc/lohpi/core/statesync"
 	"github.com/pkg/errors"
+	"github.com/go-redis/redis"
+
 	log "github.com/sirupsen/logrus"
 	"net/http"
 	"time"
@@ -16,11 +18,16 @@ import (
 
 var (
 	errNoDatasetId = errors.New("Dataset identifier is empty.")
+	errNoDatasetIndexingOptions = errors.New("Dataset indexing options are nil")
 )
 
 type Node struct {
 	nodeCore *node.NodeCore
 	conf     *node.Config
+}
+
+type DatasetIndexingOptions struct {
+	AllowMultipleCheckouts bool
 }
 
 type NodeConfig struct {
@@ -37,9 +44,6 @@ type NodeConfig struct {
 	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued.
 	// NOT USED
 	BackupRetentionTime time.Time
-
-	// If set to true, a client can checkout a dataset multiple times. Default value is false.
-	AllowMultipleCheckouts bool
 
 	// Hostname of the node. Default value is "127.0.1.1".
 	Hostname string
@@ -90,7 +94,6 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	n := &Node{
 		conf: &node.Config{
 			Name:                   config.Name,
-			AllowMultipleCheckouts: config.AllowMultipleCheckouts,
 			SQLConnectionString:    config.SQLConnectionString,
 			Port:                   config.Port,
 			SyncInterval:			config.SyncInterval,
@@ -141,11 +144,16 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	}
 
 	// Dataset manager service
-	datasetServiceUnitConfig := &datasetmanager.DatasetServiceUnitConfig{
+	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		UseDB: true,
+		RedisClientOptions: &redis.Options{
+			Network: "tcp",
+			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6300),
+			Password: "",
+			DB: 0,
+		},
 	}
-	dsManager, err := datasetmanager.NewDatasetServiceUnit(datasetServiceUnitConfig)
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit("azureblob", datasetIndexerUnitConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +167,9 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	// Checkout manager
 	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
+		// skip redis for now
 	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(dsCheckoutManagerConfig)
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("azureblob", dsCheckoutManagerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -182,12 +191,20 @@ func (n *Node) StartDatasetSyncing(remoteAddr string) error {
 
 // IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
 // it will return when policy requests to the policy store finish.
-func (n *Node) IndexDataset(datasetId string) error {
+func (n *Node) IndexDataset(datasetId string, indexOptions *DatasetIndexingOptions) error {
 	if datasetId == "" {
 		return errNoDatasetId
 	}
 
-	return n.nodeCore.IndexDataset(datasetId)
+	if indexOptions == nil {
+		return errNoDatasetIndexingOptions
+	}
+
+	opts := &node.DatasetIndexingOptions {
+		AllowMultipleCheckouts: indexOptions.AllowMultipleCheckouts,
+	}
+
+	return n.nodeCore.IndexDataset(datasetId, opts)
 }
 
 // Registers a handler that processes the client request of datasets. The handler is only invoked if the same id

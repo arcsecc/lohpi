@@ -1,71 +1,53 @@
+# Creates Docker containers suited for development
 version: '3.0'
 services:
 
   # Lohpi-DV 
-  dv-ca:
-    environment:
-      - LOHPI_ENV=production
-    container_name: lohpi-ca
-    image: lohpi.azurecr.io/lohpi-ca
-    build: 
-      context: .
-      dockerfile: "./cmd/dataverse/ca/Dockerfile"
-    command: --new
-    network_mode: host
-    restart: unless-stopped
-    expose:
-      - "8300"
-      - "8301"
-  
-  # Lohpi-DV 
-  dv-directoryserver:
-    environment:
-      - LOHPI_ENV=production
+  lohpi-directoryserver:
     container_name: lohpi-directoryserver
-    image: lohpi.azurecr.io/lohpi-directoryserver
+    image: lohpi-directoryserver
     build: 
       context: .
-      dockerfile: "./cmd/dataverse/directoryserver/Dockerfile"
-    network_mode: host
-    command: 
-      - --new
-    restart: unless-stopped
+      dockerfile: "./cmd/directoryserver/Dockerfile"
+    command: ./config/lohpi_config.dev.yaml
+    #restart: never
     expose:
     - "8080"
-    depends_on: 
-    - dv-ca
+    - "8081"
+    - "5000"
+    - "8000"
 
   # Lohpi-DV 
-  dv-policy_store:
+  lohpi-policy-store-dev:
     environment:
-      - LOHPI_ENV=production
-    container_name: lohpi-policy-store
-    image: lohpi.azurecr.io/lohpi-policy-store
+      - LOHPI_ENV=development
+    container_name: lohpi-policy-store-dev
+    image: lohpi-policy-store-dev
     build:
       context: .
-      dockerfile: "./cmd/dataverse/policy_store/Dockerfile"
+      dockerfile: "./cmd/policy_store/Dockerfile"
     network_mode: host
-    command: -new=true
-    restart: unless-stopped
+    command: -new=true -c ./config/lohpi_config.dev.yaml
+    #restart: never
     expose:
       - "8083"
     depends_on:
-      - dv-ca
-      - dv-directoryserver
+      - lohpi-ca-dev
+      - lohpi-directoryserver-dev
 
   # Lohpi-DV     
-  dv-node:
+  lohpi-azureblobnode-dev:
     environment:
-      - LOHPI_ENV=production
-    container_name: lohpi-node
-    image: lohpi.azurecr.io/lohpi-node
+      - LOHPI_ENV=development
+    container_name: lohpi-azureblobnode-dev
+    image: lohpi-azureblobnode-dev
     build: 
       context: .
-      dockerfile: "./cmd/dataverse/node/Dockerfile"
+      dockerfile: "./cmd/azureblobnode/Dockerfile"
     network_mode: host
-    restart: unless-stopped
-    command: -name "node_0" -new=true -c lohpi_config/lohpi_config.yaml
+    #restart: never
+    command: -name "azureblobnode" -new=true -c ./config/lohpi_config.dev.yaml
     depends_on: 
-    - dv-ca
-    - dv-directoryserver
-    - dv-policy_store
+      - lohpi-ca-dev
+      - lohpi-directoryserver-dev
+      - lohpi-policy-store-dev

@@ -3,11 +3,12 @@ package lohpi
 import (
 	"crypto/x509/pkix"
 	"errors"
-	log "github.com/sirupsen/logrus"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
+	"github.com/go-redis/redis"
+
 	"time"
 	"fmt"
 )
@@ -41,6 +42,15 @@ type DirectoryServerConfig struct {
 
 	// Path used to store X.509 certificate and private key
 	CryptoUnitWorkingDirectory string
+
+	// Ifrit's TCP port. Default value is 5000.
+	IfritTCPPort int
+
+	// Ifrit's UDP port. Default value is 6000.
+	IfritUDPPort int
+
+	// Ifrit's X.509 certificate path. An error is returned if the string is empty.
+	IfritCertPath string
 }
 
 type DirectoryServer struct {
@@ -80,6 +90,18 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 
 	if config.CryptoUnitWorkingDirectory == "" {
 		config.CryptoUnitWorkingDirectory = "./secrets"
+	}
+
+	if config.IfritTCPPort == 0 {
+		config.IfritTCPPort = 5000
+	}
+
+	if config.IfritUDPPort == 0 {
+		config.IfritUDPPort = 6000
+	}
+
+	if config.IfritCertPath == "" {
+		return nil, fmt.Errorf("Certificate path is empty")
 	}
 
 	ds := &DirectoryServer{
@@ -128,9 +150,14 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	// Dataset manager
 	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		UseDB: true,
+		RedisClientOptions: &redis.Options{
+			Network: "tcp",
+			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6302),
+			Password: "",
+			DB: 0,
+		},
 	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService(datasetLookupServiceConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService("directoryserver", datasetLookupServiceConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +176,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(dsCheckoutManagerConfig)
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("directoryserver", dsCheckoutManagerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -173,12 +200,4 @@ func (d *DirectoryServer) Start() {
 // Performs a graceful shutdown of the directory server.
 func (d *DirectoryServer) Stop() {
 	d.dsCore.Stop()
-}
-
-func (d *DirectoryServer) SavePrivateKey() error {
-	return nil
-}
-
-func (d *DirectoryServer) SaveCertificate() error {
-	return nil
 }

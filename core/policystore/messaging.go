@@ -23,6 +23,8 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, err
 		return nil, err
 	}
 
+	log.Infoln("DS:", ds)
+
 	policy := ds.GetPolicy()
 	if policy == nil {
 		err := fmt.Errorf("Policy for dataset '%s' is nil\n", datasetId)

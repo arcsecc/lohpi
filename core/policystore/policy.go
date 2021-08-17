@@ -40,7 +40,7 @@ type Config struct {
 	GitRepositoryPath 		 string
 }
 
-type networkLookupService interface {
+type datasetLookupService interface {
 	DatasetNodeExists(datasetId string) bool
 	RemoveDatasetNode(datasetId string) error
 	InsertDatasetNode(datasetId string, node *pb.Node) error
@@ -114,10 +114,10 @@ type PolicyStoreCore struct {
 	stateSync stateSyncer
 	dsManager datasetManager
 	memManager membershipManager
-	networkService networkLookupService
+	dsLookupService datasetLookupService
 }
 
-func NewPolicyStoreCore(cm certManager, networkService networkLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
+func NewPolicyStoreCore(cm certManager, dsLookupService datasetLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
 	ifritClient, err := ifrit.NewClient()
 	if err != nil {
 		return nil, err
@@ -154,7 +154,7 @@ func NewPolicyStoreCore(cm certManager, networkService networkLookupService, sta
 		config:           config,
 		multicastManager: multicastManager,
 		stopBatching:     make(chan bool),
-		networkService:   networkService,
+		dsLookupService:  dsLookupService,
 		stateSync:		  stateSync,
 		memManager:		  memManager,
 		dsManager: 		  dsManager,
@@ -202,7 +202,7 @@ func (ps *PolicyStoreCore) RunPolicyBatcher() {
 					}
 			}()
 			case <-ps.stopBatching:
-				// TODO garbage collect timer
+				// TODO: garbage collect timer
 				return
 		}
 	}
@@ -390,7 +390,7 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 	}
 
 	// If the dataset has not been found in the in-memory map, restore it.
-	if ds := ps.dsManager.Dataset(msg.GetPolicyRequest().GetIdentifier()); ds == nil {
+	if !ps.dsManager.DatasetExists(msg.GetPolicyRequest().GetIdentifier()) {
 		newDataset := &pb.Dataset{}
 		if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
 			newDefaultPolicy := ps.getInitialDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
@@ -431,18 +431,14 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 			log.Errorln(err.Error())
 			return nil, err
 		}
-	} else {
-		log.Println("ps.networkService.DatasetIdentifiers:", ps.networkService.DatasetIdentifiers())
 	} 
 
-	// Insert node into lookup table, given the dataset identifier
-	if !ps.networkService.DatasetNodeExists(msg.GetPolicyRequest().GetIdentifier()) {
-		if err := ps.networkService.InsertDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender()); err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
+	// Add the dataset to the lookup manager
+	if err := ps.dsLookupService.InsertDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender()); err != nil {
+		log.Errorln(err.Error())
+		return nil, err
 	}
-
+	
 	return ps.pbMarshalDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
 }
 

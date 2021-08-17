@@ -57,6 +57,10 @@ type gossipMessage struct {
 	Addr    string
 }
 
+type DatasetIndexingOptions struct {
+	AllowMultipleCheckouts bool
+}
+
 // Types used in client requests
 type clientRequestHandler func(id string, w http.ResponseWriter, r *http.Request)
 
@@ -135,7 +139,7 @@ type datasetManager interface {
 type datasetCheckoutManager interface {
 	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
 	DatasetIsCheckedOut(datasetId string, client *pb.Client) (bool, error)
-	CheckinDataset(datasetId string, client *pb.Client) error 
+	//CheckinDataset(datasetId string, client *pb.Client) error 
 	DatasetCheckouts() ([]*pb.DatasetCheckout, error)
 }
 
@@ -220,7 +224,7 @@ func (n *NodeCore) startStateSyncer() {
 			log.Info("Exiting sync")
 			return
 		case <-time.After(n.config().SyncInterval):
-			deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
+/*			deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
 			if err != nil {
 				log.Errorln(err.Error())
 			}
@@ -236,7 +240,7 @@ func (n *NodeCore) startStateSyncer() {
 			// Send the correct identifiers to the directory server
 			if err := n.pbResolveDatsetIdentifiers(n.directoryServerIP); err != nil {
 				log.Error(err.Error())
-			}
+			}*/
 		}
 	}
 }
@@ -244,7 +248,7 @@ func (n *NodeCore) startStateSyncer() {
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
 // You will have to call this method to make the datasets available to the clients. 
-func (n *NodeCore) IndexDataset(datasetId string) error {
+func (n *NodeCore) IndexDataset(datasetId string, indexOptions *DatasetIndexingOptions) error {
 	if n.dsManager.DatasetExists(datasetId) {
 		log.Infof("Dataset with identifier '%s' is already indexed by the server\n", datasetId)
 	}
@@ -258,6 +262,7 @@ func (n *NodeCore) IndexDataset(datasetId string) error {
 	dataset := &pb.Dataset{
 		Identifier: datasetId,
 		Policy: policyResponse,
+		AllowMultipleCheckouts: indexOptions.AllowMultipleCheckouts,
 	}
 
 	// Apply the update from policy store to storage
@@ -303,6 +308,7 @@ func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 
 	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
+		panic(err)
 		return err
 	}
 

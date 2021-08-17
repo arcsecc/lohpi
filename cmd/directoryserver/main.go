@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-
 	"github.com/arcsecc/lohpi"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
@@ -22,19 +21,24 @@ var config = struct {
 	AzureClientID        string `required:"true"`
 	AzureKeyVaultBaseURL string `required:"true"`
 	AzureTenantID        string `required:"true"`
+	LohpiCryptoDirectory string `required:"true"`
+	IfritCryptoDirectory string `required:"true"`
+	Hostname 			 string `required:"true"`
+	IfritTCPPort		 int 	`required:"true"`
+	IfritUDPPort		 int 	`required:"true"`
 }{}
 
 func main() {
 	var configFile string
 	var createNew bool
-
+	
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&configFile, "c", "", "Directory server's configuration file.")
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi directory server instance.")
 	args.Parse(os.Args[1:])
 
 	if configFile == "" {
-		log.Errorln(")Configuration file must be provided. Exiting.")
+		log.Errorln("Configuration file must be provided. Exiting.")
 		os.Exit(2)
 	}
 
@@ -46,8 +50,13 @@ func main() {
 	var d *lohpi.DirectoryServer
 	var err error
 
-	config := getDirectoryServerConfiguration()
-	d, err = lohpi.NewDirectoryServer(&config, createNew)
+	config, err := getDirectoryServerConfiguration()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+
+	d, err = lohpi.NewDirectoryServer(config, createNew)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
@@ -62,19 +71,24 @@ func main() {
 	d.Stop()
 }
 
-func getDirectoryServerConfiguration() lohpi.DirectoryServerConfig {
+func getDirectoryServerConfiguration() (*lohpi.DirectoryServerConfig, error) {
 	constring, err := getDatabaseConnectionString()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return lohpi.DirectoryServerConfig{
-		CaAddress:           config.LohpiCaAddr,
-		Name:                "Lohpi directory server",
-		SQLConnectionString: constring,
-		HTTPPort:            config.HTTPPort,
-		GRPCPort:            config.GRPCPort,
-	}
+	return &lohpi.DirectoryServerConfig{
+		CaAddress:           	config.LohpiCaAddr,
+		Name:                	"Lohpi directory server",
+		SQLConnectionString: 	constring,
+		HTTPPort:            	config.HTTPPort,
+		GRPCPort:            	config.GRPCPort,
+		HostName: 				config.Hostname,
+		CryptoUnitWorkingDirectory: config.LohpiCryptoDirectory,
+		IfritCertPath: config.IfritCryptoDirectory,
+		IfritTCPPort: config.IfritTCPPort,
+		IfritUDPPort: config.IfritUDPPort,
+	}, nil
 }
 
 func initializeLogging(logToFile bool) error {
