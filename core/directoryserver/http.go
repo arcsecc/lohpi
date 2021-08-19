@@ -440,7 +440,6 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		err := fmt.Errorf("Failed to fetch dataset\n")
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return

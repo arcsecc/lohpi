@@ -47,6 +47,7 @@ func ClientConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Confi
 	if caCert != nil {
 		pool := x509.NewCertPool()
 		pool.AddCert(caCert)
+		
 		conf.RootCAs = pool
 	} else {
 		panic(errors.New("caCert is nil"))

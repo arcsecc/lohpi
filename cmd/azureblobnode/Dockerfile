@@ -56,6 +56,8 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY ./cmd/azureblobnode/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/azureblobnode/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
 COPY ./cmd/azureblobnode/config/lohpi_config.yaml ./config/lohpi_config.yaml
+COPY ./cmd/azureblobnode/crypto/lohpi/*.pem crypto/lohpi/
+COPY ./cmd/azureblobnode/crypto/ifrit/*pem crypto/ifrit/
 
 # Command to run the executable
-ENTRYPOINT ["/node"]
+ENTRYPOINT ["/node", "-name", "azureblobnode", "-c", "config/lohpi_config.yaml"]

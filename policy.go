@@ -58,6 +58,15 @@ type PolicyStoreConfig struct {
 
 	// Path used to store X.509 certificate and private key
 	CryptoUnitWorkingDirectory string
+
+	// Ifrit's TCP port. Default value is 5000.
+	IfritTCPPort int
+
+	// Ifrit's UDP port. Default value is 6000.
+	IfritUDPPort int
+
+	// Ifrit's X.509 certificate path. An error is returned if the string is empty.
+	IfritCertPath string
 }
 
 type PolicyStore struct {
@@ -119,7 +128,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	}
 
 	if config.CryptoUnitWorkingDirectory == "" {
-		config.CryptoUnitWorkingDirectory = "./secrets"
+		config.CryptoUnitWorkingDirectory = "./crypto/lohpi"
 	}
 
 	p := &PolicyStore{
@@ -134,6 +143,8 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 			CaAddress:                config.CaAddress,
 			DirectoryServerAddress:   config.DirectoryServerAddress,
 			GitRepositoryPath:        config.PolicyStoreGitRepository,
+			IfritTCPPort: 		 	  config.IfritTCPPort,
+			IfritUDPPort: 		 	  config.IfritUDPPort,
 		},
 	}
 
@@ -175,7 +186,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 		SQLConnectionString: config.SQLConnectionString,
 		RedisClientOptions: &redis.Options{
 			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6301),
+			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
 			Password: "",
 			DB: 0,
 		},
@@ -206,7 +217,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 		SQLConnectionString: config.SQLConnectionString,
 		RedisClientOptions: &redis.Options{
 			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6301),
+			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
 			Password: "",
 			DB: 1,
 		},

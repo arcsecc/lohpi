@@ -85,7 +85,7 @@ func getDirectoryServerConfiguration() (*lohpi.DirectoryServerConfig, error) {
 		GRPCPort:            	config.GRPCPort,
 		HostName: 				config.Hostname,
 		CryptoUnitWorkingDirectory: config.LohpiCryptoDirectory,
-		IfritCertPath: config.IfritCryptoDirectory,
+		//IfritCertPath: config.IfritCryptoDirectory,
 		IfritTCPPort: config.IfritTCPPort,
 		IfritUDPPort: config.IfritUDPPort,
 	}, nil

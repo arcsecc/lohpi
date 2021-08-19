@@ -88,7 +88,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	}
 
 	if config.CryptoUnitWorkingDirectory == "" {
-		config.CryptoUnitWorkingDirectory = "./secrets"
+		config.CryptoUnitWorkingDirectory = "./crypto/lohpi"
 	}
 
 	n := &Node{
@@ -97,6 +97,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 			SQLConnectionString:    config.SQLConnectionString,
 			Port:                   config.Port,
 			SyncInterval:			config.SyncInterval,
+			HostName:				config.Hostname,
 		},
 	}
 
@@ -148,7 +149,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 		SQLConnectionString: config.SQLConnectionString,
 		RedisClientOptions: &redis.Options{
 			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6300),
+			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
 			Password: "",
 			DB: 0,
 		},

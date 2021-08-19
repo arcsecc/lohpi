@@ -36,7 +36,7 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 
 	
 	ch := n.ifritClient.SendTo(policyStoreIP, data)
-	
+	log.Println("policyStoreIP:", policyStoreIP)
 	select {
 	case resp := <-ch:
 		respMsg := &pb.Message{}
@@ -93,6 +93,7 @@ func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 		return err
 	}
 
+	log.Println("recipient:", recipient)
 	n.ifritClient.SendTo(recipient, data)
 	return nil
 }

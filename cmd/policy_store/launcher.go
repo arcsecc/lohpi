@@ -32,9 +32,10 @@ var config = struct {
 	AzureClientID           	string 	`required:"true"`
 	AzureKeyVaultBaseURL    	string 	`required:"true"`
 	AzureTenantID           	string 	`required:"true"`
-	AzureStorageAccountName 	string 	`required:"true"`
-	AzureStorageAccountKey  	string 	`required:"true"`
+	IfritTCPPort		 		int 	`required:"true"`
+	IfritUDPPort		 		int 	`required:"true"`
 }{}
+
 
 func main() {
 	var psConfigFile string
@@ -74,6 +75,7 @@ func getPolicyStoreConfig() (*lohpi.PolicyStoreConfig, error) {
 	}
 
 	return &lohpi.PolicyStoreConfig{
+		Hostname: config.Host,
 		CaAddress: config.CaAddress,
 		Name: "Policy store",
 		PolicyStoreGitRepository: config.PolicyStoreGitRepository,		
@@ -84,6 +86,8 @@ func getPolicyStoreConfig() (*lohpi.PolicyStoreConfig, error) {
 		NumDirectRecipients: config.NumDirectRecipients,
 		DirectoryServerAddress: config.DirectoryServerAddress,
 		SQLConnectionString: dbConnString,
+		IfritTCPPort: config.IfritTCPPort,
+		IfritUDPPort: config.IfritUDPPort,
 	}, nil
 }
 

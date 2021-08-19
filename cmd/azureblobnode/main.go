@@ -56,12 +56,9 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
-
-	if configFile == "" {
-		log.Errorln("Configuration file must not be empty. Exiting.")
-		os.Exit(2)
-	}
+	configor.New(&configor.Config{
+		Debug: true, 
+		ENVPrefix: "PS_NODE"}).Load(&config, configFile)
 
 	// Require node identifier
 	if nodeName == "" {
@@ -224,6 +221,7 @@ func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
 	}
 	
 	return &lohpi.NodeConfig{
+		Hostname: 		  	 config.Hostname,
 		CaAddress:           config.LohpiCaAddr,
 		Name:                name,
 		SQLConnectionString: dbConn,

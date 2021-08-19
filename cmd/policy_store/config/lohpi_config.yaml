@@ -1,10 +1,20 @@
 name: "Policy Store"
-host: "127.0.0.1"
+host: "lohpi-policystore.norwayeast.azurecontainer.io"
 httport: 8083
-grpcport: 8084
+grpcport: 6000
 gossipinterval: 10
 multicastacceptancelevel: 0.5
 caaddress: "127.0.1.1:8301"
-directoryserveraddress: "127.0.1.1:8081"
+directoryserveraddress: "lohpi-directoryserver.norwayeast.azurecontainer.io"
 policyStoregitrepository: "/var/tmp/lohpi/policy_store/policies"
 numdirectrecipients: 1
+azurekeyvaultname: "lohpi-key-vault"
+azurekeyvaultsecret: "policy-store-db-connection-string-prod"
+azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
+azuretenantid: "c628abe3-0fe1-4381-bcc0-4721d4387973"
+azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
+azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
+lohpicryptodirectory: "crypto/lohpi"
+ifritcryptodirectory: "crypto/ifrit"
+ifrittcpport: 5000
+ifritudpport: 8000

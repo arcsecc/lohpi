@@ -57,8 +57,12 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY ./cmd/policy_store/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/policy_store/config/lohpi_config.yaml ./config/lohpi_config.yaml
 COPY ./cmd/policy_store/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
+COPY ./cmd/policy_store/crypto/lohpi/owncert.pem crypto/lohpi/owncert.pem
+COPY ./cmd/policy_store/crypto/lohpi/cacert.pem crypto/lohpi/cacert.pem
+COPY ./cmd/policy_store/crypto/lohpi/key.pem crypto/lohpi/key.pem
+COPY ./cmd/policy_store/crypto/ifrit/*.pem crypto/ifrit/
 
 # Command to run the executable
-ENTRYPOINT ["/policy_store"]
+ENTRYPOINT ["/policy_store", "-c", "config/lohpi_config.yaml"]
 
 

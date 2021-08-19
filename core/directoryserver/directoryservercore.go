@@ -8,7 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	_"fmt"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/message"
 	"github.com/arcsecc/lohpi/core/netutil"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -33,6 +33,8 @@ type Config struct {
 	SQLConnectionString string
 	Hostname 			string
 	CertificatePath 	string
+	IfritTCPPort 		int
+	IfritUDPPort 		int
 }
 
 type DirectoryServerCore struct {
@@ -116,7 +118,11 @@ func NewDirectoryServerCore(cm certManager, dsLookupService datasetLookupService
 		return nil, errors.New("Configuration for directory server is nil")
 	}
 
-	ifritClient, err := ifrit.NewClient()
+	ifritClient, err := ifrit.NewClient(&ifrit.ClientConfig{
+		UdpPort: config.IfritUDPPort,
+		TcpPort: config.IfritTCPPort,
+		Hostname: "lohpi-directoryserver.norwayeast.azurecontainer.io",
+		CertPath: "./crypto/ifrit",})
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +316,7 @@ func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb
 	}
 	log.Infof("Added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n", node.GetName(), node.GetIfritAddress(), node.GetHttpsAddress())
 	return &pb.HandshakeResponse{
-		Ip: d.ifritClient.Addr(),
+		Ip: fmt.Sprintf("%s:%d", d.config.Hostname, d.config.IfritTCPPort),
 		Id: []byte(d.ifritClient.Id()),
 	}, nil
 }
@@ -347,7 +353,7 @@ func (d *DirectoryServerCore) verifyMessageSignature(msg *pb.Message) error {
 func (d *DirectoryServerCore) pbNode() *pb.Node {
 	return &pb.Node{
 		Name:         "Lohpi directory server",
-		IfritAddress: d.ifritClient.Addr(),
+		IfritAddress: fmt.Sprintf("%s:%d", d.config.Hostname, d.config.IfritTCPPort),
 		Id:           []byte(d.ifritClient.Id()),
 	}
 }

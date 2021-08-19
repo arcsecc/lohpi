@@ -1,0 +1,49 @@
+#apiVersion: 2019-12-01
+location: norwayeast
+name: lohpi-directoryserver
+properties:
+  containers:
+  - name: lohpi-directoryserver
+    properties:
+      image: lohpi.azurecr.io/lohpi-directoryserver:latest
+      resources:
+        requests:
+          cpu: 2
+          memoryInGb: 1.5
+      ports:
+        - protocol: UDP
+          port: 8000
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 6000
+        - protocol: TCP
+          port: 5000
+  - name: redis
+    properties:
+      image: lohpi.azurecr.io/redis:alpine
+      resources:
+        requests:
+          cpu: 2
+          memoryInGb: 1.5
+      ports:
+        - port: 6379
+  osType: Linux
+  ipAddress:
+    type: Public
+    ports:
+    - protocol: UDP
+      port: 8000
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 6000
+    - protocol: TCP
+      port: 5000
+    dnsnamelabel: "lohpi-directoryserver"
+  imageRegistryCredentials:
+    - server: lohpi.azurecr.io
+      username: lohpi
+      password: jQA8j+27P11I36IOJGf9lXWwKqqbo/Ym
+tags: {exampleTag: tutorial}
+type: Microsoft.ContainerInstance/containerGroups

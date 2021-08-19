@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"path/filepath"
 	"io/ioutil"
 	"math/big"
@@ -63,16 +64,6 @@ func NewCu(path string, config *CryptoUnitConfig) (*CryptoUnit, error) {
 		return nil, errNoCryptoUnitConfig
 	}
 	var certs *certSet
-
-	serviceAddr := strings.Split(config.Identity.Locality[0], ":")
-	if len(serviceAddr) <= 0 {
-		return nil, errNoIp
-	}
-
-	ip := net.ParseIP(serviceAddr[0])
-	if ip == nil {
-		return nil, errNoIp
-	}
 
 	priv, err := genKeys()
 	if err != nil {
@@ -160,12 +151,12 @@ func (cu *CryptoUnit) SaveState() error {
 	p := filepath.Join(cu.workingDirectory, cu.keyFilePath)
 	f, err := os.Create(p)
 	if err != nil {
-		return err
+		log.Errorln(err.Error())
 	}
 
 	b, err := x509.MarshalECPrivateKey(cu.priv)
 	if err != nil {
-		return err
+		log.Errorln(err.Error())
 	}
 
 	block := &pem.Block{
@@ -174,37 +165,17 @@ func (cu *CryptoUnit) SaveState() error {
 	}
 
 	if err := pem.Encode(f, block); err != nil {
-		return err
+		log.Errorln(err.Error())
 	}
 
 	// Save CA's X.509 certificate
-	p = filepath.Join(cu.workingDirectory, cu.selfCertFilePath)
-	f, err = os.Create(p)
-	if err != nil {
-		return err
-	}
-
-	b = cu.ca.Raw
-	block = &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: b,
-	}
-
-	if err := pem.Encode(f, block); err != nil {
-		return err
-	}
-
-	if err := f.Close(); err != nil {
-		return err
-	}
-
-	// Save my own X.509 certificate
 	p = filepath.Join(cu.workingDirectory, cu.caCertFilePath)
 	f, err = os.Create(p)
 	if err != nil {
-		return err
+		log.Errorln(err.Error())
 	}
 
+	// Save CA cert
 	b = cu.ca.Raw
 	block = &pem.Block{
 		Type:  "CERTIFICATE",
@@ -212,7 +183,28 @@ func (cu *CryptoUnit) SaveState() error {
 	}
 
 	if err := pem.Encode(f, block); err != nil {
-		return err
+		log.Errorln(err.Error())
+	}
+
+	if err := f.Close(); err != nil {
+		log.Errorln(err.Error())
+	}
+
+	// Save my own X.509 certificate
+	p = filepath.Join(cu.workingDirectory, cu.selfCertFilePath)
+	f, err = os.Create(p)
+	if err != nil {
+		log.Errorln(err.Error())
+	}
+
+	b = cu.self.Raw
+	block = &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: b,
+	}
+
+	if err := pem.Encode(f, block); err != nil {
+		log.Errorln(err.Error())
 	}
 
 	return f.Close()
@@ -269,13 +261,11 @@ func (cu *CryptoUnit) DecodePublicKey(key []byte) (*ecdsa.PublicKey, error) {
 func sendCertRequest(privKey *ecdsa.PrivateKey, caAddr string, pk pkix.Name, hostnames []string) (*certSet, error) {
 	var certs certResponse
 	set := &certSet{}
-	ip := net.ParseIP("127.0.1.1")
 
 	template := x509.CertificateRequest{
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 		Subject:            pk,
 		DNSNames: 			hostnames,
-		IPAddresses:		[]net.IP{ip},
 	}
 
 	certReqBytes, err := x509.CreateCertificateRequest(rand.Reader, &template, privKey)
@@ -320,11 +310,13 @@ func selfSignedCert(priv *ecdsa.PrivateKey, pk pkix.Name) (*certSet, error) {
 
 	serviceAddr := strings.Split(pk.Locality[0], ":")
 	if len(serviceAddr) <= 0 {
+		panic(errNoIp)
 		return nil, errNoIp
 	}
 
 	ip := net.ParseIP(serviceAddr[0])
 	if ip == nil {
+		panic(errNoIp)
 		return nil, errNoIp
 	}
 

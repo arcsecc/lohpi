@@ -38,6 +38,8 @@ type Config struct {
 	DirectoryServerAddress   string 
 	DirectoryServerGPRCPort  int
 	GitRepositoryPath 		 string
+	IfritTCPPort 		int
+	IfritUDPPort 		int
 }
 
 type datasetLookupService interface {
@@ -118,7 +120,11 @@ type PolicyStoreCore struct {
 }
 
 func NewPolicyStoreCore(cm certManager, dsLookupService datasetLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
-	ifritClient, err := ifrit.NewClient()
+	ifritClient, err := ifrit.NewClient(&ifrit.ClientConfig{
+		UdpPort: config.IfritUDPPort,
+		TcpPort: config.IfritTCPPort,
+		Hostname: "lohpi-policystore.norwayeast.azurecontainer.io",
+		CertPath: "./crypto/ifrit",})
 	if err != nil {
 		return nil, err
 	}
@@ -331,8 +337,10 @@ func (ps *PolicyStoreCore) Handshake(ctx context.Context, node *pb.Node) (*pb.Ha
 	}
 
 	log.Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n", node.GetName(), node.GetIfritAddress())
+	ipString := fmt.Sprintf("%s:%d", ps.PolicyStoreConfig().Hostname, ps.PolicyStoreConfig().IfritTCPPort)
+	log.Println("ipString:", ipString)
 	return &pb.HandshakeResponse{
-		Ip: ps.ifritClient.Addr(),
+		Ip: ipString,
 		Id: []byte(ps.ifritClient.Id()),
 	}, nil
 }
@@ -553,7 +561,7 @@ func (ps *PolicyStoreCore) Shutdown() {
 func (ps *PolicyStoreCore) pbNode() *pb.Node {
 	return &pb.Node{
 		//Issuer:       ps.PolicyStoreConfig().Name,
-		IfritAddress: ps.ifritClient.Addr(),
+		IfritAddress: fmt.Sprintf("%s:%d", ps.PolicyStoreConfig().Hostname, ps.PolicyStoreConfig().IfritTCPPort),
 		Id:           []byte(ps.ifritClient.Id()),
 	}
 }

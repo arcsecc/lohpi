@@ -155,7 +155,11 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 		return nil, errors.New("Configuration is nil")
 	}
 	
-	ifritClient, err := ifrit.NewClient()
+	ifritClient, err := ifrit.NewClient(&ifrit.ClientConfig{
+		UdpPort: 8000, 
+		TcpPort: 5000,
+		Hostname: "lohpi-azureblobnode.norwayeast.azurecontainer.io",
+		CertPath: "./crypto/ifrit",})
 	if err != nil {
 		return nil, err
 	}
@@ -172,12 +176,14 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 
 	pbnode := &pb.Node{
 		Name:         	config.Name,
-		IfritAddress: 	ifritClient.Addr(),
+		IfritAddress: 	fmt.Sprintf("%s:%d", config.HostName, 5000),
 		Id:           	[]byte(ifritClient.Id()),
 		HttpsAddress:	config.HostName,
 		Port: 			int32(config.Port),
 		BootTime:		pbtime.Now(),
 	}
+
+	log.Println("pbnode:", pbnode.HttpsAddress)
 
 	node := &NodeCore{
 		ifritClient:  			  ifritClient,
@@ -306,6 +312,7 @@ func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
+	log.Println("getPbNode():", n.getPbNode())
 	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
 		panic(err)

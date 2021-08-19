@@ -48,9 +48,6 @@ type DirectoryServerConfig struct {
 
 	// Ifrit's UDP port. Default value is 6000.
 	IfritUDPPort int
-
-	// Ifrit's X.509 certificate path. An error is returned if the string is empty.
-	IfritCertPath string
 }
 
 type DirectoryServer struct {
@@ -89,7 +86,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	}
 
 	if config.CryptoUnitWorkingDirectory == "" {
-		config.CryptoUnitWorkingDirectory = "./secrets"
+		config.CryptoUnitWorkingDirectory = "./crypto/lohpi"
 	}
 
 	if config.IfritTCPPort == 0 {
@@ -100,17 +97,16 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.IfritUDPPort = 6000
 	}
 
-	if config.IfritCertPath == "" {
-		return nil, fmt.Errorf("Certificate path is empty")
-	}
-
 	ds := &DirectoryServer{
 		conf: &directoryserver.Config{
 			Name:                config.Name,
+			Hostname:			 config.HostName,
 			HTTPPort:            config.HTTPPort,
 			GRPCPort:            config.GRPCPort,
 			CaAddress:           config.CaAddress,
 			SQLConnectionString: config.SQLConnectionString,
+			IfritTCPPort: 		 config.IfritTCPPort,
+			IfritUDPPort: 		 config.IfritUDPPort,
 		},
 	}
 
@@ -152,7 +148,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		SQLConnectionString: config.SQLConnectionString,
 		RedisClientOptions: &redis.Options{
 			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.0.1", 6302),
+			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
 			Password: "",
 			DB: 0,
 		},
