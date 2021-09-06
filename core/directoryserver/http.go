@@ -9,18 +9,18 @@ import (
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/util"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/gorilla/mux"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jws"
 	log "github.com/sirupsen/logrus"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
-	"sort"
-	pb "github.com/arcsecc/lohpi/protobuf"
-	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"time"
 )
 
@@ -43,7 +43,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/verify/{id:.*}", d.getDatasetPolicyVerification).Methods("GET")
 	dRouter.HandleFunc("/set_project_description/{id:.*}", d.setProjectDescription).Methods("POST")
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
-
+	dRouter.HandleFunc("/is_available/{id:.*}", d.datasetIsAvailable).Methods("GET")
 	dRouter.HandleFunc("/test/{id:.*}", d.testGetDataset).Methods("GET")
 
 	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
@@ -53,13 +53,18 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	//dRouter.Use(d.middlewareValidateTokenSignature)
 	//dRouter.Use(d.middlewareValidateTokenClaims)
 
+	serverConfig, err := comm.ServerConfig(d.cm.Certificate(), d.cm.CaCertificate(), d.cm.PrivateKey())
+	if err != nil {
+		return err
+	}
+
 	d.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      r,
 		WriteTimeout: time.Hour * 1,
 		//ReadTimeout:  time.Second * 30,
 		//IdleTimeout:  time.Second * 60,
-		TLSConfig: comm.ServerConfig(d.cm.Certificate(), d.cm.CaCertificate(), d.cm.PrivateKey()),
+		TLSConfig: serverConfig,
 	}
 
 	if err := d.setPublicKeyCache(); err != nil {
@@ -72,9 +77,7 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 
 func (d *DirectoryServerCore) testGetDataset(w http.ResponseWriter, r *http.Request) {
 	datasetId := mux.Vars(r)["id"]
-	node := d.dsLookupService.DatasetNode(datasetId)
-	log.Printf("node: %v\n", node)
-	fmt.Fprintf(w, "node: %v\n", node)
+	fmt.Fprintf(w, "%v\n", d.memManager.RemoveNetworkNode(datasetId))
 }
 
 func (d *DirectoryServerCore) getNetworkNodes(w http.ResponseWriter, r *http.Request) {
@@ -101,12 +104,13 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 	}{}
 
 	if err := util.DecodeJSONBody(w, r, "application/json", &clientReq); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	dataset := mux.Vars(r)["id"]
 
-	// Check if dataset is known to network
 	if !d.dsLookupService.DatasetNodeExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
 		log.Infoln(err.Error())
@@ -116,7 +120,9 @@ func (d *DirectoryServerCore) setProjectDescription(w http.ResponseWriter, r *ht
 
 	// Project description as argument to updatePD, string?
 	if err := d.updateProjectDescription(dataset, clientReq.ProjectDescription); err != nil {
-		panic(err)
+		log.Errorln(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 }
 
@@ -294,7 +300,7 @@ func (d *DirectoryServerCore) getNetworkDatasetIdentifiers(w http.ResponseWriter
 
 	ids := d.dsLookupService.DatasetIdentifiers()
 	sort.Strings(ids)
-	
+
 	// Destination struct
 	resp := struct {
 		Identifiers []string
@@ -343,7 +349,7 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 		return
 	}
 
-	node := d.dsLookupService.DatasetNode(dataset)
+	node := d.dsLookupService.DatasetLookupNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
 		log.Infoln(err.Error())
@@ -386,8 +392,7 @@ func (d *DirectoryServerCore) getDatasetMetadata(w http.ResponseWriter, r *http.
 	}
 }
 
-// Handler used to fetch an entire dataset. Writes a zip file to the client
-func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request) {
+func (d *DirectoryServerCore) datasetIsAvailable(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// Reject request at directoryu server if token is invalid
@@ -398,7 +403,6 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get dataset identifier
 	dataset := mux.Vars(r)["id"]
 
 	// Get the node that stores it
@@ -409,28 +413,21 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	node := d.dsLookupService.DatasetNode(dataset)
+	node := d.dsLookupService.DatasetLookupNode(dataset)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
+		panic(err)
 		log.Infoln(err.Error())
 		http.Error(w, http.StatusText(http.StatusGone)+": "+err.Error(), http.StatusGone)
 		return
 	}
 
-	pbClient, err := jwtTokenToPbClient(string(token))
-	if err != nil {
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-		return	
-	}
-
-	// Prepare the request. Beginning of pipeline
 	req := &http.Request{
 		Method: "GET",
 		URL: &url.URL{
 			Scheme: "http", //https
 			Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
-			Path:   "/dataset/data/" + dataset,
+			Path:   "/dataset/is_available/" + dataset,
 		},
 		Header: http.Header{},
 	}
@@ -440,8 +437,8 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -455,19 +452,126 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 
 	reader := bufio.NewReader(resp.Body)
 	if err := util.StreamToResponseWriter(reader, w, 1000*1024); err != nil {
-		log.Errorln(err.Error())
+		panic(err)
+		log.Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// Handler used to fetch an entire dataset. TODO: fix HTTP header information
+func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	// Get dataset identifier
+	dataset := mux.Vars(r)["id"]
+
+	// Get the node that stores it
+	if !d.dsLookupService.DatasetNodeExists(dataset) {
+		err := fmt.Errorf("Dataset '%s' is not stored in the network", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		return
+	}
+
+	node := d.dsLookupService.DatasetLookupNode(dataset)
+	if node == nil {
+		err := fmt.Errorf("The network node that stores the dataset '%s' is not available", dataset)
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusGone)+": "+err.Error(), http.StatusGone)
+		return
+	}
+
+	pbClient, err := exstractPbClient(r)
+	if err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Prepare the request. Beginning of pipeline
+	datasetReq := &http.Request{
+		Method: "GET",
+		URL: &url.URL{
+			Scheme: "http", //https
+			Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
+			Path:   "/dataset/data/" + dataset,
+		},
+		Header: http.Header{},
+	}
+
+	// Shallow copy headers
+	datasetReq.Header = r.Header
+
+	client := &http.Client{}
+	resp, err := client.Do(datasetReq)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Errorln(resp.Status + ": " + resp.Status)
+		http.Error(w, http.StatusText(resp.StatusCode)+": "+resp.Status, resp.StatusCode)
+		return
+	}
+
+	// Fetch the current policy version from the node
+	policyVersionReq := &http.Request{
+		Method: "GET",
+		URL: &url.URL{
+			Scheme: "http", //https
+			Host:   node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())),
+			Path:   "/policy/version/" + dataset,
+		},
+		Header: http.Header{},
+	}
+
+	client = &http.Client{}
+	resp, err = client.Do(policyVersionReq)
+	if err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Errorln(resp.Status + ": " + resp.Status)
+		http.Error(w, http.StatusText(resp.StatusCode)+": "+resp.Status, resp.StatusCode)
+		return
+	}
+
+	policyVersionResponse := struct {
+		PolicyVersion uint64 `json:"policy_version"`
+	}{}
+
+	if err := json.NewDecoder(resp.Body).Decode(&policyVersionResponse); err != nil {
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	dsCheckout := &pb.DatasetCheckout{
 		DatasetIdentifier: dataset,
-    	DateCheckout: pbtime.Now(),
-    	Client: pbClient,
+		DateCheckout:      pbtime.Now(),
+		Client:            pbClient,
+		PolicyVersion:     policyVersionResponse.PolicyVersion,
 	}
 
 	if err := d.checkoutManager.CheckoutDataset(dataset, dsCheckout); err != nil {
-		log.Errorln(err.Error())
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	if err := util.StreamToResponseWriter(reader, w, 1000*1024); err != nil {
+		log.Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -515,4 +619,57 @@ func setHeaders(src, dest map[string][]string) {
 	for k, v := range src {
 		dest[k] = v
 	}
+}
+
+func exstractPbClient(r *http.Request) (*pb.Client, error) {
+	token, err := getBearerToken(r)
+	if err != nil {
+		return nil, err
+	}
+
+	msg, err := jws.ParseString(string(token))
+	if err != nil {
+		return nil, err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return nil, errors.New("Payload was nil")
+	}
+
+	c := struct {
+		Name         string `json:"name"`
+		Oid          string `json:"oid"`
+		EmailAddress string `json:"email"`
+	}{}
+
+	if err := json.Unmarshal(s, &c); err != nil {
+		return nil, err
+	}
+
+	// Fetch the HTTP headers required to build a protobuf client
+	if len(r.Header.Values("dns_name")) < 1 {
+		return nil, errors.New("dns_name header field was not supplied")
+	}
+
+	var dnsName string = r.Header.Values("dns_name")[0]
+	var macAddress string
+	var ipAddress string
+
+	if len(r.Header.Values("mac_address")) > 0 {
+		macAddress = r.Header.Values("mac_address")[0]
+	}
+
+	if len(r.Header.Values("ip_address")) > 0 {
+		ipAddress = r.Header.Values("ip_address")[0]
+	}
+
+	return &pb.Client{
+		Name:         c.Name,
+		ID:           c.Oid,
+		EmailAddress: c.EmailAddress,
+		MacAddress:   macAddress,
+		IpAddress:    ipAddress,
+		DNSName:      dnsName,
+	}, nil
 }

@@ -3,9 +3,11 @@ package statesync
 import (
 	"errors"
 _	"time"
+	log "github.com/sirupsen/logrus"
 	"github.com/golang/protobuf/proto"
 	"context"
 	"github.com/joonnna/ifrit"
+	"github.com/joonnna/ifrit/core"
 	"sync"
 	"github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -13,7 +15,7 @@ _	"time"
 
 var (
 	errNoDatasets = errors.New("Dataset map cannot be nil")
-	errNoTargetAddr = errors.New("Target address cannot be empty")
+	errNoRemoteAddr = errors.New("Address of remote server cannot be empty")
 	errNoInputMap = errors.New("No input map")
 	errNoIfritClient = errors.New("Ifrit client cannot be nil")
 	errSyncInterval = errors.New("Sync interval must be positive")
@@ -29,13 +31,11 @@ const (
 	CheckoutDatasetPolicies
 )
 
-// TODO: consider separating syncing-related types into another pb package 
-
 // Describes the synchronization of the types defined in this package.
 // It uses protobuf types and syncs
 type StateSyncUnit struct {
-	datasetIsSyncing bool
-	datasetIsSyncingMutex sync.RWMutex
+	datasetIdentifiersAreSyncing bool
+	datasetIdentifiersAreSyncingMutex sync.RWMutex
 	
 	ifritClient *ifrit.Client
 	ifritClientMutex sync.RWMutex
@@ -48,8 +48,46 @@ func NewStateSyncUnit() (*StateSyncUnit, error) {
 	return &StateSyncUnit{}, nil
 }
 
-func (d *StateSyncUnit) SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error) {
+// 
+func (d *StateSyncUnit) SynchronizeDatasetIdentifiers(ctx context.Context, identifiers []string, remoteAddr string) error {
 	if d.getIfritClient() == nil {
+		return errNoIfritClient
+	}
+
+	if remoteAddr == "" {
+		return errNoRemoteAddr
+	}
+
+	d.setDatasetIdentifiersAreSyncing(true)
+	defer d.setDatasetIdentifiersAreSyncing(false)
+
+	msg := &pb.Message{
+		Type: message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS,
+		StringSlice: identifiers,
+	}
+
+	ch, err := d.sendToRemote(msg, remoteAddr)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case resp := <-ch:
+		// verify signature of message after unmarshalling! See the node package. maybe interface them as well?
+		respMsg := &pb.Message{}
+		if resp != nil {
+			err := proto.Unmarshal(resp.Data, respMsg)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (d *StateSyncUnit) SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error) {
+	/*if d.getIfritClient() == nil {
 		return nil, errNoIfritClient
 	}
 
@@ -65,7 +103,7 @@ func (d *StateSyncUnit) SynchronizeDatasets(ctx context.Context, datasets map[st
 	}
 
 	if targetAddr == "" {
-		return nil, errNoTargetAddr
+		return nil, errNoRemoteAddr
 	}
 
 	msg := &pb.Message{
@@ -84,13 +122,15 @@ func (d *StateSyncUnit) SynchronizeDatasets(ctx context.Context, datasets map[st
 	case resp := <-ch:
 		// verify signature of message after unmarshalling! See the node package. maybe interface them as well?
 		respMsg := &pb.Message{}
-		err := proto.Unmarshal(resp, respMsg)
-		if err != nil {
-			return nil, err
+		if resp != nil {
+			err := proto.Unmarshal(resp.Data, respMsg)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		return respMsg.GetDatasetCollectionSummary().GetDatasetMap(), nil
-	}
+	}*/
 
 	return nil, errors.New("Other error")
 }
@@ -99,12 +139,6 @@ func (d *StateSyncUnit) RegisterIfritClient(c *ifrit.Client) {
 	d.ifritClientMutex.Lock()
 	defer d.ifritClientMutex.Unlock()
 	d.ifritClient = c
-}
-
-func (d *StateSyncUnit) getDatasetIsSyncing() bool {
-	d.datasetIsSyncingMutex.RLock()
-	defer d.datasetIsSyncingMutex.RUnlock()
-	return d.datasetIsSyncing
 }
 
 func (d *StateSyncUnit) SyncState() string {
@@ -119,10 +153,10 @@ func (d *StateSyncUnit) setSyncState(s string) {
 	d.syncState = s
 }
 
-func (d *StateSyncUnit) setDatasetIsSyncing(syncing bool) {
-	d.datasetIsSyncingMutex.Lock()
-	defer d.datasetIsSyncingMutex.Unlock()	
-	d.datasetIsSyncing = syncing
+func (d *StateSyncUnit) setDatasetIdentifiersAreSyncing(syncing bool) {
+	d.datasetIdentifiersAreSyncingMutex.Lock()
+	defer d.datasetIdentifiersAreSyncingMutex.Unlock()	
+	d.datasetIdentifiersAreSyncing = syncing
 }
 
 func (d *StateSyncUnit) getIfritClient() *ifrit.Client {
@@ -131,7 +165,7 @@ func (d *StateSyncUnit) getIfritClient() *ifrit.Client {
 	return d.ifritClient
 }
 
-func (d *StateSyncUnit) sendToRemote(msg *pb.Message, remoteAddr string) (chan []byte, error) {
+func (d *StateSyncUnit) sendToRemote(msg *pb.Message, remoteAddr string) (chan *core.Message, error) {
 	if d.getIfritClient() == nil {
 		return nil, errNoIfritClient
 	}
@@ -156,6 +190,8 @@ func (d *StateSyncUnit) sendToRemote(msg *pb.Message, remoteAddr string) (chan [
 	if err != nil {
 		return nil, err
 	}	
+
+	log.Println("Lenght of data:", len(data))
 
 	ch := d.getIfritClient().SendTo(remoteAddr, data)
 

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	log "github.com/sirupsen/logrus"
 )
 
 type MalformedParserReponse struct {
@@ -108,7 +107,6 @@ func StreamToResponseWriter(r *bufio.Reader, w http.ResponseWriter, bufSize int)
 
         if err != nil {
             if err == io.EOF {
-                log.Infoln(err.Error())
 				return nil
             } else {
 				return err

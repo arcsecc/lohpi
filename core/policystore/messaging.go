@@ -20,6 +20,7 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, err
 	if ds == nil {
 		err := fmt.Errorf("Dataset entry is nil")
 		log.Error(err.Error())
+		panic(err)
 		return nil, err
 	}
 
@@ -33,6 +34,7 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, err
 
 	resp.Policy = policy
 	if err := ps.pbAddMessageSignature(resp); err != nil {
+		panic(err)
 		return nil, err
 	}
 

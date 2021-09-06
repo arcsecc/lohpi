@@ -3,45 +3,47 @@ package main
 import (
 	"flag"
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
 	"github.com/arcsecc/lohpi"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 var config = struct {
-	HTTPPort             int    `default:"8080"`
-	GRPCPort             int    `default:"8081"`
-	LohpiCaAddr          string `default:"127.0.1.1:8301"`
-	AzureKeyVaultName    string `required:"true"`
-	AzureKeyVaultSecret  string `required:"true"`
-	AzureClientSecret    string `required:"true"`
-	AzureClientID        string `required:"true"`
-	AzureKeyVaultBaseURL string `required:"true"`
-	AzureTenantID        string `required:"true"`
-	LohpiCryptoDirectory string `required:"true"`
-	IfritCryptoDirectory string `required:"true"`
-	Hostname 			 string `required:"true"`
-	IfritTCPPort		 int 	`required:"true"`
-	IfritUDPPort		 int 	`required:"true"`
+	HTTPPort                        int    `default:"8080"`
+	GRPCPort                        int    `default:"8081"`
+	LohpiCaAddr                     string `default:"127.0.1.1:8301"`
+	AzureKeyVaultName               string `required:"true"`
+	AzureKeyVaultSecret             string `required:"true"`
+	AzureClientSecret               string `required:"true"`
+	AzureClientID                   string `required:"true"`
+	AzureKeyVaultBaseURL            string `required:"true"`
+	AzureTenantID                   string `required:"true"`
+	LohpiCryptoUnitWorkingDirectory string `required:"true"`
+	IfritCryptoUnitWorkingDirectory string `required:"true"`
+	Hostname                        string `required:"true"`
+	IfritTCPPort                    int    `required:"true"`
+	IfritUDPPort                    int    `required:"true"`
 }{}
 
 func main() {
 	var configFile string
 	var createNew bool
-	
+
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&configFile, "c", "", "Directory server's configuration file.")
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi directory server instance.")
 	args.Parse(os.Args[1:])
 
+	//log.SetLevel(log.ErrorLevel)
+
 	if configFile == "" {
 		log.Errorln("Configuration file must be provided. Exiting.")
 		os.Exit(2)
 	}
-
+	
 	configor.New(&configor.Config{
 		Debug:                true,
 		ENVPrefix:            "DIRECTORYSERVER",
@@ -78,16 +80,16 @@ func getDirectoryServerConfiguration() (*lohpi.DirectoryServerConfig, error) {
 	}
 
 	return &lohpi.DirectoryServerConfig{
-		CaAddress:           	config.LohpiCaAddr,
-		Name:                	"Lohpi directory server",
-		SQLConnectionString: 	constring,
-		HTTPPort:            	config.HTTPPort,
-		GRPCPort:            	config.GRPCPort,
-		HostName: 				config.Hostname,
-		CryptoUnitWorkingDirectory: config.LohpiCryptoDirectory,
-		//IfritCertPath: config.IfritCryptoDirectory,
-		IfritTCPPort: config.IfritTCPPort,
-		IfritUDPPort: config.IfritUDPPort,
+		CaAddress:                       config.LohpiCaAddr,
+		Name:                            "Lohpi directory server",
+		SQLConnectionString:             constring,
+		HTTPPort:                        config.HTTPPort,
+		GRPCPort:                        config.GRPCPort,
+		HostName:                        config.Hostname,
+		LohpiCryptoUnitWorkingDirectory: config.LohpiCryptoUnitWorkingDirectory,
+		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
+		IfritTCPPort:                    config.IfritTCPPort,
+		IfritUDPPort:                    config.IfritUDPPort,
 	}, nil
 }
 

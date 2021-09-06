@@ -1,156 +1,74 @@
 package datasetmanager
 
 import (
-	"database/sql"
-	"errors"
+	"context"
+	"github.com/jackc/pgx/v4"
 	"fmt"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	_"regexp"
 	log "github.com/sirupsen/logrus"
-	_ "github.com/lib/pq"
 	//pbtime "google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (d *DatasetLookupService) createSchema(connectionString string) error {
-	if connectionString == "" {
-		return errNoConnectionString
-	}
-
-	q := `CREATE SCHEMA IF NOT EXISTS ` + d.datasetLookupSchema + `;`
-	db, err := sql.Open("postgres", connectionString)
-	if err != nil {
-		return err
-	}
-
-	if err := db.Ping(); err != nil {
-		return err
-	}
-
-	_, err = db.Exec(q)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (d *DatasetLookupService) createDatasetLookupTable(connectionString string) error {
-	if connectionString == "" {
-		return errNoConnectionString
-	}
-
-	q := `CREATE TABLE IF NOT EXISTS ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` (
-		id SERIAL PRIMARY KEY,
-		dataset_id VARCHAR NOT NULL UNIQUE,
-		node_id VARCHAR NOT NULL,
-		ip_address VARCHAR NOT NULL,
-		public_id BYTEA NOT NULL,
-		httpsAddress VARCHAR NOT NULL,
-		port INT NOT NULL,
-		boottime VARCHAR NOT NULL
-	);`	
-
-	db, err := sql.Open("postgres", connectionString)
-	if err != nil {
-		return err
-	}
-
-	if err := db.Ping(); err != nil {
-		return err
-	}
-
-	_, err = db.Exec(q)
-	if err != nil {
-		return err
-	}
-
-	d.datasetLookupDB = db
-	return nil
-}
-
-func (d *DatasetLookupService) dbInsertDatasetNode(datasetId string, node *pb.Node) error {
-	if node == nil {
-		return fmt.Errorf("Node is nil")
-	}
-
-	// TODO: update all fields
+func (d *DatasetLookupService) dbInsertDatasetLookupEntry(datasetId string, nodeName string) error {
 	q := `INSERT INTO ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `
-	(dataset_id, node_id, ip_address, public_id, httpsAddress, port, boottime) VALUES ($1, $2, $3, $4, $5, $6, $7)
-	ON CONFLICT (dataset_id) DO UPDATE
+	(dataset_id, node_name) VALUES ($1, $2)
+	ON CONFLICT (dataset_id) DO UPDATE	
 	SET 
-		node_id = $2,
-		ip_address = $3,
-		public_id = $4,
-		httpsAddress = $5,
-		port = $6,
-		boottime = $7
+		dataset_id = $1,
+		node_name = $2
 	WHERE ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `.dataset_id = $1;`
 
-	_, err := d.datasetLookupDB.Exec(q, 
-		datasetId, 
-		node.GetName(),
-		node.GetIfritAddress(), 
-		node.GetId(),
-		node.GetHttpsAddress(), 
-		node.GetPort(), 
-		node.GetBootTime().String())
-	if err != nil {
-		panic(err)
-		return err // UTF-8 error here!
+	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+
+	if _, err := d.pool.Exec(context.Background(), q, datasetId, nodeName); err != nil {
+		log.WithFields(dbLogFields).Error(err.Error())
+		return err
 	}
-	
 	return nil
 }
 
 func (d *DatasetLookupService) dbDatasetNodeExists(datasetId string) bool {
-	if datasetId == "" {
-		log.Errorln("Dataset id must not be empty")
-		return false
-	}
-
 	var exists bool
-	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `
-			WHERE dataset_id = '` + datasetId + `');`
-	err := d.datasetLookupDB.QueryRow(q).Scan(&exists)
+	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE dataset_id = $1);`
+
+	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+
+	err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&exists)
 	if err != nil {
-		panic(err)
-		log.Errorln(err.Error())
+		log.WithFields(dbLogFields).Error(err.Error())
+		return false
 	}
 	return exists
 }
 
 func (d *DatasetLookupService) dbRemoveDatasetNode(datasetId string) error {
-	if datasetId == ""{
-		return fmt.Errorf("Dataset id is empty")
-	}
-
 	if !d.dbDatasetNodeExists(datasetId) {
-		return fmt.Errorf("SQL: No such dataset '%s' was deleted", datasetId)
+		err := fmt.Errorf("No such dataset '%s' exists in the database", datasetId)
+		log.WithFields(dbLogFields).Error(err.Error())
+		return err
 	}
 
-	q := `DELETE FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE
-		dataset_id='` + datasetId + `';`
+	q := `DELETE FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE dataset_id = $1;`
+	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
 
-	r, err := d.datasetLookupDB.Exec(q)
+	cmdTag, err := d.pool.Exec(context.Background(), q, datasetId)
 	if err != nil {
-		panic(err)
+		log.WithFields(dbLogFields).Error(err.Error())
 		return err
 	}
 	
-	n, err := r.RowsAffected()
-	if err != nil {
-		return err
-	}
-
-	if n == 0 {
-		return errors.New("Zero rows were affected after deletion")
+	if cmdTag.RowsAffected() == 0 {
+		log.Infoln("Zero rows were affected after deletion of dataset with identifier", datasetId)
 	}
 
 	return nil		
 }
 
+// TODO finish me
 func (d *DatasetLookupService) dbGetAllDatasetNodes() (map[string]*pb.Node, error) {
-	rows, err := d.datasetLookupDB.Query(`SELECT * FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `;`)
+	panic("dbGetAllDatasetNodes not implemented")
+	rows, err := d.pool.Query(context.Background(), `SELECT * FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `;`)
     if err != nil {
         return nil, err
     }
@@ -159,18 +77,19 @@ func (d *DatasetLookupService) dbGetAllDatasetNodes() (map[string]*pb.Node, erro
 	nodes := make(map[string]*pb.Node)
 
     for rows.Next() {
-        var id, datasetId, nodeId, ipAddress, httpsAddress, boottime string
+		var id int
+        var datasetId, nodeId, ipAddress, httpsAddress, boottime string
 		var port int32
 		var publicId []byte
         if err := rows.Scan(&id, &datasetId, &nodeId, &ipAddress, &publicId, &httpsAddress, &port, &boottime); err != nil {
-            log.Errorln(err.Error())
-			panic(err)
+			log.WithFields(dbLogFields).Error()
 			continue
         }
 
 		bTime, err := toTimestamppb(boottime)
 		if err != nil {
-			return nil, err
+			log.WithFields(dbLogFields).Error(err.Error())
+			continue
 		}
 
 		node := &pb.Node{
@@ -188,52 +107,65 @@ func (d *DatasetLookupService) dbGetAllDatasetNodes() (map[string]*pb.Node, erro
 	return nodes, nil
 }
 
-func (d *DatasetLookupService) dbSelectDatasetNode(datasetId string) *pb.Node {
-	if datasetId == "" {
-		err := errors.New("Dataset identifier cannot be empty")
-		log.Error(err.Error())
-		return nil
-	}
+func (d *DatasetLookupService) dbSelectDatasetNode(datasetId string) (*pb.Node, error) {
+	q := `SELECT ` + 
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.node_name, ` +
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.ip_address, ` + 
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.public_id, ` + 
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.https_address, `  +
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.port, ` +
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.boottime 
+		FROM ` + d.datasetLookupSchema + `.` + d.storageNodeTable + ` INNER JOIN ` +
+		d.datasetLookupSchema + `.` + d.datasetLookupTable + ` ON (`  +
+		d.datasetLookupSchema + `.` + d.datasetLookupTable + `.node_name = ` +
+		d.datasetLookupSchema + `.` + d.storageNodeTable + `.node_name AND ` + 
+		d.datasetLookupSchema + `.` + d.datasetLookupTable + `.dataset_id = $1);`
 
-	q := `SELECT dataset_id, node_id, ip_address, public_id, httpsAddress, port, boottime FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE dataset_id = $1 ;`
-	
-	var dataset, nodeId, ipAddress, httpsAddress, boottime string
+	log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
+
+	var nodeName, ipAddress, httpsAddress, boottime string
 	var port int32
 	var publicId []byte
 
-	err := d.datasetLookupDB.QueryRow(q, datasetId).Scan(&dataset, &nodeId, &ipAddress, &publicId, &httpsAddress, &port, &boottime)
+	err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&nodeName, &ipAddress, &publicId, &httpsAddress, &port, &boottime)
 	switch err {
-	case sql.ErrNoRows:
-		log.Infoln("No rows were returned")
-		return nil
-  	case nil:
-  	default:
-		panic(err)
-
-		log.Error(err.Error())
-		return nil
-  	}
-	
-	bTime, err := toTimestamppb(boottime)
-	if err != nil {
-		log.Errorln(err.Error())
-		return nil
+	case pgx.ErrNoRows:
+		log.WithFields(dbLogFields).
+			WithField("database query", fmt.Sprintf("could not find '%s' among storage nodes", datasetId)).
+			Error(err.Error())
+		return nil, nil
+	case nil:
+	default:
+		log.WithFields(dbLogFields).Error(err.Error())
+		return nil, err
 	}
 
+	bTime, err := toTimestamppb(boottime)
+	if err != nil {
+		log.WithFields(dbLogFields).Error(err.Error())
+		return nil, err
+	}
+
+	log.WithFields(dbLogFields).Infof("Successfully selected dataset node with dataset identifier '%s'\n", datasetId)
+
 	return &pb.Node{
-		Name: nodeId,
+		Name: nodeName,
 		IfritAddress: ipAddress,
 		Id: publicId,
 		HttpsAddress: httpsAddress,
 		Port: port,
 		BootTime: bTime,
-	}
+	}, nil
 }
 
+// TODO add ranges
 func (d *DatasetLookupService) dbSelectDatasetIdentifiers() []string {
-	rows, err := d.datasetLookupDB.Query(`SELECT dataset_id FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `;`)
+	q := `SELECT dataset_id FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `;`
+	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+
+	rows, err := d.pool.Query(context.Background(), q)
     if err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(dbLogFields).Error(err.Error())
         return nil
     }
     defer rows.Close()
@@ -243,14 +175,14 @@ func (d *DatasetLookupService) dbSelectDatasetIdentifiers() []string {
     for rows.Next() {
         var datasetId string
         if err := rows.Scan(&datasetId); err != nil {
-            log.Errorln(err.Error())
-			panic(err)
-
+			log.WithFields(dbLogFields).Error(err.Error())
 			continue
         }
 
 		ids = append(ids, datasetId)
     } 
+
+	log.WithFields(dbLogFields).Info("Successfully selected all dataset identifiers")
 
 	return ids
 }

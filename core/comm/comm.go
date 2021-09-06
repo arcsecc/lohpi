@@ -8,11 +8,24 @@ import (
 )
 
 var (
-	errNilCert = errors.New("Given certificate was nil")
-	errNilPriv = errors.New("Given private key was nil")
+	errNilCaCert = errors.New("Given CA certificate was nil")
+	errNilCert   = errors.New("Given certificate was nil")
+	errNilPriv   = errors.New("Given private key was nil")
 )
 
-func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Config {
+func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) (*tls.Config, error) {
+	if c == nil {
+		return nil, errNilCert
+	}
+
+	if caCert == nil {
+		return nil, errNilCaCert
+	}
+
+	if key == nil {
+		return nil, errNilPriv
+	}
+
 	tlsCert := tls.Certificate{
 		Certificate: [][]byte{c.Raw},
 		PrivateKey:  key,
@@ -31,7 +44,7 @@ func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Confi
 		conf.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 
-	return conf
+	return conf, nil
 }
 
 func ClientConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Config {
@@ -47,7 +60,7 @@ func ClientConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Confi
 	if caCert != nil {
 		pool := x509.NewCertPool()
 		pool.AddCert(caCert)
-		
+
 		conf.RootCAs = pool
 	} else {
 		panic(errors.New("caCert is nil"))

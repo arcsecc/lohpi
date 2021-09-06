@@ -1,11 +1,14 @@
 package main
 
 import (
+	"time"
 	"flag"
 	"fmt"
 	"github.com/arcsecc/lohpi"
+_	"github.com/go-redis/redis/v8"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,7 +16,7 @@ import (
 
 var config = struct {
 	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
-	MuxAddr                 string `default:"127.0.1.1:8081"`
+	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
 	LohpiCaAddr             string `default:"127.0.1.1:8301"`
 	AzureKeyVaultName       string `required:"true"`
 	AzureKeyVaultSecret     string `required:"true"`
@@ -23,20 +26,35 @@ var config = struct {
 	AzureTenantID           string `required:"true"`
 	AzureStorageAccountName string `required:"true"`
 	AzureStorageAccountKey  string `required:"true"`
+	IfritTCPPort            int    `required:"true"`
+	IfritUDPPort            int    `required:"true"`
+	HTTPPort                int    `required:"true"`
 }{}
 
-/* Dummy program that spawns n nodes */
+type node struct {
+	lohpiNode *lohpi.Node
+	handler   func(id string, w http.ResponseWriter, r *http.Request)
+}
+
+type App struct {
+	nodes []*node
+}
+
 func main() {
 	var configFile string
 	var nNodes int
+	var nSets int
 
 	// Logfile and name flags
 	args := flag.NewFlagSet("args", flag.ExitOnError)
 	args.StringVar(&configFile, "c", "", `Configuration file for the node.`)
-	args.IntVar(&nNodes, "n", 1, "Number of nodes to boot.")
+	args.IntVar(&nNodes, "nodes", 0, "Number of nodes to boot.")
+	args.IntVar(&nSets, "sets", 0, "Number of sets per node.")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: false, ENVPrefix: "PS_NODE"}).Load(&config, configFile)
+	configor.New(&configor.Config{
+		Debug:     true,
+		ENVPrefix: "PS_NODE"}).Load(&config, configFile)
 
 	if configFile == "" {
 		log.Errorln("Configuration file must not be empty. Exiting.")
@@ -48,26 +66,15 @@ func main() {
 		os.Exit(2)
 	}
 
-	nodes, err := newNodes(nNodes)
+	if nSets < 1 {
+		log.Errorln("Number of setse per node must be greater than zero. Exiting.")
+		os.Exit(2)
+	}
+
+	app, err := NewApp(nNodes, nSets)
 	if err != nil {
 		log.Errorln(err.Error())
 		os.Exit(1)
-	}
-
-	// Join the network and index the dataset
-	for _, node := range nodes {
-		if err := node.JoinNetwork(); err != nil {
-			log.Errorln(err.Error())
-			os.Exit(1)
-		}
-
-		sets := datasets(node.Name(), 10)
-		for _, s := range sets {
-			if err := node.IndexDataset(s); err != nil {
-				log.Errorln(err.Error())
-				os.Exit(1)
-			}
-		}
 	}
 
 	// Wait for SIGTERM signal from the environment
@@ -75,57 +82,110 @@ func main() {
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
 	<-channel
 
-	// sync here
-	for _, node := range nodes {
-		go node.Shutdown()
-	}
-
+	app.Stop()
 	os.Exit(0)
 }
 
-func newNodes(n int) ([]*lohpi.Node, error) {
-	nodes := make([]*lohpi.Node, 0)
+func NewApp(nNodes, nSets int) (*App, error) {
+	nodes := make([]*node, 0)
+	ifritTCTPort := config.IfritTCPPort
+	ifritUDPPort := config.IfritUDPPort
+	httpPort := config.HTTPPort
+	redisPport := 6390
 
-	for i := 0; i < n; i++ {
-		name := fmt.Sprintf("node_%d", i + 1)
-		opts, err := getNodeConfiguration(name)
-		if err != nil {
-			return nil, err
-		}
+	log.Printf("Booting %s nodes on local machine...\n", nNodes)
+	for i := 0; i < nNodes; i++ {
+		func () {
+			name := fmt.Sprintf("node%d", i+1)
+			defer func() { ifritTCTPort += 100 }()
+			defer func() { ifritUDPPort += 100}()
+			defer func() { httpPort += 1}()
 
-		node, err := lohpi.NewNode(opts...)
-		if err != nil {
-			return nil, err
-		}
+			c, err := getNodeConfiguration(name, httpPort, ifritTCTPort, ifritUDPPort, redisPport)
+			if err != nil {
+				log.Errorln(err.Error())
+				return
+			}
+			
+			lohpiNode, err := lohpi.NewNode(c, true)
+			if err != nil {
+				log.Errorln(err.Error())
+				return
+			}
 
-		nodes = append(nodes, node)
+			lohpiNode.RegisterDatasetHandler(handler)
+
+			log.Println("Current node name:", name)
+
+			go lohpiNode.Start()
+
+			if err := lohpiNode.HandshakeNetwork(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
+				log.Errorln(err.Error())
+			}
+
+			// Create datasets
+			sets := datasets(name, nSets)
+			for _, s := range sets {
+				log.Println("Dataset id:", s)
+				if err := lohpiNode.IndexDataset(s, &lohpi.DatasetIndexingOptions{AllowMultipleCheckouts: true}); err != nil {
+					log.Errorln(err.Error())
+					return
+				}
+			}
+
+			node := &node{
+				lohpiNode: lohpiNode,
+				handler:   handler,
+			}
+
+			nodes = append(nodes, node)
+			time.Sleep(4 * time.Second)
+			redisPport += 1
+		}()
 	}
 
-	// Set the http handlers
-
-	return nodes, nil
+	return &App{
+		nodes: nodes,
+	}, nil
 }
 
-func startNode(node *lohpi.Node) error {
-	return node.JoinNetwork()
+func (a *App) Stop() {
+
 }
 
-func getNodeConfiguration(name string) ([]lohpi.NodeOption, error) {
-	var opts []lohpi.NodeOption
+// Handler invoked by each node
+func handler(id string, w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
 
-	dbConn, err := getDatabaseConnectionString()
+	log.Println("Invoked handler! Dataset:", id)
+	fmt.Fprintf(w, "Invoked handler! Dataset:", id)
+}
+
+func getNodeConfiguration(name string, httpPort int, ifritTCPPort int, ifritUDPPort int, redisPort int) (*lohpi.NodeConfig, error) {
+	dbConnString, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
 
-	opts = []lohpi.NodeOption{
-		lohpi.NodeWithPostgresSQLConnectionString(dbConn),
-		lohpi.NodeWithMultipleCheckouts(true),
-		lohpi.NodeWithPolicyObserverWorkingDirectory(name),
-		lohpi.NodeWithName(name))
+	c := &lohpi.NodeConfig{
+		CaAddress:                      config.LohpiCaAddr,
+		Name:                           name,
+		SQLConnectionString:            dbConnString,
+		PolicyObserverWorkingDirectory: ".",
+		/*RedisClientOptions: &redis.Options{
+			Network:  "tcp",
+			Addr:     fmt.Sprintf("127.0.1.1:%d", redisPort),
+			Password: "",
+			DB:       0,
+		},*/
+		IfritTCPPort: ifritTCPPort,
+		IfritUDPPort: ifritUDPPort,
+		Port:         httpPort,
 	}
+	
+	log.Println("C:", c)
 
-	return opts, nil
+	return c, nil
 }
 
 func getDatabaseConnectionString() (string, error) {
@@ -133,7 +193,6 @@ func getDatabaseConnectionString() (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	resp, err := kvClient.GetSecret(config.AzureKeyVaultBaseURL, config.AzureKeyVaultSecret)
 	if err != nil {
 		return "", err
@@ -145,7 +204,7 @@ func getDatabaseConnectionString() (string, error) {
 func datasets(nodename string, nDatasets int) []string {
 	sets := make([]string, 0)
 	for i := 0; i < nDatasets; i++ {
-		s := fmt.Sprintf("%s.dataset_%d", nodename, i+1)
+		s := fmt.Sprintf("%sdataset_%d", nodename, i+1)
 		sets = append(sets, s)
 	}
 	return sets

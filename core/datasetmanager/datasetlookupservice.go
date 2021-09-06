@@ -1,13 +1,22 @@
 package datasetmanager
 
 import (
-	"database/sql"
 	"fmt"
+	"os"
+	"context"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	"github.com/go-redis/redis"
+	"github.com/go-redis/redis/v8"
 	log "github.com/sirupsen/logrus"
+	"errors"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"time"
 	"github.com/golang/protobuf/proto"
 )
+
+var nodeLookupServiceLogFields = log.Fields{
+	"package": "datasetmanager",
+	"description": "storage node lookup service",
+}
 
 // Configuration struct for the dataset manager
 type DatasetLookupServiceConfig struct {
@@ -20,12 +29,24 @@ type DatasetLookupServiceConfig struct {
 	RedisClientOptions *redis.Options
 }
 
+// TODO: if db transation fails, do not insert into redis!
+
 type DatasetLookupService struct {
 	redisClient *redis.Client
-	datasetLookupDB *sql.DB
 	config *DatasetLookupServiceConfig
 	datasetLookupSchema string
 	datasetLookupTable string
+	storageNodeTable string
+	pool *pgxpool.Pool
+}
+
+var datasetResolverLogFields = log.Fields{
+	"package": "datasetmanager",
+	"description": "dataset lookup service",
+}
+
+func init() { 
+	log.SetReportCaller(true)
 }
 
 // Returns a new DatasetIndexerService, given the configuration
@@ -35,74 +56,107 @@ func NewDatasetLookupService(id string, config *DatasetLookupServiceConfig) (*Da
 	}
 
 	if config.SQLConnectionString == "" {
-		return nil, errNoConnectionString
+		return nil, errNoConnectionString			
 	}
 
 	if id == "" {
-		id = "default"
+		return nil, errNoId
+	}
+
+	poolConfig, err := pgxpool.ParseConfig(config.SQLConnectionString)
+	if err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return nil, err
+	}
+
+	poolConfig.MaxConnLifetime = time.Second * 10
+	poolConfig.MaxConnIdleTime = time.Second * 4
+	poolConfig.MaxConns = 100
+	poolConfig.HealthCheckPeriod = time.Second * 1
+	poolConfig.LazyConnect = false
+
+	pool, err := pgxpool.ConnectConfig(context.Background(), poolConfig)
+	if err != nil {
+		log.Errorln(err.Error())
+		os.Exit(1)
 	}
 
 	d := &DatasetLookupService{
+		pool: pool,
 		config: config,
-		datasetLookupSchema: id + "_dataset_lookup_schema",
+		datasetLookupSchema: id + "_schema",
 		datasetLookupTable: id + "_dataset_lookup_table",
-	}
-
-	if err := d.createSchema(config.SQLConnectionString); err != nil {
-		return nil, err
-	}
-
-	if err := d.createDatasetLookupTable(config.SQLConnectionString); err != nil {
-		return nil, err
+		storageNodeTable: id + "_storage_node_table",
 	}
 
 	// Initialize Redis cache. Use Redis only locally
 	if config.RedisClientOptions != nil {
 		d.redisClient = redis.NewClient(config.RedisClientOptions)
-		pong, err := d.redisClient.Ping().Result()
+		pong, err := d.redisClient.Ping(context.Background()).Result()
 		if err != nil {
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
 			return nil, err
 		}
 		
 		if pong != "PONG" {
-			return nil, fmt.Errorf("Value of Redis pong was wrong")
+			log.Error(errors.New("Value of Redis pong was wrong"))
 		}
 
-		if err := d.flushAll(); err != nil {
-			return nil, err
-		}
-
-		//errc := d.reloadRedis()
-		/*if err := <-errc; err != nil {
-			return nil, err
+		/*if err := d.flushAll(); err != nil {
+			log.Errorln(err.Error())
 		}*/
+
+		go func() {
+			/*errc := d.reloadRedis()
+			if err := <-errc; err != nil {
+				log.Error(err.Error())
+			}*/
+		}()
 	}
+
+	log.WithFields(datasetResolverLogFields).Infof("Succsessfully created new dataset lookup service\n")
 
 	return d, nil
 }
 
-func (d *DatasetLookupService) DatasetNode(datasetId string) *pb.Node {
-	if d.redisClient != nil {
+func (d *DatasetLookupService) DatasetLookupNode(datasetId string) *pb.Node {
+	if datasetId == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoDatasetId.Error())
+	}
+
+	/*if d.redisClient != nil {
 		node, err := d.cacheDatasetNode(datasetId)
 		if node != nil && err == nil {
 			return node
 		}
 
 		if err != nil {
-			log.Error(err.Error())
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
 		}
+	}*/
+
+	node, err := d.dbSelectDatasetNode(datasetId)
+	if err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return nil
 	}
-	return d.dbSelectDatasetNode(datasetId)
+	return node
 }
 
 func (d *DatasetLookupService) cacheDatasetNode(datasetId string) (*pb.Node, error) {
-	cmd := d.redisClient.MGet(datasetId)
-	if cmd.Err() != nil {
-		return nil, cmd.Err()
+	if datasetId == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoDatasetId.Error())
+	}
+
+	cmd := d.redisClient.MGet(context.Background(), datasetId)
+	if err := cmd.Err(); err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return nil, err
 	}
 
 	nodeBytes, err := cmd.Result()
 	if err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
 		return nil, err
 	}
 	
@@ -110,68 +164,99 @@ func (d *DatasetLookupService) cacheDatasetNode(datasetId string) (*pb.Node, err
 		if nodeBytes[0] != nil {
 			node := &pb.Node{}
 			if err := proto.Unmarshal([]byte(nodeBytes[0].(string)), node); err != nil {
+				log.WithFields(datasetResolverLogFields).Error(err.Error())
 				return nil, err
 			}
 			return node, nil
 		}
 	}
 	
-	return nil, fmt.Errorf("Node was not found in cache")
+	err = fmt.Errorf("Storage node with identifier '%s' was not found in cache")
+	log.WithFields(datasetResolverLogFields).Error(err.Error())
+	return nil, err
 }
 
-func (d *DatasetLookupService) InsertDatasetNode(datasetId string, node *pb.Node) error {
-	if d.redisClient != nil {
-		if err := d.cacheInsertDatasetNode(datasetId, node); err != nil {
-			log.Error(err.Error())
-		}
+func (d *DatasetLookupService) InsertDatasetLookupEntry(datasetId string, nodeName string) error {
+	if datasetId == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoDatasetId.Error())
+		return errNoDatasetId
 	}
 
-	return d.dbInsertDatasetNode(datasetId, node)
+	if nodeName == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoNodeName.Error())
+	}
+
+	if err := d.dbInsertDatasetLookupEntry(datasetId, nodeName); err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return err
+	}
+
+	/*if d.redisClient != nil {
+		if err := d.cacheInsertDatasetNode(datasetId, node); err != nil {
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
+			return err
+		}
+	}*/
+	
+	return nil
 }
 
 func (d *DatasetLookupService) cacheInsertDatasetNode(datasetId string, node *pb.Node) error {
-	log.Println("Inserting into cache!")
+	if datasetId == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoDatasetId.Error())
+	}
+
+	if node == nil {
+		log.WithFields(datasetResolverLogFields).Error(errNilNode.Error())
+		return errNilNode
+	}
+
 	nodeBytes, err := proto.Marshal(node)
 	if err != nil {
 		return err
 	}
 	
-	return d.redisClient.Set(datasetId, nodeBytes, 0).Err()
+	return d.redisClient.Set(context.Background(), datasetId, nodeBytes, 0).Err()
 }
 
 // TODO: return errors from db interface as well
 func (d *DatasetLookupService) DatasetNodeExists(datasetId string) bool {
 	if datasetId == "" {
-		err := fmt.Errorf("Dataset identifier must not be empty")
-		log.Error(err.Error())
+		log.WithFields(datasetResolverLogFields).Error(errNoDatasetId.Error())
 		return false
 	}
 
-	if d.redisClient != nil {
+	/*if d.redisClient != nil {
 		exists, err := d.cacheDatasetNodeExists(datasetId)
 		if exists && err == nil {
 			return exists
 		}
 
 		if err != nil {
-			log.Error(err.Error())
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
 		}
-	}
+	}*/
 
 	// If there was a cache miss but a hit in PSQL, insert it into Redis
 	exists := d.dbDatasetNodeExists(datasetId)
 	if exists && d.redisClient != nil {
-		node := d.dbSelectDatasetNode(datasetId)
+		log.WithFields(datasetResolverLogFields).
+			Infof(`Found entry in database but not in Redis. Inserting %s into redis`, datasetId)
+
+		node, err := d.dbSelectDatasetNode(datasetId)
+		if err != nil {
+			log.WithFields(datasetResolverLogFields).Error()
+		}
+
 		if node != nil {
 			nodeBytes, err := proto.Marshal(node)
 			if err != nil {
-				log.Error(err.Error())
-				return exists
+				panic(err)
+				log.WithFields(datasetResolverLogFields).Error()
 			}
 
-			if err := d.redisClient.Set(datasetId, nodeBytes, 0).Err(); err != nil {
-				log.Error(err.Error())
-				return exists
+			if err := d.redisClient.Set(context.Background(), datasetId, nodeBytes, 0).Err(); err != nil {
+				log.WithFields(datasetResolverLogFields).Error()
 			}
 		}
 	}
@@ -180,13 +265,14 @@ func (d *DatasetLookupService) DatasetNodeExists(datasetId string) bool {
 }
 
 func (d *DatasetLookupService) cacheDatasetNodeExists(datasetId string) (bool, error) {
-	cmd := d.redisClient.Exists(datasetId)
+	cmd := d.redisClient.Exists(context.Background(), datasetId)
 	if cmd.Err() != nil {
 		return false, cmd.Err()
 	}
 
 	r, err := cmd.Result()
 	if err != nil {
+		log.WithFields(datasetResolverLogFields).Error(cmd.Err().Error())
 		return false, cmd.Err()
 	}
 
@@ -197,106 +283,122 @@ func (d *DatasetLookupService) cacheDatasetNodeExists(datasetId string) (bool, e
 	}
 }
 
-func (d *DatasetLookupService) RemoveDatasetNode(datasetId string) error {
-	if d.redisClient != nil {
+func (d *DatasetLookupService) RemoveDatasetLookupEntry(datasetId string) error {
+	if datasetId == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoDatasetId.Error())
+		return errNoDatasetId
+	}
+
+	/*if d.redisClient != nil {
 		if err := d.cacheRemoveDatasetNode(datasetId); err != nil {
 			log.Error(err.Error())
 		}
-	}
+	}*/
 
-	return d.dbRemoveDatasetNode(datasetId)
+	if err := d.dbRemoveDatasetNode(datasetId); err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return err
+	}
+	return nil
 }
 
 func (d *DatasetLookupService) cacheRemoveDatasetNode(datasetId string) error {
-	cmd := d.redisClient.Del(datasetId)
+	cmd := d.redisClient.Del(context.Background(), datasetId)
 	if cmd.Err() != nil {
 		return cmd.Err()
 	}
 
 	r, err := cmd.Result()
 	if err != nil {
+		log.WithFields(datasetResolverLogFields).Error(cmd.Err().Error())
 		return cmd.Err()
 	}
 
 	if r == 1 {
 		return nil
 	} else {
-		return fmt.Errorf("Dataset node with identifier '%s' was not found", datasetId)
+		return fmt.Errorf("Dataset node with identifier '%s' was not found in cache", datasetId)
 	}
 
 	return nil
 }
 
-// TODO: add ranges
-func (d *DatasetLookupService) cacheDatasetIdentifiers() ([]string, error) {
-	ids := make([]string, 0)
-	iter := d.redisClient.Scan(0, "*", 0).Iterator()
-	for iter.Next() {
-		ids = append(ids, iter.Val())
-	}
-	
-	if err := iter.Err(); err != nil {
-	    return nil, err
-	}
-	
-	return ids, nil
-}
-
 func (d *DatasetLookupService) DatasetIdentifiers() []string {
-	if d.redisClient != nil {
+	/*if d.redisClient != nil {
 		ids, err := d.cacheDatasetIdentifiers()
 		if ids != nil && err == nil {
 			return ids
 		}
 
 		if err != nil {
-			log.Error(err.Error)
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
 		}
-	}
+	}*/
 
 	return d.dbSelectDatasetIdentifiers()
 }
 
-func (d *DatasetLookupService) flushAll() error {
-	return d.redisClient.FlushAll().Err()
+// TODO: add ranges
+func (d *DatasetLookupService) cacheDatasetIdentifiers() ([]string, error) {
+	ids := make([]string, 0)
+	iter := d.redisClient.Scan(context.Background(), 0, "*", 0).Iterator()
+	for iter.Next(context.Background()) {
+		ids = append(ids, iter.Val())
+	}
+	
+	if err := iter.Err(); err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+	    return nil, err
+	}
+	
+	return ids, nil
 }
 
+func (d *DatasetLookupService) DatasetNodeName(datasetId string) string {
+	return ""
+}
+
+func (d *DatasetLookupService) flushAll() error {
+	log.Println("FlushAll!")
+	return d.redisClient.FlushAll(context.Background()).Err()
+}
+ // TODO: optimize this by adding missing entries and removing stale ones one at a time.
 func (d *DatasetLookupService) reloadRedis() chan error {
 	errc := make(chan error, 1)
-	
+
 	go func() {
+		defer close(errc)
+	
 		// TODO: don't load everyting into memory!
 		maps, err := d.dbGetAllDatasetNodes()
 		if err != nil {
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
 			errc <- err
 			return
 		}
 
-		ifaces := make([]interface{}, 0)
 		pipe := d.redisClient.TxPipeline()
 		for k, v := range maps {
 			marshalled, err := proto.Marshal(v)
 			if err != nil {
-				log.Error(err.Error())
+				log.WithFields(datasetResolverLogFields).Error(err.Error())
 				continue
 			}
-
-			ifaces = append(ifaces, k, marshalled)
-		}
-
-		if len(ifaces) > 0 {
-			if err := d.redisClient.MSet(ifaces...).Err(); err != nil {
-				errc <- err
-				return
-			}
-		
-			if _, err := pipe.Exec(); err != nil {
+			
+			if err := d.redisClient.MSet(context.Background(), k, marshalled).Err(); err != nil {
+				log.WithFields(datasetResolverLogFields).Error(err.Error())
 				errc <- err
 				return
 			}
 		}
 
+		if _, err := pipe.Exec(context.Background()); err != nil {
+			log.WithFields(datasetResolverLogFields).Error(err.Error())
+			errc <- err
+		}
 		errc <- nil
+
+		
 	}()
 
 	return errc

@@ -36,7 +36,10 @@ func newPolicyStoreGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.Privat
 		return nil, errNilPriv
 	}
 
-	serverConf := comm.ServerConfig(cert, caCert, priv)
+	serverConf, err := comm.ServerConfig(cert, caCert, priv)
+	if err != nil {
+		return nil, err
+	}
 
 	keepAlive := keepalive.ServerParameters{
 		MaxConnectionIdle: time.Minute * 5,

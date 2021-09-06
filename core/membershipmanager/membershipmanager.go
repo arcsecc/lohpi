@@ -2,14 +2,29 @@ package membershipmanager
 
 import (
 	"errors"
-	"database/sql"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	"sync"
+	"github.com/jackc/pgx/v4/pgxpool"
+	"time"
+	"github.com/sirupsen/logrus"
+_	"os"
+	"context"
 )
 
 var (
 	errNilConfig            = errors.New("Configuration is nil")
 	errNoConnectionString = errors.New("No connection string is provided")
+)
+
+var log = logrus.New()
+
+var mainLogFields = logrus.Fields{
+	"package": "membershipmanager",
+	"action": "network membership handling",
+}
+
+var (
+	ErrInsertNode = errors.New("Inserting node failed")
+	ErrRemoveNode = errors.New("Removing node failed")
 )
 
 type MembershipManagerUnitConfig struct {
@@ -18,94 +33,94 @@ type MembershipManagerUnitConfig struct {
 }
 
 type MembershipManagerUnit struct {
-	nodesMap map[string]*pb.Node
-	nodesMapLock sync.RWMutex
 	config *MembershipManagerUnitConfig
-	networkNodeDB *sql.DB
+	storageNodeSchema string
+	storageNodeTable string
+	pool *pgxpool.Pool
 }
 
-func NewMembershipManager(config *MembershipManagerUnitConfig) (*MembershipManagerUnit, error) {
+func init() { 
+	log.SetReportCaller(true)
+}
+
+func NewMembershipManager(id string, config *MembershipManagerUnitConfig) (*MembershipManagerUnit, error) {
 	if config == nil {
 		return nil, errNilConfig
 	}
 
+	if config.SQLConnectionString == "" {
+		return nil, errNoConnectionString
+	}
+	
+	poolConfig, err := pgxpool.ParseConfig(config.SQLConnectionString)
+	if err != nil {
+		log.WithFields(mainLogFields).Error(err.Error())
+		return nil, err
+	}
+
+	poolConfig.MaxConnLifetime = time.Second * 10
+	poolConfig.MaxConnIdleTime = time.Second * 4
+	poolConfig.MaxConns = 100
+	poolConfig.HealthCheckPeriod = time.Second * 1
+	poolConfig.LazyConnect = false
+
+	pool, err := pgxpool.ConnectConfig(context.Background(), poolConfig)
+	if err != nil {
+		log.WithFields(mainLogFields).Error(err.Error())
+		return nil, err
+	}
+
 	m := &MembershipManagerUnit{
-		nodesMap: make(map[string]*pb.Node),
+		pool: pool,
 		config: config,
+		storageNodeSchema: id + "_schema",
+		storageNodeTable: id + "_storage_node_table",
 	}
 
-	if config.UseDB {
-		if config.SQLConnectionString == "" {
-			return nil, errNoConnectionString
-		}
-
-		if err := m.createSchema(config.SQLConnectionString); err != nil {
-			return nil, err
-		}
-
-		if err := m.createMembershipTable(config.SQLConnectionString); err != nil {
-			return nil, err
-		}
-
-		if err := m.reloadMaps(); err != nil {
-			return nil, err
-		}
-	}
+	// redis?
 
 	return m, nil
 }
 
 func (m *MembershipManagerUnit) NetworkNodes() map[string]*pb.Node {
-	m.nodesMapLock.RLock()
-	defer m.nodesMapLock.RUnlock()
-	return m.nodesMap
+	nodes, err := m.dbSelectAllNetworkNodes()
+	if err != nil {
+		return nil
+	}
+	return nodes
 }
 
 func (m *MembershipManagerUnit) NetworkNode(nodeId string) *pb.Node {
-	m.nodesMapLock.RLock()
-	defer m.nodesMapLock.RUnlock()
-	return m.nodesMap[nodeId]
+	node, err := m.dbSelectNetworkNode(nodeId)
+	if err != nil {
+		return nil
+	}
+	return node
 }
 
 func (m *MembershipManagerUnit) AddNetworkNode(nodeId string, node *pb.Node) error {
-	m.nodesMapLock.Lock()
-	defer m.nodesMapLock.Unlock()
-	m.nodesMap[nodeId] = node
-
-	if m.networkNodeDB != nil {
-		return m.dbAddNetworkNode(nodeId, node)
+	if err := m.dbInsertNetworkNode(nodeId, node); err != nil {
+		return ErrInsertNode
 	}
-
 	return nil
 }
 
 func (m *MembershipManagerUnit) NetworkNodeExists(id string) bool {
-	m.nodesMapLock.RLock()
-	defer m.nodesMapLock.RUnlock()
-	_, exists := m.nodesMap[id]
+	exists, err := m.dbNetworkNodeExists(id)
+	if err != nil {
+		return exists
+	}
 	return exists
 }
 
 func (m *MembershipManagerUnit) RemoveNetworkNode(id string) error {
-	m.nodesMapLock.Lock()
-	defer m.nodesMapLock.Unlock()
-	delete(m.nodesMap, id)
-
-	if m.networkNodeDB != nil {
-		return m.dbRemoveNetworkNode(id)
+	if err := m.dbDeleteNetworkNode(id); err != nil {
+		return ErrRemoveNode
 	}
-
 	return nil
 }
 
-func (m *MembershipManagerUnit) reloadMaps() error {
-	maps, err := m.dbGetAllNetworkNodes()
-	if err != nil {
-		return err
-	}
-
-	m.nodesMapLock.Lock()
-	defer m.nodesMapLock.Unlock()
-	m.nodesMap = maps
-	return nil
+func (m *MembershipManagerUnit) Stop() {
+	log.WithFields(mainLogFields).Infoln("Closing database connection pool")
+	m.pool.Close()
 }

@@ -38,22 +38,26 @@ type Config struct {
 	DirectoryServerAddress   string 
 	DirectoryServerGPRCPort  int
 	GitRepositoryPath 		 string
-	IfritTCPPort 		int
-	IfritUDPPort 		int
+
+	// Configuration used by Ifrit client
+	IfritCryptoUnitWorkingDirectory string
+	IfritTCPPort int
+	IfritUDPPort int
 }
 
-type datasetLookupService interface {
+type storageNodeLookupService interface {
 	DatasetNodeExists(datasetId string) bool
-	RemoveDatasetNode(datasetId string) error
-	InsertDatasetNode(datasetId string, node *pb.Node) error
-	DatasetNode(datasetId string) *pb.Node
+	RemoveDatasetLookupEntry(datasetId string) error
+	DatasetNodeName(datasetId string) string
+	InsertDatasetLookupEntry(datasetId string, nodeName string) error
+	DatasetLookupNode(datasetId string) *pb.Node
 	DatasetIdentifiers() []string
 }
 
 type datasetManager interface {
 	Dataset(datasetId string) *pb.Dataset
 	Datasets() map[string]*pb.Dataset
-	DatasetIdentifiers() []string
+	DatasetIdentifiers(fromIdx int64, toIdx int64) []string
 	DatasetExists(datasetId string) bool
 	RemoveDataset(datasetId string) error 
 	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
@@ -116,15 +120,16 @@ type PolicyStoreCore struct {
 	stateSync stateSyncer
 	dsManager datasetManager
 	memManager membershipManager
-	dsLookupService datasetLookupService
+	dsLookupService storageNodeLookupService
 }
 
-func NewPolicyStoreCore(cm certManager, dsLookupService datasetLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
-	ifritClient, err := ifrit.NewClient(&ifrit.ClientConfig{
-		UdpPort: config.IfritUDPPort,
-		TcpPort: config.IfritTCPPort,
-		Hostname: "lohpi-policystore.norwayeast.azurecontainer.io",
-		CertPath: "./crypto/ifrit",})
+func NewPolicyStoreCore(cm certManager, dsLookupService storageNodeLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
+	ifritClient, err := ifrit.NewClient(&ifrit.Config{
+		New: true,
+		TCPPort: config.IfritTCPPort,
+		UDPPort: config.IfritUDPPort,
+		Hostname: config.Hostname,
+		CryptoUnitPath: "kake",})
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +343,7 @@ func (ps *PolicyStoreCore) Handshake(ctx context.Context, node *pb.Node) (*pb.Ha
 
 	log.Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n", node.GetName(), node.GetIfritAddress())
 	ipString := fmt.Sprintf("%s:%d", ps.PolicyStoreConfig().Hostname, ps.PolicyStoreConfig().IfritTCPPort)
-	log.Println("ipString:", ipString)
+
 	return &pb.HandshakeResponse{
 		Ip: ipString,
 		Id: []byte(ps.ifritClient.Id()),
@@ -397,18 +402,20 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 		panic("msg is nil!")
 	}
 
-	// If the dataset has not been found in the in-memory map, restore it.
+	// If the dataset has not been found in the in-memory map, restore it from git.
 	if !ps.dsManager.DatasetExists(msg.GetPolicyRequest().GetIdentifier()) {
 		newDataset := &pb.Dataset{}
 		if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
 			newDefaultPolicy := ps.getInitialDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
 			if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newDefaultPolicy); err != nil {
+				panic(err)
 				log.Errorln(err.Error())
 				return nil, err
 			}
 
 			// Insert the policy into git
 			if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newDefaultPolicy); err != nil {
+				panic(err)
 				log.Errorln(err.Error())
 				return nil, err
 			}
@@ -419,12 +426,14 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 			// The dataset policy exists in Git. Restore the dataset entry
 			policyString, err := ps.gitGetDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier())
 			if err != nil {
+				panic(err)
 				log.Errorln(err.Error())
 				return nil, err
 			}
 
 			b, err := strconv.ParseBool(policyString)
 			if err != nil {
+				panic(err)
 				log.Errorln(err.Error())
 				return nil, err
 			}
@@ -436,18 +445,21 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 
 		// Insert the dataset into the collection, given the dataset identifier
 		if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
+			panic(err)
 			log.Errorln(err.Error())
 			return nil, err
 		}
 	} 
 
 	// Add the dataset to the lookup manager
-	if err := ps.dsLookupService.InsertDatasetNode(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender()); err != nil {
+	if err := ps.dsLookupService.InsertDatasetLookupEntry(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender().GetName()); err != nil {
+		panic(err)
 		log.Errorln(err.Error())
 		return nil, err
 	}
 	
 	return ps.pbMarshalDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
+	//return nil, nil
 }
 
 // Resolves the deltas in the policy store's dataset and the incoming datasets. It removes the superfluous

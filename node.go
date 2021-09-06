@@ -4,13 +4,13 @@ import (
 	"crypto/x509/pkix"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
-	"github.com/arcsecc/lohpi/core/gossipobserver"
+	"github.com/arcsecc/lohpi/core/policygossipobserver"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/node"
 	"github.com/arcsecc/lohpi/core/statesync"
 	"github.com/pkg/errors"
-	"github.com/go-redis/redis"
-
+	"github.com/go-redis/redis/v8"
+_	"github.com/spf13/viper"
 	log "github.com/sirupsen/logrus"
 	"net/http"
 	"time"
@@ -41,10 +41,6 @@ type NodeConfig struct {
 	// will not be used. This means that only the in-memory maps will be used for storage.
 	SQLConnectionString string
 
-	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued.
-	// NOT USED
-	BackupRetentionTime time.Time
-
 	// Hostname of the node. Default value is "127.0.1.1".
 	Hostname string
 
@@ -54,11 +50,33 @@ type NodeConfig struct {
 	// HTTP port number. Default value is 9000
 	Port int
 
-	// Synchronization interval. Default value is 60 seconds.
-	SyncInterval time.Duration
+	// Interval between which the node will initiate a synchronization of the policies between the policy store
+	// and the node itself. Default value is 60 seconds.
+	PolicySyncInterval time.Duration 
+
+	// Interval between which the node will initiate a synchronization of datasets the node stores between itself 
+	// and the policy store. Default value is 60 seconds.
+	DatasetSyncInterval time.Duration 
+
+	// Interval between which the node will initiate a synchronization of the datasets available to the 
+	// clients through the directory server. Default value is 60 seconds.
+	DatasetIdentifiersSyncInterval time.Duration 
+
+	// Interval between which the node will initiate a synchronization of the checked out datasets'
+	// policies between itself and the directory server. Default value is 60 seconds.
+	CheckedOutDatasetPolicySyncInterval time.Duration 
 
 	// Path used to store X.509 certificate and private key
 	CryptoUnitWorkingDirectory string
+
+	// Options used by Redis.
+	RedisClientOptions *redis.Options
+
+	// Ifrit's TCP port. Default value is 5000.
+	IfritTCPPort int
+
+	// Ifrit's UDP port. Default value is 6000.
+	IfritUDPPort int
 }
 
 // TODO: consider using intefaces
@@ -83,8 +101,17 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 		config.Port = 9000
 	}
 
-	if config.SyncInterval <= 0 {
-		config.SyncInterval = 60 * time.Second
+	if config.PolicySyncInterval <= 0 {
+		config.PolicySyncInterval = 2 * time.Second
+	}
+	if config.DatasetSyncInterval <= 0 {
+		config.DatasetSyncInterval = 2 * time.Second
+	}
+	if config.DatasetIdentifiersSyncInterval <= 0 {
+		config.DatasetIdentifiersSyncInterval = 2 * time.Second
+	}
+	if config.CheckedOutDatasetPolicySyncInterval <= 0 {
+		config.CheckedOutDatasetPolicySyncInterval = 2 * time.Second
 	}
 
 	if config.CryptoUnitWorkingDirectory == "" {
@@ -96,8 +123,13 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 			Name:                   config.Name,
 			SQLConnectionString:    config.SQLConnectionString,
 			Port:                   config.Port,
-			SyncInterval:			config.SyncInterval,
-			HostName:				config.Hostname,
+			PolicySyncInterval:		config.PolicySyncInterval,
+			DatasetSyncInterval: 	config.DatasetSyncInterval,
+			DatasetIdentifiersSyncInterval: config.DatasetIdentifiersSyncInterval,
+			CheckedOutDatasetPolicySyncInterval: config.CheckedOutDatasetPolicySyncInterval,
+			Hostname:				config.Hostname,
+			IfritTCPPort: 			config.IfritTCPPort,
+			IfritUDPPort: 			config.IfritUDPPort,
 		},
 	}
 
@@ -118,6 +150,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 			CaAddr: config.CaAddress,
 			Hostnames: []string{config.Hostname},
 		}
+
 		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
 		if err != nil {
 			return nil, err
@@ -133,13 +166,13 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 		}
 	}
 
-	// Policy observer
-	gossipObsConfig := &gossipobserver.PolicyObserverConfig{
+	// Policy observer 
+	gossipObsConfig := &policygossipobserver.PolicyGossipObserverConfig{
 		OutputDirectory: config.PolicyObserverWorkingDirectory,
 		LogfilePrefix:   config.Name,
 		Capacity:        10, //config me
 	}
-	gossipObs, err := gossipobserver.NewGossipObserver(gossipObsConfig)
+	gossipObs, err := policygossipobserver.NewPolicyGossipObserver(gossipObsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -147,19 +180,14 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	// Dataset manager service
 	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		RedisClientOptions: &redis.Options{
-			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
-			Password: "",
-			DB: 0,
-		},
+		RedisClientOptions: config.RedisClientOptions,
 	}
-	dsManager, err := datasetmanager.NewDatasetIndexerUnit("azureblob", datasetIndexerUnitConfig)
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, datasetIndexerUnitConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	// State sync manager
+	// Policy synchronization service
 	stateSync, err := statesync.NewStateSyncUnit()
 	if err != nil {
 		return nil, err
@@ -170,7 +198,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 		SQLConnectionString: config.SQLConnectionString,
 		// skip redis for now
 	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("azureblob", dsCheckoutManagerConfig)
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(config.Name, dsCheckoutManagerConfig)
 	if err != nil {
 		return nil, err
 	}

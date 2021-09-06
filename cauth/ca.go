@@ -236,6 +236,7 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		DNSNames:    reqCert.DNSNames,
+		IPAddresses: []net.IP{net.ParseIP("127.0.1.1")},
 	}
 
 	signedCert, err := x509.CreateCertificate(rand.Reader, newCert, c.caCert, reqCert.PublicKey, c.privKey)

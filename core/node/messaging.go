@@ -10,12 +10,16 @@ import (
 	"strconv"
 )
 
+var (
+	errNilResponse = errors.New("Response was nil")
+)
+
 // This file defines the message passing functions for outgoing messages from the node.
 // Notice the pbXXX signature.
 // TODO use context on all message passing functions. 
 
 // Requests the newest policy from the policy store
-func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP string) (*pb.Policy, error) {
+func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId string) (*pb.Policy, error) {
 	msg := &pb.Message{
 		Type:   message.MSG_TYPE_GET_DATASET_POLICY,
 		Sender: n.getPbNode(),
@@ -30,29 +34,66 @@ func (n *NodeCore) pbSendPolicyStorePolicyRequest(datasetId, policyStoreIP strin
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		panic(err)
 		return nil, err
 	}
 
+	ip := n.getPolicyStoreIP()
+	if ip == "" {
+		return nil, errors.New("Policy store IP address is not set")
+	}
+
+	ch := n.ifritClient.SendTo(ip, data)
+	policy := &pb.Policy{}
 	
-	ch := n.ifritClient.SendTo(policyStoreIP, data)
-	log.Println("policyStoreIP:", policyStoreIP)
 	select {
 	case resp := <-ch:
 		respMsg := &pb.Message{}
-		if err := proto.Unmarshal(resp, respMsg); err != nil {
-			panic(err)
-			return nil, err
-		}
+		if resp != nil {
+			if err := proto.Unmarshal(resp.Data, respMsg); err != nil {
+				return nil, err
+			}
 
-		if err := n.verifyMessageSignature(respMsg); err != nil {
-			panic(err)
-			return nil, err
+			if err := n.verifyMessageSignature(respMsg); err != nil {
+				return nil, err
+			}
+			policy = respMsg.GetPolicy()
+		} else {
+			log.WithError(errNilResponse).Error("Policy request failed")
+			log.WithFields(log.Fields{
+				"entity": n.entity(),
+				"action": fmt.Sprintf("fetch most recent policy from policy store at address %s", ip),
+				"result": "response was nil",
+			}).Errorln()
+			return nil, errNilResponse
 		}
-
-		return respMsg.GetPolicy(), nil
 	}
-	return nil, fmt.Errorf("Error in pbRequestPolicyStoreUpdate")
+
+	return policy, nil
+}
+
+func (n *NodeCore) pbSendDatsetIdentifiers(identifiers []string, remoteAddr string) error {
+	if identifiers == nil {
+		return errors.New("Dataset identifiers collection is nil")
+	}
+
+	msg := &pb.Message{
+		Type:   message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS,
+		Sender: n.getPbNode(),
+		StringSlice: identifiers,
+	}
+
+	if err := n.pbAddMessageSignature(msg); err != nil {
+		return err
+	}	
+
+	data, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	n.ifritClient.SendTo(remoteAddr, data)
+
+	return nil
 }
 
 func (n *NodeCore) pbResolveDatsetIdentifiers(recipient string) error {
@@ -75,7 +116,6 @@ func (n *NodeCore) pbResolveDatsetIdentifiers(recipient string) error {
 	return nil
 }
 
-
 // Sends the dataset identfier given bu 'id' to the recipient
 func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 	msg := &pb.Message{
@@ -93,7 +133,6 @@ func (n *NodeCore) pbSendDatsetIdentifier(id, recipient string) error {
 		return err
 	}
 
-	log.Println("recipient:", recipient)
 	n.ifritClient.SendTo(recipient, data)
 	return nil
 }

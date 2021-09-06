@@ -34,13 +34,18 @@ func (ps *PolicyStoreCore) startHttpServer(addr string) error {
 
 	handler := cors.AllowAll().Handler(m)
 
+	serverConfig, err := comm.ServerConfig(ps.cm.Certificate(), ps.cm.CaCertificate(), ps.cm.PrivateKey())
+	if err != nil {
+		return err
+	}
+
 	ps.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      handler,
 		WriteTimeout: time.Second * 30,
 		ReadTimeout:  time.Second * 30,
 		IdleTimeout:  time.Second * 60,
-		TLSConfig:    comm.ServerConfig(ps.cm.Certificate(), ps.cm.CaCertificate(), ps.cm.PrivateKey()),
+		TLSConfig: serverConfig,
 	}
 
 	//router.Use(ps.middlewareValidateTokenSignature)
@@ -234,6 +239,7 @@ func (ps *PolicyStoreCore) getDatasetMetadata(w http.ResponseWriter, r *http.Req
 }
 
 // Assigns a new policy to the dataset
+// TODO: rollback everything if something fails
 func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
@@ -289,7 +295,7 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Get the node's identifier
-	node := ps.dsLookupService.DatasetNode(datasetId)
+	node := ps.dsLookupService.DatasetLookupNode(datasetId)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset is not available anymore")
 		log.Errorln(err.Error())

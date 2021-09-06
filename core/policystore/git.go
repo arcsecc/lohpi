@@ -50,11 +50,13 @@ func (ps *PolicyStoreCore) gitStorePolicy(nodeIdentifier, datasetIdentifier stri
 	}
 
 	if err := ps.gitWritePolicy(policy, nodeIdentifier); err != nil {
+		panic(err)
 		log.Errorln(err.Error())
 		return err
 	}
 
 	if err := ps.gitCommitPolicy(policy, nodeIdentifier); err != nil {
+		panic(err)
 		log.Errorln(err.Error())
 		return err
 	}
@@ -166,11 +168,22 @@ func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) 
 		return errors.New("Node identifier must not be empty")
 	}
 
-	// Change cwd to gir repo
-	err := os.Chdir(ps.config.GitRepositoryPath)
+	dir, err := os.Getwd()
 	if err != nil {
+		return err
+	}
+
+	// Change cwd to gir repo
+	if err := os.Chdir(ps.config.GitRepositoryPath); err != nil {
 		panic(err)
 	}
+
+	// Change back to the original directory when cleaning up
+	defer func() {
+		if err := os.Chdir(dir); err != nil {
+			panic(err)
+		}	
+	}()
 
 	// Get the current worktree
 	worktree, err := ps.repository.Worktree()
@@ -179,16 +192,19 @@ func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) 
 	}
 
 	s := strings.ReplaceAll(p.GetDatasetIdentifier(), "/", "_")
+	
 	fPath := fmt.Sprintf("%s/%s", nodeIdentifier, s)
-
+	// BUG: what if the name contains "_"?
 	// Add the file to the staging area
 	_, err = worktree.Add(fPath)
 	if err != nil {
+		panic(err)
 		return err
 	}
 
 	status, err := worktree.Status()
 	if err != nil {
+		panic(err)
 		return err
 	}
 
@@ -196,6 +212,7 @@ func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) 
 	// TODO: might need to re-consider this one! What if we need to reorder commits?
 	if status.File(fPath).Staging == git.Untracked {
 		if err := worktree.Checkout(&git.CheckoutOptions{}); err != nil {
+			panic(err)
 			return err
 		}
 		return nil
@@ -217,11 +234,13 @@ func (ps *PolicyStoreCore) gitCommitPolicy(p *pb.Policy, nodeIdentifier string) 
 	})
 
 	if err != nil {
+		panic(err)
 		return err
 	}
 
 	obj, err := ps.repository.CommitObject(c)
 	if err != nil {
+		panic(err)
 		return err
 	}
 

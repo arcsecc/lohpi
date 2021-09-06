@@ -5,7 +5,7 @@ monitor_interval: 10
 ping_limit: 10
 pings_per_interval: 3
 removal_timeout: 20
-use_ca: true
+use_ca: false
 use_compression: true
 view_update_interval: 10
 viz_update_interval: 10

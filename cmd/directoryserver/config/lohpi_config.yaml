@@ -10,5 +10,5 @@ azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
 ifrittcpport: 5000
 ifritudpport: 8000
 hostname: "lohpi-directoryserver.norwayeast.azurecontainer.io"
-lohpicryptodirectory: "crypto/lohpi"
-ifritcryptodirectory: "crypto/ifrit"
+lohpicryptodirectory: "crypto/production/lohpi"
+ifritcryptodirectory: "crypto/production/ifrit"

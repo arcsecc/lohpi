@@ -38,5 +38,3 @@ GRANT ALL PRIVILEGES ON DATABASE policy_store_db TO lohpi_dev_user;
 --GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO lohpi_dev_user;
 
 ALTER ROLE "lohpi_dev_user" WITH LOGIN;
-
-

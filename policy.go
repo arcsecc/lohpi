@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
-	"github.com/go-redis/redis"
+_	"github.com/go-redis/redis/v8"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policystore"
 	"github.com/arcsecc/lohpi/core/statesync"
@@ -56,8 +56,11 @@ type PolicyStoreConfig struct {
 	// will not be used. This means that only the in-memory maps will be used for storage.
 	SQLConnectionString string
 
-	// Path used to store X.509 certificate and private key
-	CryptoUnitWorkingDirectory string
+	// Directory path used by Lohpi to store X.509 certificate and private key
+	LohpiCryptoUnitWorkingDirectory string
+
+	// Directory path used by Ifrit to store X.509 certificate and private key
+	IfritCryptoUnitWorkingDirectory string 
 
 	// Ifrit's TCP port. Default value is 5000.
 	IfritTCPPort int
@@ -127,8 +130,8 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 		return nil, errNoConnectionString
 	}
 
-	if config.CryptoUnitWorkingDirectory == "" {
-		config.CryptoUnitWorkingDirectory = "./crypto/lohpi"
+	if config.LohpiCryptoUnitWorkingDirectory == "" {
+		return nil, errors.New("Lohpi crypto configuration is nil")
 	}
 
 	p := &PolicyStore{
@@ -145,6 +148,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 			GitRepositoryPath:        config.PolicyStoreGitRepository,
 			IfritTCPPort: 		 	  config.IfritTCPPort,
 			IfritUDPPort: 		 	  config.IfritUDPPort,
+			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 		},
 	}
 
@@ -166,7 +170,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 			CaAddr: config.CaAddress,
 			Hostnames: []string{config.Hostname},
 		}
-		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
+		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -175,7 +179,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 			return nil, err
 		}	
 	} else {
-		cu, err = comm.LoadCu(config.CryptoUnitWorkingDirectory)
+		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
 		if err != nil {
 			return nil, err
 		}
@@ -184,14 +188,14 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	// Dataset manager
 	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		RedisClientOptions: &redis.Options{
+		/*RedisClientOptions: &redis.Options{
 			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
+			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6380),
 			Password: "",
 			DB: 0,
-		},
+		},*/
 	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService("policystore", datasetLookupServiceConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService("policy_store", datasetLookupServiceConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +211,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 		SQLConnectionString: config.SQLConnectionString,
 		UseDB: true,
 	}
-	memManager, err := membershipmanager.NewMembershipManager(memManagerConfig)
+	memManager, err := membershipmanager.NewMembershipManager("policy_store", memManagerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -215,14 +219,14 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	// Dataset manager service
 	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		RedisClientOptions: &redis.Options{
+		/*RedisClientOptions: &redis.Options{
 			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
+			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6380),
 			Password: "",
 			DB: 1,
-		},
+		},*/
 	}
-	dsManager, err := datasetmanager.NewDatasetIndexerUnit("policystore", datasetIndexerUnitConfig)
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit("policy_store", datasetIndexerUnitConfig)
 	if err != nil {
 		return nil, err
 	}

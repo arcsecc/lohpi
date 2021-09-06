@@ -23,25 +23,41 @@ _	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"
 )
 
+var httpLogFields = log.Fields{
+	"package": "core/node",
+	"description": "http server",
+}
+
+var (
+	errNoHTTPAddr = errors.New("HTTP address is empty")
+	errNoDatasetAccessDenied = errors.New("Access to dataset is denied")
+)
+
 func (n *NodeCore) startHTTPServer() error {
 	router := mux.NewRouter()
-	addr := fmt.Sprintf(":%d", n.config().Port)
+	addr := fmt.Sprintf(":%d", n.config().Port)		// check me
 	
-	log.WithFields(log.Fields{
-		"entity": "Lohpi directory server",
-		"port": n.config().Port,
-	}).Infoln("Started HTTP server")
+	log.WithFields(httpLogFields).
+		Infof("Started HTTP server at port %d\n", n.config().Port)
 
 	dRouter := router.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
-	dRouter.HandleFunc("/ids", n.getDatasetIdentifiers).Methods("GET")
+	dRouter.
+		HandleFunc("/ids", n.getDatasetIdentifiers).
+		Queries("cursor", "{cursor:[0-9,]+}", "limit", "{limit:[0-9,]+}").
+		Methods("GET")
+
 	dRouter.HandleFunc("/info/{id:.*}", n.getDatasetSummary).Methods("GET")
 	dRouter.HandleFunc("/new_policy/{id:.*}", n.setDatasetPolicy).Methods("PUT")
 	dRouter.HandleFunc("/data/{id:.*}", n.getDataset).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", n.getMetadata).Methods("GET")
+	dRouter.HandleFunc("/is_available/{id:.*}", n.datasetIsAvailable).Methods("GET")
+	
 	dRouter.HandleFunc("/addset/{id:.*}", n.addDataset).Methods("POST")
 	dRouter.HandleFunc("/removeset/{id:.*}", n.removeDataset).Methods("GET")
-
 	dRouter.HandleFunc("/test/{id:.*}", n.test).Methods("GET")
+
+	policyRouter := router.PathPrefix("/policy").Schemes("HTTP").Subrouter()
+	policyRouter.HandleFunc("/version/{id:.*}", n.getPolicyVersion).Methods("GET")
 
 	// Middlewares used for validation
 	dRouter.Use(n.middlewareValidateTokenSignature)
@@ -52,18 +68,22 @@ func (n *NodeCore) startHTTPServer() error {
 	n.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      handler,
-		WriteTimeout: time.Hour * 30,
-		ReadTimeout:  time.Hour * 30,
-		IdleTimeout:  time.Hour * 60,
+		WriteTimeout: time.Minute * 30,
+		ReadTimeout:  time.Minute * 30,
+		IdleTimeout:  time.Minute * 60,
 		//TLSConfig:    comm.ServerConfig(n.cu.Certificate(), n.cu.CaCertificate(), n.cu.PrivateKey()),
 	}
 
 	if err := n.setPublicKeyCache(); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		return err
 	}
 
 	return n.httpServer.ListenAndServe()
+}
+
+func (n *NodeCore) stopHTTPServer() error {
+	return nil
 }
 
 // TODO redirect HTTP to HTTPS
@@ -157,10 +177,55 @@ func (n *NodeCore) validateTokenSignature(token []byte) error {
 }
 
 func (n *NodeCore) test(w http.ResponseWriter, r *http.Request) {
-	datasetId := mux.Vars(r)["id"]
-	d := n.dsManager.Dataset(datasetId)
-	fmt.Fprintf(w, "DS: %+v\n", d)
+	
 }
+
+func (n *NodeCore) datasetIsAvailable(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	token, err := getBearerToken(r)
+	if err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	_ = token
+
+	datasetId := strings.Split(r.URL.Path, "/dataset/is_available/")[1]
+	if !n.dsManager.DatasetExists(datasetId) {
+		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// TODO: use client attributes to determine access. nil here??
+	policy := n.dsManager.GetDatasetPolicy(datasetId)
+	response := struct {
+		IsAvailable bool `json:"is_available"`
+	}{
+		IsAvailable: policy.GetContent(),
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(response); err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err = w.Write(b.Bytes())
+	if err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 
 func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
@@ -168,20 +233,20 @@ func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
 	datasetId := strings.Split(r.URL.Path, "/dataset/removeset/")[1]
 	if datasetId == "" {
 		err := fmt.Errorf("Dataset identifier must not be empty.")
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}	
 
 	if !n.dsManager.DatasetExists(datasetId) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
 	if err := n.dsManager.RemoveDataset(datasetId); err != nil {
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -196,7 +261,7 @@ func (n *NodeCore) addDataset(w http.ResponseWriter, r *http.Request) {
 	datasetId := strings.Split(r.URL.Path, "/dataset/addset/")[1]
 	if datasetId == "" {
 		err := fmt.Errorf("Dataset identifier must not be empty.")
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}	
@@ -207,7 +272,7 @@ func (n *NodeCore) addDataset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := n.dsManager.InsertDataset(datasetId, newDataset); err != nil {
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -221,7 +286,7 @@ func (n *NodeCore) getMetadata(w http.ResponseWriter, r *http.Request) {
 	
 	if !n.dsManager.DatasetExists(datasetId) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
 	}
@@ -248,38 +313,56 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 
 // TODO use context!
 func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
+	log.WithFields(httpLogFields).
+		WithField("URL:", r.URL.Path).
+		WithField("Method:", r.Method).
+		Infoln("getDataset HTTP handler invoked")
+
 	defer r.Body.Close()
 	token, err := getBearerToken(r)
 	if err != nil {
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	pbClient, err := jwtTokenToPbClient(string(token))
 	if err != nil {
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	datasetId := strings.Split(r.URL.Path, "/dataset/data/")[1]
 	if !n.dsManager.DatasetExists(datasetId) {
+		
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
-	// TODO: use client attributes to determine access. nil here??
+	// If multiple checkouts are allowed...
 	policy := n.dsManager.GetDatasetPolicy(datasetId)
-	log.Println("POLICY: ", policy)
 	if !policy.GetContent() {
-		err := fmt.Errorf("You do not have access to this dataset")
-		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + err.Error(), http.StatusUnauthorized)
+		log.WithFields(httpLogFields).Error(errNoDatasetAccessDenied.Error())
+		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + errNoDatasetAccessDenied.Error(), http.StatusUnauthorized)
 		return
 	}
 
+	checkout := &pb.DatasetCheckout{
+		DatasetIdentifier: datasetId,
+		DateCheckout: pbtime.Now(),
+		Client: pbClient,
+		PolicyVersion: policy.GetVersion(),
+	}
+
+	if err := n.dcManager.CheckoutDataset(datasetId, checkout); err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
 	// TODO: strip the headers from information about the client
 	if handler := n.getDatasetHandler(); handler != nil {
 		handler(datasetId, w, r)
@@ -290,39 +373,50 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotImplemented) + ": " + err.Error(), http.StatusNotImplemented)
 		return
 	}
-
-	checkout := &pb.DatasetCheckout{
-		DatasetIdentifier: datasetId,
-		DateCheckout: pbtime.Now(),
-		Client: pbClient,
-	}
-	if err := n.dcManager.CheckoutDataset(datasetId, checkout); err != nil {
-		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
-		return
-	}
 }
 
 // Returns the dataset identifiers stored at this node
 func (n *NodeCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
-	log.Infoln("Got request to", r.URL.String())
+	log.WithFields(httpLogFields).
+		WithField("URL:", r.URL.Path).
+		WithField("Method:", r.Method).
+		Infoln("getDatasetIdentifiers HTTP handler invoked")
+
 	defer r.Body.Close()
 
-	ids := n.dsManager.DatasetIdentifiers()
+	cursor := mux.Vars(r)["cursor"]
+	limit := mux.Vars(r)["limit"]
+
+	c, err := strconv.Atoi(cursor)
+	if err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	l, err := strconv.Atoi(limit)
+	if err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// TODO: require intervals here too
+	ids := n.dsManager.DatasetIdentifiers(int64(c), int64(l))
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(ids); err != nil {
-		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Header().Add("Content-Type", "application/json")
-	w.Header().Add("Content-Length", strconv.Itoa(len(ids)))
+	w.Header().Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
-	_, err := w.Write(b.Bytes())
+	_, err = w.Write(b.Bytes())
 	if err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -341,14 +435,14 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
 		err := errors.New("Missing dataset identifier")
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if !n.dsManager.DatasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", dataset)
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
 	}
@@ -364,7 +458,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	// Fetch the clients that have checked out the dataset
 	_, err := n.dcManager.DatasetCheckouts(dataset)
 	if err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -382,7 +476,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 
 	b := new(bytes.Buffer)
 	if err := json.NewEncoder(b).Encode(resp); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -393,7 +487,7 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 
 	_, err = w.Write(b.Bytes())
 	if err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}*/
@@ -421,7 +515,7 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	dataset := mux.Vars(r)["id"]
 	if dataset == "" {
 		err := errors.New("Missing dataset identifier")
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -429,7 +523,7 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	// Check if dataset exists in the external repository
 	if !n.dsManager.DatasetExists(dataset) {
 		err := fmt.Errorf("Dataset '%s' is not stored in this node", dataset)
-		log.Infoln(err.Error())
+		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
 	}
@@ -442,10 +536,10 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	if err := util.DecodeJSONBody(w, r, "application/json", &reqBody); err != nil {
 		var e *util.MalformedParserReponse
 		if errors.As(err, &e) {
-			log.Errorln(err.Error())
+			log.WithFields(httpLogFields).Error(err.Error())
 			http.Error(w, e.Msg, e.Status)
 		} else {
-			log.Errorln(err.Error())
+			log.WithFields(httpLogFields).Error(err.Error())
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		}
 		return
@@ -461,4 +555,43 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/text")
 	w.Header().Set("Content-Length", strconv.Itoa(len(respMsg)))
 	w.Write([]byte(respMsg))
+}
+
+
+func (n *NodeCore) getPolicyVersion(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	datasetId := strings.Split(r.URL.Path, "/policy/version/")[1]
+	if !n.dsManager.DatasetExists(datasetId) {
+		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
+		return
+	}
+
+	// TODO: use client attributes to determine access. nil here??
+	policy := n.dsManager.GetDatasetPolicy(datasetId)
+	response := struct {
+		PolicyVersion uint64 `json:"policy_version"`
+	}{
+		PolicyVersion: policy.GetVersion(),
+	}
+
+	b := new(bytes.Buffer)
+	if err := json.NewEncoder(b).Encode(response); err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
+
+	_, err := w.Write(b.Bytes())
+	if err != nil {
+		log.WithFields(httpLogFields).Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+		return
+	}
 }

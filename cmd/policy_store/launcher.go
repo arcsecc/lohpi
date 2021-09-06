@@ -19,7 +19,7 @@ var config = struct {
 	CaAddress 					string 	`default:"127.0.1.1:8301"`
 	Name        				string 	`default:"Lohpi Policy store"`
 	PolicyStoreGitRepository  	string 	`default:"/tmp/lohpi/policy_store/policies"`
-	Host         				string 	`default:"127.0.1.1"`
+	Hostname       				string 	`default:"127.0.1.1"`
 	GossipInterval 				uint32 	`default:"60"`
 	HTTPPort      				int    	`default:"8083"`
 	GRPCPort					int 	`default:"8084"`
@@ -34,6 +34,8 @@ var config = struct {
 	AzureTenantID           	string 	`required:"true"`
 	IfritTCPPort		 		int 	`required:"true"`
 	IfritUDPPort		 		int 	`required:"true"`
+	LohpiCryptoUnitWorkingDirectory string `required:"true"`
+	IfritCryptoUnitWorkingDirectory string `required:"true"`
 }{}
 
 
@@ -46,7 +48,12 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Policy store instance")
 	args.Parse(os.Args[1:])
 
-	configor.New(&configor.Config{Debug: true, ENVPrefix: "PS"}).Load(&config, psConfigFile, psConfigFile)
+	log.SetLevel(log.ErrorLevel)
+
+	configor.New(&configor.Config{
+		Debug:                true,
+		ENVPrefix:            "DIRECTORYSERVER",
+		ErrorOnUnmatchedKeys: true}).Load(&config, psConfigFile)
 
 	config, err := getPolicyStoreConfig()
 	if err != nil {
@@ -57,7 +64,7 @@ func main() {
 	if err != nil {
 		log.Fatalln(err.Error())
 	}
-
+	
 	go policyStore.Start()
 	go policyStore.RunPolicyBatcher() // place me at a lower level?
 	
@@ -75,7 +82,7 @@ func getPolicyStoreConfig() (*lohpi.PolicyStoreConfig, error) {
 	}
 
 	return &lohpi.PolicyStoreConfig{
-		Hostname: config.Host,
+		Hostname: config.Hostname,
 		CaAddress: config.CaAddress,
 		Name: "Policy store",
 		PolicyStoreGitRepository: config.PolicyStoreGitRepository,		
@@ -86,8 +93,10 @@ func getPolicyStoreConfig() (*lohpi.PolicyStoreConfig, error) {
 		NumDirectRecipients: config.NumDirectRecipients,
 		DirectoryServerAddress: config.DirectoryServerAddress,
 		SQLConnectionString: dbConnString,
-		IfritTCPPort: config.IfritTCPPort,
-		IfritUDPPort: config.IfritUDPPort,
+		LohpiCryptoUnitWorkingDirectory: config.LohpiCryptoUnitWorkingDirectory,
+		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
+		IfritTCPPort:                    config.IfritTCPPort,
+		IfritUDPPort:                    config.IfritUDPPort,
 	}, nil
 }
 

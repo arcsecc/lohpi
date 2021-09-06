@@ -42,11 +42,36 @@ type Config struct {
 	// Port used by the HTTP server
 	Port int
 
-	// Interval that defines when the synchronization procedure will run
-	SyncInterval time.Duration
+	// Interval at which the policy synchronization procedure will run
+	PolicySyncInterval time.Duration
+
+	// Interval at which the dataset objects synchronization procedure will run
+	DatasetSyncInterval time.Duration
+
+	// Interval at which the dataset identifiers synchronization procedure will run
+	DatasetIdentifiersSyncInterval time.Duration
+
+	// Interval at which the node initiates a synchronization between itself and the directory
+	// to resolve deltas in the checked-out datasets' policies.
+	CheckedOutDatasetPolicySyncInterval time.Duration
 
 	// Hostname used by the HTTP server
-	HostName string
+	Hostname string
+
+	// Ifrit's TCP port. Default value is 5000.
+	IfritTCPPort int
+
+	// Ifrit's UDP port. Default value is 6000.
+	IfritUDPPort int
+}
+
+func init() { 
+	log.SetReportCaller(true)
+}
+
+var nodeLogFields = log.Fields{
+	"package": "core/node",
+	"description": "dataset node",
 }
 
 // TODO: use logrus to create machine-readable logs with fields!
@@ -56,6 +81,15 @@ type gossipMessage struct {
 	Hash    []byte
 	Addr    string
 }
+
+var (
+	ErrNoConfig = errors.New("Node configuration is nil")
+	ErrFailedIndexing = errors.New("Failed to index dataset")
+	ErrNoDirectoryServerHandshakeAddress = errors.New("No directory server handshake address")
+	ErrDirectoryServerHandshakeFailed = errors.New("Directory server handshake failed")
+	ErrNoPolicyStoreHandshakeAddress = errors.New("No policy store handshake address")
+	ErrPolicyStoreHandshakeFailed = errors.New("Policy store handshake failed")
+)
 
 type DatasetIndexingOptions struct {
 	AllowMultipleCheckouts bool
@@ -72,6 +106,8 @@ type NodeCore struct {
 	ifritClient *ifrit.Client
 
 	exitChan chan bool
+	exitFlag  bool
+	exitMutex sync.RWMutex
 
 	// Configuration 
 	conf *Config
@@ -85,10 +121,16 @@ type NodeCore struct {
 
 	// Used for identifying data coming from policy store
 	directoryServerID []byte
+	directoryServerIDMutex sync.RWMutex 
+	
 	policyStoreID []byte	// TODO: allow for any number of policy store instances :)
+	policyStoreIDMutex sync.RWMutex
 
 	directoryServerIP string
+	directoryServerIPMutex sync.RWMutex
+
 	policyStoreIP string
+	policyStoreIPMutex sync.RWMutex
 
 	// Object id -> empty value for quick indexing
 	datasetMap     map[string]*pb.Policy
@@ -106,10 +148,10 @@ type NodeCore struct {
 	gossipObs gossipObserver
 	stateSync stateSyncer
 	dcManager datasetCheckoutManager
-	
+
 	pbnode *pb.Node
 	boottime *pbtime.Timestamp
-	pubKeyCache *jwk.AutoRefresh
+	pubKeyCache *jwk.AutoRefresh	
 }
 
 type certManager interface {
@@ -127,8 +169,8 @@ type gossipObserver interface {
 
 type datasetManager interface {
 	Dataset(datasetId string) *pb.Dataset
-	Datasets() map[string]*pb.Dataset
-	DatasetIdentifiers() []string
+	Datasets() map[string]*pb.Dataset // index and cursor here!
+	DatasetIdentifiers(idx int64, length int64) []string
 	DatasetExists(datasetId string) bool
 	RemoveDataset(datasetId string) error 
 	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
@@ -138,13 +180,14 @@ type datasetManager interface {
 
 type datasetCheckoutManager interface {
 	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
-	DatasetIsCheckedOut(datasetId string, client *pb.Client) (bool, error)
+	DatasetIsCheckedOut(datasetId string, client *pb.Client) bool
 	//CheckinDataset(datasetId string, client *pb.Client) error 
-	DatasetCheckouts() ([]*pb.DatasetCheckout, error)
+	DatasetCheckouts(datasetId string) ([]*pb.DatasetCheckout, error)
 }
 
 type stateSyncer interface {
 	RegisterIfritClient(client *ifrit.Client) 
+	SynchronizeDatasetIdentifiers(ctx context.Context, identifiers []string, remoteAddr string) error
 	SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error)
 	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
 }
@@ -152,38 +195,40 @@ type stateSyncer interface {
 // TODO: reload dateapplied and datecreated from the databases on boot time.
 func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetManager, stateSync stateSyncer, dcManager datasetCheckoutManager, config *Config) (*NodeCore, error) {
 	if config == nil {
-		return nil, errors.New("Configuration is nil")
+		return nil, ErrNoConfig
 	}
 	
-	ifritClient, err := ifrit.NewClient(&ifrit.ClientConfig{
-		UdpPort: 8000, 
-		TcpPort: 5000,
-		Hostname: "lohpi-azureblobnode.norwayeast.azurecontainer.io",
-		CertPath: "./crypto/ifrit",})
+	ifritClient, err := ifrit.NewClient(&ifrit.Config{
+		New: true,
+		TCPPort: config.IfritTCPPort,
+		UDPPort: config.IfritUDPPort, 
+		Hostname: config.Hostname,
+		CryptoUnitPath: "kake",})
 	if err != nil {
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
 	}
 
 	directoryServerClient, err := comm.NewDirectoryServerGRPCClient(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
 	if err != nil {
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
 	}
 
 	psClient, err := comm.NewPolicyStoreClient(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
 	if err != nil {
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
 	}
 
 	pbnode := &pb.Node{
 		Name:         	config.Name,
-		IfritAddress: 	fmt.Sprintf("%s:%d", config.HostName, 5000),
+		IfritAddress: 	fmt.Sprintf("%s:%d", config.Hostname, config.IfritTCPPort),
 		Id:           	[]byte(ifritClient.Id()),
-		HttpsAddress:	config.HostName,
+		HttpsAddress:	config.Hostname,
 		Port: 			int32(config.Port),
 		BootTime:		pbtime.Now(),
 	}
-
-	log.Println("pbnode:", pbnode.HttpsAddress)
 
 	node := &NodeCore{
 		ifritClient:  			  ifritClient,
@@ -197,14 +242,13 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 		stateSync: 				  stateSync,
 		dcManager: 				  dcManager,
 		exitChan:				  make(chan bool, 1),
+		exitFlag: 				  false,
 		pbnode: 			  	  pbnode,	
 	}
 
 	// Set the Ifrit handlers
 	node.ifritClient.RegisterMsgHandler(node.messageHandler)
 	node.ifritClient.RegisterGossipHandler(node.gossipHandler)
-
-	// Register the Ifrit client such that the syncer can use it
 	node.stateSync.RegisterIfritClient(ifritClient)
 
 	return node, nil
@@ -217,9 +261,38 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 }
 
 func (n *NodeCore) Start() {
+	log.WithFields(nodeLogFields).Infoln("Starting Lohpi node's services...")
 	go n.ifritClient.Start()
 	go n.startStateSyncer()
 	go n.startHTTPServer()
+	<-n.exitChan
+
+	log.WithFields(nodeLogFields).Infoln("Stopping Lohpi node's services...")
+	n.Stop()
+}
+
+func (n *NodeCore) Stop() {
+	if n.isStopping() {
+		return
+	}
+
+	if err := n.stopHTTPServer(); err != nil {
+		log.WithFields(nodeLogFields).Error(err.Error())
+	}
+}
+
+func (n *NodeCore) isStopping() bool {
+	n.exitMutex.Lock()
+	defer n.exitMutex.Unlock()
+
+	if n.exitFlag {
+		return true
+	}
+
+	n.exitFlag = true
+	close(n.exitChan)
+
+	return false
 }
 
 // TODO: refine me! Fix the abstraction boundaries
@@ -227,10 +300,19 @@ func (n *NodeCore) startStateSyncer() {
 	for {
 		select {
 		case <-n.exitChan:
-			log.Info("Exiting sync")
+			log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
 			return
-		case <-time.After(n.config().SyncInterval):
-/*			deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
+		case <-time.After(n.config().DatasetIdentifiersSyncInterval):
+			// For now, let's sync all identifiers. If the gRPC messages get too big, use iteration and/or streaming.
+			// See Ifrit and gRPC for more information. 
+			datasetIdentifiers := n.dsManager.DatasetIdentifiers(0, 2000)
+			if err :=  n.pbSendDatsetIdentifiers(datasetIdentifiers, n.getDirectoryServerIP()); err != nil {
+				log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
+			}
+
+			
+
+			/*deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
 			if err != nil {
 				log.Errorln(err.Error())
 			}
@@ -256,13 +338,13 @@ func (n *NodeCore) startStateSyncer() {
 // You will have to call this method to make the datasets available to the clients. 
 func (n *NodeCore) IndexDataset(datasetId string, indexOptions *DatasetIndexingOptions) error {
 	if n.dsManager.DatasetExists(datasetId) {
-		log.Infof("Dataset with identifier '%s' is already indexed by the server\n", datasetId)
+		log.WithFields(nodeLogFields).Infof("Dataset with identifier '%s' is already indexed by the server\n", datasetId)
 	}
 
 	// Send policy request to policy store
-	policyResponse, err := n.pbSendPolicyStorePolicyRequest(datasetId, n.policyStoreIP)
+	policyResponse, err := n.pbSendPolicyStorePolicyRequest(datasetId)
 	if err != nil {
-		return err
+		return ErrFailedIndexing
 	}
 
 	dataset := &pb.Dataset{
@@ -273,12 +355,14 @@ func (n *NodeCore) IndexDataset(datasetId string, indexOptions *DatasetIndexingO
 
 	// Apply the update from policy store to storage
 	if err := n.dsManager.InsertDataset(datasetId, dataset); err != nil {
-		return err
+		log.WithFields(nodeLogFields).Errorln(err.Error())
+		return ErrFailedIndexing
 	}
 
 	// Notify the directory server of the newest policy update
 	if err := n.pbSendDatsetIdentifier(datasetId, n.directoryServerIP); err != nil {
-		return err
+		log.WithFields(nodeLogFields).Errorln(err.Error())
+		return ErrFailedIndexing
 	}
 
 	return nil
@@ -286,12 +370,13 @@ func (n *NodeCore) IndexDataset(datasetId string, indexOptions *DatasetIndexingO
 
 // Removes the dataset policy from the node. The dataset will no longer be available to clients.
 func (n *NodeCore) RemoveDataset(id string) {
+	log.WithFields(nodeLogFields).Infof("Removing dataset with id '%s'\n", id)
 	n.dsManager.RemoveDataset(id)
 }
 
 // Shuts down the node
 func (n *NodeCore) Shutdown() {
-	log.Infoln("Shutting down Lohpi node")
+	log.WithFields(nodeLogFields).Infoln("Shutting down Lohpi node")
 	n.ifritClient.Stop()
 	n.exitChan <-true
 	//n.dsManager.StopSynchronizer()
@@ -299,28 +384,28 @@ func (n *NodeCore) Shutdown() {
 
 func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 	if addr == "" {
-		return errors.New("Address is empty")
+		return ErrNoDirectoryServerHandshakeAddress
 	}
 
-	log.Infof("Performing handshake with directory server at address %s\n", addr)
+	log.WithFields(nodeLogFields).Infof("Performing handshake with directory server at address %s\n", addr)
 	conn, err := n.directoryServerClient.Dial(addr)
 	if err != nil {
-		return err
+		log.WithFields(nodeLogFields).Errorln(err.Error())
+		return ErrDirectoryServerHandshakeFailed
 	}
 
 	defer conn.CloseConn()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 
-	log.Println("getPbNode():", n.getPbNode())
 	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
-		panic(err)
-		return err
+		log.WithFields(nodeLogFields).Errorln(err.Error())
+		return ErrDirectoryServerHandshakeFailed
 	}
 
-	n.directoryServerIP = r.GetIp()
-	n.directoryServerID = r.GetId()
+	n.setDirectoryServerIP(r.GetIp())
+	n.setDirectoryServerID(r.GetId())
 
 	return nil
 }
@@ -335,13 +420,14 @@ func (n *NodeCore) Name() string {
 
 func (n *NodeCore) HandshakePolicyStore(addr string) error {
 	if addr == "" {
-		return errors.New("Address is empty")
+		return ErrNoPolicyStoreHandshakeAddress
 	}
 
-	log.Infof("Performing handshake with policy store at address %s\n", addr)
+	log.WithFields(nodeLogFields).Infof("Performing handshake with policy store at address %s\n", addr)
 	conn, err := n.psClient.Dial(addr)
 	if err != nil {
-		return err
+		log.WithFields(nodeLogFields).Errorln(err.Error())
+		return ErrPolicyStoreHandshakeFailed
 	}
 	defer conn.CloseConn()
 
@@ -350,13 +436,15 @@ func (n *NodeCore) HandshakePolicyStore(addr string) error {
 
 	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
-		return err
+		log.WithFields(nodeLogFields).Errorln(err.Error())
+		return ErrNoPolicyStoreHandshakeAddress
 	}
 
 	defer conn.CloseConn()
 
-	n.policyStoreIP = r.GetIp()
-	n.policyStoreID = r.GetId()
+	n.setPolicyStoreIP(r.GetIp())
+	n.setPolicyStoreID(r.GetId())
+	
 	return nil
 }
 
@@ -364,13 +452,15 @@ func (n *NodeCore) HandshakePolicyStore(addr string) error {
 func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		log.Errorln(err)
+		log.WithFields(nodeLogFields).Errorln(err.Error())
 		return nil, err
 	}
 
-	log.Infof("Node '%s' got direct message %s\n", n.config().Name, msg.GetType())
+	log.WithFields(nodeLogFields).
+		WithField("Ifrit RPC message", msg).
+		Infof("Node '%s' got direct message %s\n", n.config().Name, msg.GetType())
 	if err := n.verifyMessageSignature(msg); err != nil {
-		log.Errorln(err)
+		log.WithFields(nodeLogFields).Errorln(err.Error())
 		return nil, err
 	}
 
@@ -382,7 +472,11 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		return n.pbMarshalDatasetIdentifiers(msg)
 
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		n.ifritClient.SetGossipContent(data)
+		// Might avoid calling SetGossipContent for each multicast message received?
+		if err := n.ifritClient.SetGossipContent(data); err != nil {
+			log.WithFields(nodeLogFields).Errorln(err.Error())
+		}
+		// Policy observer?
 		return n.processPolicyBatch(msg)
 
 	case message.MSG_TYPE_ROLLBACK_CHECKOUT:
@@ -392,7 +486,9 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		return n.acknowledgeProbe(msg, data)
 
 	default:
-		fmt.Printf("Unknown message type: %s\n", msg.GetType())
+		log.WithFields(nodeLogFields).
+		WithField("Ifrit RPC message", "Unknown message type").
+		Errorf("Unknown message type: %s\n", msg.GetType())
 	}
 
 	return n.pbMarshalAcknowledgeMessage()
@@ -421,44 +517,42 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
 		return nil, err
 	}
 	
+	wg := &sync.WaitGroup{}
 	for _, m := range gspMsg.GetGossipMessageBody() {
-		if err := n.applyPolicy(m.GetPolicy()); err != nil {
-			log.Errorln(err.Error())
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := n.applyPolicy(m.GetPolicy()); err != nil {
+				log.Errorln(err.Error())
+			}
+		}()
 	}
+
+	wg.Wait()
 
 	return nil, nil
 }
 
 // Apply the given policy to the correct dataset.
 // TODO: log things better using logrus. 
-func (n *NodeCore) applyPolicy(p *pb.Policy) error {
-	datasetId := p.GetDatasetIdentifier()
+func (n *NodeCore) applyPolicy(newPolicy *pb.Policy) error {
+	datasetId := newPolicy.GetDatasetIdentifier()
 	if n.dsManager.DatasetExists(datasetId) {
 		dataset := n.dsManager.Dataset(datasetId)
 		if dataset == nil {
 			return errors.New("Tried to get dataset description but it was nil")
 		}
 
-		if dataset.GetPolicy().GetVersion() >= p.GetVersion() {
+		if dataset.GetPolicy().GetVersion() >= newPolicy.GetVersion() {
 			log.Infoln("Got an outdated policy. Applies a new version")
 			return nil
 		}
 
-		if err := n.dsManager.SetDatasetPolicy(datasetId, p); err != nil {
+		if err := n.dsManager.SetDatasetPolicy(datasetId, newPolicy); err != nil {
 			return err
 		}
 
-		// Log deltas in policies to logfile
-		// TODO: put loggers in interfaces?
-		log.Infof("Changed dataset %s's policy to %s\n", datasetId, p.GetContent())
-
-		// Update revocation list. Optimization: don't push update message if policy is reduntant.
-		/*if n.dbDatasetIsCheckedOutByClient(datasetId) {
-			if err := n.pbSendDatasetRevocationUpdate(datasetId, p.GetContent()); err != nil {
-				return err
-			}
-		}*/
+		log.Infof("Changed dataset %s's policy to %s\n", datasetId, newPolicy.GetContent())
 	} else {
 		return fmt.Errorf("Dataset %s does not exist", datasetId)
 	}
@@ -620,6 +714,58 @@ func (n *NodeCore) config() *Config {
 	n.configLock.RLock()
 	defer n.configLock.RUnlock()
 	return n.conf
+}
+
+func (n *NodeCore) entity() string { 
+	return n.Name()
+}
+
+func (n *NodeCore) setPolicyStoreIP(ip string) { 
+	n.policyStoreIPMutex.Lock()
+	defer n.policyStoreIPMutex.Unlock()
+	n.policyStoreIP = ip
+}
+
+func (n *NodeCore) getPolicyStoreIP() string { 
+	n.policyStoreIPMutex.RLock()
+	defer n.policyStoreIPMutex.RUnlock()
+	return n.policyStoreIP
+}
+
+func (n *NodeCore) setPolicyStoreID(id []byte) { 
+	n.policyStoreIDMutex.Lock()
+	defer n.policyStoreIDMutex.Unlock()
+	n.policyStoreID = id
+}
+
+func (n *NodeCore) getPolicyStoreID() []byte { 
+	n.policyStoreIDMutex.RLock()
+	defer n.policyStoreIDMutex.RUnlock()
+	return n.policyStoreID
+}
+
+func (n *NodeCore) setDirectoryServerIP(ip string) {
+	n.directoryServerIPMutex.Lock()
+	defer n.directoryServerIPMutex.Unlock()
+	n.directoryServerIP = ip
+}
+
+func (n *NodeCore) getDirectoryServerIP() string {
+	n.directoryServerIPMutex.RLock()
+	defer n.directoryServerIPMutex.RUnlock()
+	return n.directoryServerIP
+}
+
+func (n *NodeCore) setDirectoryServerID(id []byte) {
+	n.directoryServerIDMutex.Lock()
+	defer n.directoryServerIDMutex.Unlock()
+	n.directoryServerID = id
+}
+
+func (n *NodeCore) getDirectoryServerID() []byte {
+	n.directoryServerIDMutex.RLock()
+	defer n.directoryServerIDMutex.RUnlock()
+	return n.directoryServerID
 }
 
 func jwtTokenToPbClient(token string) (*pb.Client, error) {

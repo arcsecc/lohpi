@@ -16,6 +16,8 @@ message Client {
     string ID = 2; // microsoft id
     string emailAddress = 3;
     string macAddress = 4;
+    string IpAddress = 5;
+    string DNSName = 6;
 }
 
 // Used in direct messaging
@@ -75,8 +77,9 @@ message Dataset {
 
 message DatasetCheckout {
     string datasetIdentifier = 1;
-    google.protobuf.Timestamp DateCheckout = 3;
-    Client client = 4;
+    google.protobuf.Timestamp DateCheckout = 2;
+    Client client = 3;
+    uint64 policyVersion = 4; // Version number set by policy store when a new policy is set.
 }
 
 message DatasetResponse {

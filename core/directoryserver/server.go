@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	errNilCert = errors.New("Given certificate was nil")
-	errNilPriv = errors.New("Given private key was nil")
+	errNilCert   = errors.New("Given certificate was nil")
+	errNilCaCert = errors.New("Given CA certificate was nil")
+	errNilPriv   = errors.New("Given private key was nil")
 )
 
 type gRPCServer struct {
@@ -32,11 +33,18 @@ func newDirectoryGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.PrivateK
 		return nil, errNilCert
 	}
 
+	if caCert == nil {
+		return nil, errNilCaCert
+	}
+
 	if priv == nil {
 		return nil, errNilPriv
 	}
 
-	serverConf := comm.ServerConfig(cert, caCert, priv)
+	serverConf, err := comm.ServerConfig(cert, caCert, priv)
+	if err != nil {
+		return nil, err
+	}
 
 	keepAlive := keepalive.ServerParameters{
 		MaxConnectionIdle: time.Minute * 5,

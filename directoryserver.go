@@ -7,7 +7,7 @@ import (
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
-	"github.com/go-redis/redis"
+	"github.com/go-redis/redis/v8"
 
 	"time"
 	"fmt"
@@ -40,8 +40,11 @@ type DirectoryServerConfig struct {
 	// TCP port used by the gRPC server. Default value is 8081.
 	GRPCPort int
 
-	// Path used to store X.509 certificate and private key
-	CryptoUnitWorkingDirectory string
+	// Directory path used by Lohpi to store X.509 certificate and private key
+	LohpiCryptoUnitWorkingDirectory string
+
+	// Directory path used by Ifrit to store X.509 certificate and private key
+	IfritCryptoUnitWorkingDirectory string 
 
 	// Ifrit's TCP port. Default value is 5000.
 	IfritTCPPort int
@@ -73,10 +76,6 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.HostName = "127.0.1.1"
 	}
 
-	if config.PolicyObserverWorkingDirectory == "" {
-		config.PolicyObserverWorkingDirectory = "."
-	}
-
 	if config.HTTPPort == 0 {
 		config.HTTPPort = 8080
 	}
@@ -85,8 +84,8 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.GRPCPort = 8081
 	}
 
-	if config.CryptoUnitWorkingDirectory == "" {
-		config.CryptoUnitWorkingDirectory = "./crypto/lohpi"
+	if config.LohpiCryptoUnitWorkingDirectory == "" {
+		return nil, errors.New("Lohpi crypto configuration is nil")
 	}
 
 	if config.IfritTCPPort == 0 {
@@ -97,14 +96,18 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.IfritUDPPort = 6000
 	}
 
+	if config.IfritCryptoUnitWorkingDirectory == "" {
+		return nil, errors.New("Ifrit crypto configuration is nil")
+	}
+
 	ds := &DirectoryServer{
 		conf: &directoryserver.Config{
-			Name:                config.Name,
-			Hostname:			 config.HostName,
-			HTTPPort:            config.HTTPPort,
-			GRPCPort:            config.GRPCPort,
-			CaAddress:           config.CaAddress,
-			SQLConnectionString: config.SQLConnectionString,
+			Name:                 config.Name,
+			HTTPPort:             config.HTTPPort,
+			GRPCPort:             config.GRPCPort,
+			SQLConnectionString:  config.SQLConnectionString,
+			Hostname:			  config.HostName,
+			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 			IfritTCPPort: 		 config.IfritTCPPort,
 			IfritUDPPort: 		 config.IfritUDPPort,
 		},
@@ -128,7 +131,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 			CaAddr: config.CaAddress,
 			Hostnames: []string{config.HostName},
 		}
-		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
+		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +140,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 			return nil, err
 		}	
 	} else {
-		cu, err = comm.LoadCu(config.CryptoUnitWorkingDirectory)
+		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +156,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 			DB: 0,
 		},
 	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService("directoryserver", datasetLookupServiceConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService("directory_server", datasetLookupServiceConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +166,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		SQLConnectionString: config.SQLConnectionString,
 		UseDB: true,
 	}
-	memManager, err := membershipmanager.NewMembershipManager(memManagerConfig)
+	memManager, err := membershipmanager.NewMembershipManager("directory_server", memManagerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +175,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("directoryserver", dsCheckoutManagerConfig)
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("directory_server", dsCheckoutManagerConfig)
 	if err != nil {
 		return nil, err
 	}
