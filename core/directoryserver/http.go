@@ -16,6 +16,7 @@ import (
 	"github.com/lestrrat-go/jwx/jws"
 	log "github.com/sirupsen/logrus"
 	pbtime "google.golang.org/protobuf/types/known/timestamppb"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -45,9 +46,10 @@ func (d *DirectoryServerCore) startHttpServer(addr string) error {
 	dRouter.HandleFunc("/get_project_description/{id:.*}", d.getProjectDescription).Methods("GET")
 	dRouter.HandleFunc("/is_available/{id:.*}", d.datasetIsAvailable).Methods("GET")
 	dRouter.HandleFunc("/test/{id:.*}", d.testGetDataset).Methods("GET")
+	dRouter.HandleFunc("/start_session", d.startClientSession).Methods("GET")
 
 	networkRouter := r.PathPrefix("/network").Schemes("HTTP").Subrouter()
-	networkRouter.HandleFunc("/ndoes", d.getNetworkNodes).Methods("GET")
+	networkRouter.HandleFunc("/nodes", d.getNetworkNodes).Methods("GET")
 
 	// Middlewares used for validation
 	//dRouter.Use(d.middlewareValidateTokenSignature)
@@ -92,6 +94,10 @@ func (d *DirectoryServerCore) getNetworkNodes(w http.ResponseWriter, r *http.Req
 			CheckedOutDatasets []string `json:"checked_out_datasets"`
 		}
 	}*/
+}
+
+func (d *DirectoryServerCore) startClientSession(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
 }
 
 // Sets project description for the dataset given as 'id'
@@ -580,7 +586,7 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
-	dataset := mux.Vars(r)["id"]
+	/*dataset := mux.Vars(r)["id"]
 	isInvalidated := d.datasetIsInvalidated(dataset)
 	b := new(bytes.Buffer)
 	c := struct {
@@ -604,7 +610,7 @@ func (d *DirectoryServerCore) getDatasetPolicyVerification(w http.ResponseWriter
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
-	}
+	}*/
 }
 
 func copyHeaders(h map[string][]string) map[string][]string {
@@ -660,8 +666,12 @@ func exstractPbClient(r *http.Request) (*pb.Client, error) {
 		macAddress = r.Header.Values("mac_address")[0]
 	}
 
+	// Validate IP address format
 	if len(r.Header.Values("ip_address")) > 0 {
 		ipAddress = r.Header.Values("ip_address")[0]
+		if net.ParseIP(ipAddress) == nil {
+			return nil, fmt.Errorf("IP address %s is invalid\n", ipAddress)
+		}
 	}
 
 	return &pb.Client{

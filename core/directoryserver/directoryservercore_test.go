@@ -1,21 +1,30 @@
-package directoryserver_test
+package directoryserver
 
 import (
 	lohpi_ca "github.com/arcsecc/lohpi/cauth"
 	ifrit_ca "github.com/joonnna/ifrit/cauth"
 
+	"github.com/arcsecc/lohpi/core/message"
+
 	"crypto/ecdsa"
 	"crypto/x509"
+	
+
 	"encoding/pem"
-	"github.com/arcsecc/lohpi"
-	"github.com/arcsecc/lohpi/core/directoryserver"
+	"github.com/joonnna/ifrit"
+	"context"
+	//"github.com/arcsecc/lohpi/core/datasetmanager"
+	//"github.com/arcsecc/lohpi/core/directoryserver"
 	"github.com/arcsecc/lohpi/core/node"
 	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/golang/protobuf/proto"
 	log "github.com/sirupsen/logrus"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"os"
 	"testing"
+	
 	//"github.com/stretchr/testify/assert"
 )
 
@@ -24,15 +33,18 @@ var (
 	IfritCaConfigPath = "ifrit_ca_config"
 	LohpiCaPort       = 8301
 	LohpiCaConfigPath = "lohpi_ca_config"
+	CryptoDummyDir	  = "crypto_dummy_dir" 
+	DirectoryServerCoreName = "directory server test"
 )
 
 type DirectoryServerSuite struct {
 	suite.Suite
 
 	// Actual directory server
-	ds *directoryserver.DirectoryServerCore
+	ds *DirectoryServerCore
 
-	nodes []*node.NodeCore
+	nodeA *node.NodeCore
+	nodeB *node.NodeCore
 }
 
 func init() {
@@ -45,8 +57,8 @@ func init() {
 
 // Run before each test
 func (suite *DirectoryServerSuite) SetupTest() {
-	dsConfig := &directoryserver.Config{
-		Name:                            "directory server test",
+	dsConfig := &Config{
+		Name:                           DirectoryServerCoreName,
 		HTTPPort:                        8080,
 		GRPCPort:                        0, //????
 		SQLConnectionString:             "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=directory_server_db_test sslmode=disable",
@@ -62,12 +74,14 @@ func (suite *DirectoryServerSuite) SetupTest() {
 		log.Fatal(err)
 	}
 
-	ds, err := directoryserver.NewDirectoryServerCore(certStub, &dsLookupServiceStub{}, &membershipManagerStub{}, &datasetCheckoutManagerStub{}, dsConfig)
-	require.NoError(suite.T(), err, "Error must be nil")
+	gossipObsStub := &gossipObserverStub{}
+
+	ds, err := NewDirectoryServerCore(certStub, gossipObsStub, &dsLookupServiceStub{}, &membershipManagerStub{}, &datasetCheckoutManagerStub{}, dsConfig)
+	require.NoError(suite.T(), err, "Error from creating new directory server must be nil")
 	require.NotEmpty(suite.T(), ds)
 
 	// Dummy nodes, in terms of protobuf definitions
-	/*nodes, err := nodes()
+/*	nodeA, err := nodeA()
 	if err != nil {
 		log.Fatal(err)
 	}*/
@@ -76,9 +90,6 @@ func (suite *DirectoryServerSuite) SetupTest() {
 
 	// Cleanup
 	suite.T().Cleanup(func() {
-		/*errc*log.Printf("stopping stuff\n")
-		suite.ds.Stop()*/
-
 		if err := os.RemoveAll(IfritCaConfigPath); err != nil {
 			log.Errorln(err.Error())
 		}
@@ -86,83 +97,128 @@ func (suite *DirectoryServerSuite) SetupTest() {
 		if err := os.RemoveAll(LohpiCaConfigPath); err != nil {
 			log.Errorln(err.Error())
 		}
-	})
-}
 
-// Returns a set of dummy nodes used to test the directory server. Assume the
-// bootstrap parameters to be correct.
-/*func nodes() ([]*node.NodeCore, error) {
-	nodes := make([]*node.NodeCore, 0)
-
-	nodeConfigs := []*node.Config{
-		&node.Config{
-			HostName:                       "127.0.1.1",
-			HTTPPort:                       8020,
-			PolicyStoreAddress:             "127.0.1.1:8081",
-			LohpiCaAddress:                 "127.0.1.1:8301",
-			Name:                           "First node",
-			AllowMultipleCheckouts:         true,
-			PolicyObserverWorkingDirectory: ".",
-		},
-		&node.Config{
-			HostName:                       "127.0.1.1",
-			HTTPPort:                       8022,
-			PolicyStoreAddress:             "127.0.1.1:8081",
-			LohpiCaAddress:                 "127.0.1.1:8301",
-			Name:                           "Second node",
-			AllowMultipleCheckouts:         true,
-			PolicyObserverWorkingDirectory: ".",
-		},
-	}
-
-	for _, c := range nodeConfigs {
-		n, err := node.NewNodeCore(c)
-		if err != nil {
-			return nil, err
+		if err := os.RemoveAll("kake"); err != nil {
+			log.Errorln(err.Error())
 		}
 
-		nodes = append(nodes, n)
-	}
+		if err := os.RemoveAll("crypto/lohpi"); err != nil {
+			log.Errorln(err.Error())
+		}
 
-	return nodes, nil
-}*/
+		if err := os.RemoveAll(CryptoDummyDir); err != nil {
+			log.Errorln(err.Error())
+		}
+		
+		//nodeA.Shutdown()
+	})
+}
 
 func (suite *DirectoryServerSuite) TestDirectoryServerStart() {
 	suite.ds.Start()
 }
 
 func (suite *DirectoryServerSuite) TestDirectoryServerMessageHandler() {
-	// Send message to the directory server as a Lohpi node
-	config := &node.Config{
-		Hostname: "127.0.1.1",
-		Port:     8020,
-		Name:     "First node",
+	// Valid messages
+	messages := []*pb.Message{
+		&pb.Message{
+			Type:   message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
+			StringValue: "test datset",
+			Sender: &pb.Node{
+				Name: "node a",
+				IfritAddress: "127.0.0.1:8500",
+				Id: []byte("0909efe23rei23i"),
+				HttpsAddress: "127.0.1.1",
+				Port: 8000,
+				BootTime: pbtime.Now(),
+			},
+		},
+		&pb.Message{
+			Type:   message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS,
+			StringSlice: []string{"a", "b", "c"},
+			Sender: &pb.Node{
+				Name: "node a",
+				IfritAddress: "127.0.0.1:8500",
+				Id: []byte("0909efe23rei23i"),
+				HttpsAddress: "127.0.1.1",
+				Port: 8000,
+				BootTime: pbtime.Now(),
+			},
+		},
 	}
 
-	node, err := lohpi.NewNode(config, true)
-	require.NoErrorf(suite.T(), err, "Could not create a new dummy node")
-	_ = node
+	for _, m := range messages {
+		data, err := proto.Marshal(m)
+		require.NoError(suite.T(), err, "Error from marshalling messages must be nil")
 
+		resp, err := suite.ds.messageHandler(data)
+		require.NoError(suite.T(), err, "Error should be nil")
+
+		respAsMessage := &pb.Message{}
+		err = proto.Unmarshal(resp, respAsMessage)
+		require.NoError(suite.T(), err, "Error from unmarshalling messages must be nil")
+		require.Equal(suite.T(), respAsMessage.GetType(), message.MSG_TYPE_OK)
+	}
+
+	// Invalid messages
+	m := &pb.Message{
+		Type: "Unknown type",
+	}
+
+	data, err := proto.Marshal(m)
+	require.NoError(suite.T(), err, "Error from marshalling messages must be nil")
+
+	resp, err := suite.ds.messageHandler(data)
+	require.EqualError(suite.T(), err, ErrUnknownMessageType.Error(), "Expected error, got nil instead")
+	require.Empty(suite.T(), resp)
+	
+	// Try a nil node
+	m = &pb.Message{
+		Type: message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
+		Sender: nil,
+	}
+
+	data, err = proto.Marshal(m)
+	require.NoError(suite.T(), err, "Error from marshalling messages must be nil")
+
+	resp, err = suite.ds.messageHandler(data)
+	require.EqualError(suite.T(), err, ErrDatasetLookupInsert.Error(), "Expected error, got nil instead")
+	require.Empty(suite.T(), resp)
 }
 
 func (suite *DirectoryServerSuite) TestDirectoryServerHandshake() {
-	/*	// Add nil node
-		resp, err := suite.ds.Handshake(context.Background(), nil)
-		require.Empty(suite.T(), resp)
-		require.Error(suite.T(), err)
+	// Create a dummy node to handshake the directory server
+	node := &pb.Node{
+		Name: "node a",
+		IfritAddress: "127.0.0.1:8500",
+		Id: []byte("0909efe23rei23i"),
+		HttpsAddress: "127.0.1.1",
+		Port: 8000,
+		BootTime: pbtime.Now(),
+	}
 
-		// Add random nodes and check the response
-		for _, n := range suite.nodes {
-			resp, err := suite.ds.Handshake(context.Background(), n.PbNode())
-			require.NoError(suite.T(), err)
-			require.NotEqual(suite.T(), resp.Ip, nil)
-			require.NotEqual(suite.T(), resp.Id, nil)
-		}
+	resp, err := suite.ds.Handshake(context.Background(), node)
+	require.NoError(suite.T(), err, "Error from creating new directory server must be nil")
+	require.Equal(suite.T(), resp.GetIp(), "127.0.1.1:0")
+	
+	// Nil node
+	resp, err = suite.ds.Handshake(context.Background(), nil)
+	require.Error(suite.T(), err, "Error should be non-nil")
+	require.Empty(suite.T(), resp)
 
-		// Add same node to trigger duplicate error
-		resp, err = suite.ds.Handshake(context.Background(), suite.nodes[0].PbNode())
-		require.Empty(suite.T(), resp)
-		require.Error(suite.T(), err)*/
+	// Node without name
+	node = &pb.Node{
+		Name: "",
+		IfritAddress: "127.0.0.1:8500",
+		Id: []byte("0909efe23rei23i"),
+		HttpsAddress: "127.0.1.1",
+		Port: 8000,
+		BootTime: pbtime.Now(),
+	}
+
+	resp, err = suite.ds.Handshake(context.Background(), node)
+	require.EqualError(suite.T(), err, ErrAddNetworkNode.Error(), "Expected error, got nil instead")
+	require.Empty(suite.T(), resp)
 }
 
 func TestDirectoryServerSuite(t *testing.T) {
@@ -170,7 +226,13 @@ func TestDirectoryServerSuite(t *testing.T) {
 }
 
 func (suite *DirectoryServerSuite) TestStart() {
-	//suite.ds.Start()
+	suite.ds.Start()
+}
+
+func (suite *DirectoryServerSuite) TestPbNode() {
+	node := suite.ds.pbNode()
+	require.NotEmptyf(suite.T(), node, "Expected node to be non-empty")
+	require.Equal(suite.T(), node.GetName(), DirectoryServerCoreName)
 }
 
 func (suite *DirectoryServerSuite) TestShutdownDirectoryServer() {
@@ -282,6 +344,14 @@ func (ds *dsLookupServiceStub) RemoveDatasetLookupEntry(datasetId string) error 
 }
 
 func (ds *dsLookupServiceStub) InsertDatasetLookupEntry(datasetId string, nodeName string) error {
+	if datasetId == "" {
+		return ErrDatasetLookupInsert
+	}
+
+	if nodeName == "" {
+		return ErrDatasetLookupInsert
+	}
+
 	return nil
 }
 
@@ -305,6 +375,14 @@ func (m *membershipManagerStub) NetworkNode(nodeId string) *pb.Node {
 }
 
 func (m *membershipManagerStub) AddNetworkNode(nodeId string, node *pb.Node) error {
+	if nodeId == "" {
+		return ErrAddNetworkNode
+	}
+
+	if node == nil {
+		return ErrAddNetworkNode
+	}
+
 	return nil
 }
 
@@ -323,12 +401,32 @@ func (ds *datasetCheckoutManagerStub) CheckoutDataset(datasetId string, checkout
 	return nil
 }
 
-func (ds *datasetCheckoutManagerStub) DatasetIsCheckedOut(datasetId string, client *pb.Client) bool {
+func (ds *datasetCheckoutManagerStub) DatasetIsCheckedOut(datasetId string) bool {
+	return false
+}
+
+func (ds *datasetCheckoutManagerStub) DatasetIsCheckedOutByClient(datasetId string, client *pb.Client) bool {
 	return false
 }
 
 func (ds *datasetCheckoutManagerStub) DatasetCheckouts(datasetId string) ([]*pb.DatasetCheckout, error) {
 	return nil, nil
+}
+
+type gossipObserverStub struct {
+
+}
+
+func (s *gossipObserverStub) InsertObservedGossip(g *pb.GossipMessage) error {
+	return nil
+}
+
+func (s *gossipObserverStub) GossipIsObserved(g *pb.GossipMessage) bool {
+	return false
+}
+
+func (s *gossipObserverStub) InsertAppliedGossipMessage(msg *pb.GossipMessage) error {
+	return nil
 }
 
 func setupCA() error {
@@ -364,4 +462,110 @@ func setupCA() error {
 	go lohpiCa.Start(8301)
 
 	return nil
+}
+
+// SETUP BELOW THIS LINE
+
+func nodeA() (*node.NodeCore, error) {
+	/*
+	sqlConnString := "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable"
+
+	nodeAConfig := &node.Config{
+		Name:                   "nodeA",
+		SQLConnectionString:    sqlConnString,
+		Port:                   0,
+		PolicySyncInterval:		time.Second * 100,
+		DatasetSyncInterval:    time.Second * 100,
+		DatasetIdentifiersSyncInterval: time.Second * 100,
+		CheckedOutDatasetPolicySyncInterval: time.Second * 100,
+		Hostname:				"127.0.1.1",
+		IfritTCPPort: 			0,
+		IfritUDPPort: 			0,
+	}
+
+	// Crypto unit
+	cryptoUnitConfig := &comm.CryptoUnitConfig{
+		Identity: pkix.Name{
+			Country: []string{"NO"},
+			Locality: []string{
+				fmt.Sprintf("%s:%d", "127.0.1.1", 0), 
+			},
+		},
+		CaAddr: "127.0.1.1:8301",
+		Hostnames: []string{"127.0.1.1"},
+	}
+
+	cu, err := comm.NewCu(CryptoDummyDir, cryptoUnitConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Dataset manager service
+/*	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
+		SQLConnectionString: "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable",
+	}
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit("node1", datasetIndexerUnitConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Checkout manager
+	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
+		SQLConnectionString: "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable",
+	}
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("node1", dsCheckoutManagerConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	node, err := node.NewNodeCore(cu, &policyLoggerStub{}, dsManager, &stateSyncerStub{}, dsCheckoutManager, nodeAConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return node, nil*/
+	return nil, nil
+}
+
+func setupNode(node *node.NodeCore) error {
+/*	opts := &node.DatasetIndexingOptions {
+		AllowMultipleCheckouts: true,
+	}
+
+	if err := n.nodeCore.IndexDataset(datasetId, opts); err != nil {
+		return err
+	}*/
+
+	return nil
+}
+
+type policyLoggerStub struct {
+
+}
+
+func (p *policyLoggerStub) InsertObservedGossip(g *pb.GossipMessage) error {
+	return nil
+}
+
+func (p *policyLoggerStub) GossipIsObserved(g *pb.GossipMessage) bool {
+	return false
+}
+
+func (p *policyLoggerStub) InsertAppliedGossipMessage(msg *pb.GossipMessage) error {
+	return nil
+}
+
+type stateSyncerStub struct {
+
+}
+
+func (s *stateSyncerStub) RegisterIfritClient(client *ifrit.Client)  {
+}
+
+func (s *stateSyncerStub) SynchronizeDatasetIdentifiers(ctx context.Context, identifiers []string, remoteAddr string) error {
+	return nil
+}
+
+func (s *stateSyncerStub) SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error) {
+	return nil, nil
 }

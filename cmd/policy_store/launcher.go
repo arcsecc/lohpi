@@ -20,7 +20,7 @@ var config = struct {
 	Name        				string 	`default:"Lohpi Policy store"`
 	PolicyStoreGitRepository  	string 	`default:"/tmp/lohpi/policy_store/policies"`
 	Hostname       				string 	`default:"127.0.1.1"`
-	GossipInterval 				uint32 	`default:"60"`
+	GossipInterval 				int 	`default:"60"`
 	HTTPPort      				int    	`default:"8083"`
 	GRPCPort					int 	`default:"8084"`
 	MulticastAcceptanceLevel 	float64 `default:0.5`
@@ -48,11 +48,11 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Policy store instance")
 	args.Parse(os.Args[1:])
 
-	log.SetLevel(log.ErrorLevel)
+//	log.SetLevel(log.ErrorLevel)
 
 	configor.New(&configor.Config{
 		Debug:                true,
-		ENVPrefix:            "DIRECTORYSERVER",
+		ENVPrefix:            "POLICYSTORE",
 		ErrorOnUnmatchedKeys: true}).Load(&config, psConfigFile)
 
 	config, err := getPolicyStoreConfig()

@@ -82,7 +82,7 @@ func (d *DatasetCheckoutServiceUnit) CheckoutDataset(datasetId string, checkout 
 	return nil
 }
 
-func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOut(datasetId string, client *pb.Client) bool {
+func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOutByClient(datasetId string, client *pb.Client) bool {
 	if datasetId == "" {
 		log.WithFields(checkoutLogFields).Error(errNoDatasetId.Error())
 		return false
@@ -94,6 +94,20 @@ func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOut(datasetId string, clien
 	}
 
 	exists, err := d.dbDatasetIsCheckedOutByClient(datasetId, client)
+	if err != nil {
+		log.WithFields(checkoutLogFields).Error(err.Error())
+	}
+
+	return exists
+}
+
+func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOut(datasetId string) bool {
+	if datasetId == "" {
+		log.WithFields(checkoutLogFields).Error(errNoDatasetId.Error())
+		return false
+	}
+
+	exists, err := d.dbDatasetIsCheckedOut(datasetId)
 	if err != nil {
 		log.WithFields(checkoutLogFields).Error(err.Error())
 	}

@@ -7,6 +7,7 @@ import (
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
+	"github.com/arcsecc/lohpi/core/policyobserver"
 	"github.com/go-redis/redis/v8"
 
 	"time"
@@ -180,7 +181,17 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		return nil, err
 	}
 
-	dsCore, err := directoryserver.NewDirectoryServerCore(cu, datasetLookupService, memManager, dsCheckoutManager, ds.conf)
+	// Policy observer 
+	gossipObsConfig := &policyobserver.PolicyObserverUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
+	}
+
+	gossipObs, err := policyobserver.NewPolicyObserverUnit("directory_server", gossipObsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, ds.conf)
 	if err != nil {
 		return nil, err
 	}

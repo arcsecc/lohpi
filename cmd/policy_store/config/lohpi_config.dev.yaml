@@ -8,6 +8,7 @@ azuretenantid: "c628abe3-0fe1-4381-bcc0-4721d4387973"
 azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
 azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
 lohpicryptounitworkingdirectory: "crypto/dev/lohpi"
-ifritcryptounitworkingdirectory: ""
+ifritcryptounitworkingdirectory: "kake"
 ifrittcpport: 6000
 ifritudpport: 6001
+gossipinterval: 10

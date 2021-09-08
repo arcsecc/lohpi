@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"encoding/json"
+	"net"
 	"errors"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"fmt"
@@ -319,30 +320,16 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		Infoln("getDataset HTTP handler invoked")
 
 	defer r.Body.Close()
-	token, err := getBearerToken(r)
-	if err != nil {
-		log.WithFields(httpLogFields).Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	pbClient, err := jwtTokenToPbClient(string(token))
-	if err != nil {
-		log.WithFields(httpLogFields).Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
-		return
-	}
 
 	datasetId := strings.Split(r.URL.Path, "/dataset/data/")[1]
 	if !n.dsManager.DatasetExists(datasetId) {
-		
 		err := fmt.Errorf("Dataset '%s' is not indexed by the server", datasetId)
 		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
-	// If multiple checkouts are allowed...
+	// TODO: disallow if dataset has been checked out by same client
 	policy := n.dsManager.GetDatasetPolicy(datasetId)
 	if !policy.GetContent() {
 		log.WithFields(httpLogFields).Error(errNoDatasetAccessDenied.Error())
@@ -350,6 +337,14 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pbClient, err := exstractPbClient(r)
+	if err != nil {
+		log.Infoln(err.Error())
+		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// All information we need about the dataset checkout event is embedded in this object
 	checkout := &pb.DatasetCheckout{
 		DatasetIdentifier: datasetId,
 		DateCheckout: pbtime.Now(),
@@ -594,4 +589,61 @@ func (n *NodeCore) getPolicyVersion(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+func exstractPbClient(r *http.Request) (*pb.Client, error) {
+	token, err := getBearerToken(r)
+	if err != nil {
+		return nil, err
+	}
+
+	msg, err := jws.ParseString(string(token))
+	if err != nil {
+		return nil, err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return nil, errors.New("Payload was nil")
+	}
+
+	c := struct {
+		Name         string `json:"name"`
+		Oid          string `json:"oid"`
+		EmailAddress string `json:"email"`
+	}{}
+
+	if err := json.Unmarshal(s, &c); err != nil {
+		return nil, err
+	}
+
+	// Fetch the HTTP headers required to build a protobuf client
+	if len(r.Header.Values("dns_name")) < 1 {
+		return nil, errors.New("dns_name header field was not supplied")
+	}
+
+	var dnsName string = r.Header.Values("dns_name")[0]
+	var macAddress string
+	var ipAddress string
+
+	if len(r.Header.Values("mac_address")) > 0 {
+		macAddress = r.Header.Values("mac_address")[0]
+	}
+
+	// Validate IP address format
+	if len(r.Header.Values("ip_address")) > 0 {
+		ipAddress = r.Header.Values("ip_address")[0]
+		if net.ParseIP(ipAddress) == nil {
+			return nil, fmt.Errorf("IP address %s is invalid\n", ipAddress)
+		}
+	}
+
+	return &pb.Client{
+		Name:         c.Name,
+		ID:           c.Oid,
+		EmailAddress: c.EmailAddress,
+		MacAddress:   macAddress,
+		IpAddress:    ipAddress,
+		DNSName:      dnsName,
+	}, nil
 }

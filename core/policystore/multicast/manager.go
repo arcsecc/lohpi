@@ -203,6 +203,7 @@ func (m *MulticastManager) multicast(c *Config) error {
 	gossipChunks := make([]*pb.GossipMessageBody, 0)
 	// TODO: avoid sizes exceeding 4MB
 
+	// TODO: prune reduntant chunks
 	for p := range m.PolicyChan {
 		gossipChunk := &pb.GossipMessageBody{
 			Policy: &p,

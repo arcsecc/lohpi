@@ -16,6 +16,7 @@ require (
 	github.com/jackc/pgx/v4 v4.13.0
 	github.com/jinzhu/configor v1.2.1
 	github.com/joonnna/ifrit v0.0.0-20210824133306-d5b1be2e1223
+	github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727 // indirect
 	github.com/lestrrat-go/jwx v1.1.4
 	github.com/lib/pq v1.10.2
 	github.com/mattn/go-colorable v0.1.8 // indirect

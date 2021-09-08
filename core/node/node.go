@@ -145,7 +145,7 @@ type NodeCore struct {
 	metadataHandlerFunc clientRequestHandler
 
 	dsManager datasetManager
-	gossipObs gossipObserver
+	policyLog policyLogger
 	stateSync stateSyncer
 	dcManager datasetCheckoutManager
 
@@ -161,10 +161,10 @@ type certManager interface {
 	PublicKey() *ecdsa.PublicKey
 }
 
-type gossipObserver interface {
-	AddGossip(g *pb.GossipMessage) error
+type policyLogger interface {
+	InsertObservedGossip(g *pb.GossipMessage) error
 	GossipIsObserved(g *pb.GossipMessage) bool
-	LatestGossip() *pb.GossipMessageID // TODO fix me!
+	InsertAppliedPolicy(p *pb.Policy) error
 }
 
 type datasetManager interface {
@@ -180,7 +180,8 @@ type datasetManager interface {
 
 type datasetCheckoutManager interface {
 	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
-	DatasetIsCheckedOut(datasetId string, client *pb.Client) bool
+	DatasetIsCheckedOutByClient(datasetId string, client *pb.Client) bool
+	DatasetIsCheckedOut(datasetId string) bool
 	//CheckinDataset(datasetId string, client *pb.Client) error 
 	DatasetCheckouts(datasetId string) ([]*pb.DatasetCheckout, error)
 }
@@ -193,7 +194,7 @@ type stateSyncer interface {
 }
 
 // TODO: reload dateapplied and datecreated from the databases on boot time.
-func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetManager, stateSync stateSyncer, dcManager datasetCheckoutManager, config *Config) (*NodeCore, error) {
+func NewNodeCore(cm certManager, policyLog policyLogger, dsManager datasetManager, stateSync stateSyncer, dcManager datasetCheckoutManager, config *Config) (*NodeCore, error) {
 	if config == nil {
 		return nil, ErrNoConfig
 	}
@@ -237,7 +238,7 @@ func NewNodeCore(cm certManager, gossipObs gossipObserver, dsManager datasetMana
 		psClient:     			  psClient,
 		datasetMap:     		  make(map[string]*pb.Policy),
 		datasetMapLock: 		  sync.RWMutex{},
-		gossipObs: 	  			  gossipObs,
+		policyLog: 	  			  policyLog,
 		dsManager: 				  dsManager,
 		stateSync: 				  stateSync,
 		dcManager: 				  dcManager,
@@ -309,8 +310,6 @@ func (n *NodeCore) startStateSyncer() {
 			if err :=  n.pbSendDatsetIdentifiers(datasetIdentifiers, n.getDirectoryServerIP()); err != nil {
 				log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
 			}
-
-			
 
 			/*deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
 			if err != nil {
@@ -459,6 +458,7 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	log.WithFields(nodeLogFields).
 		WithField("Ifrit RPC message", msg).
 		Infof("Node '%s' got direct message %s\n", n.config().Name, msg.GetType())
+
 	if err := n.verifyMessageSignature(msg); err != nil {
 		log.WithFields(nodeLogFields).Errorln(err.Error())
 		return nil, err
@@ -474,10 +474,19 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
 		// Might avoid calling SetGossipContent for each multicast message received?
 		if err := n.ifritClient.SetGossipContent(data); err != nil {
-			log.WithFields(nodeLogFields).Errorln(err.Error())
+			log.WithFields(nodeLogFields).Error(err.Error())
 		}
-		// Policy observer?
-		return n.processPolicyBatch(msg)
+		
+		if g := msg.GetGossipMessage(); g != nil {
+			if err := n.processPolicyBatch(msg); err != nil {
+				log.Errorln(err.Error())
+			}
+
+			// Insert gossip message 
+			if err := n.policyLog.InsertObservedGossip(g); err != nil {
+				log.Errorln(err.Error())
+			}
+		}
 
 	case message.MSG_TYPE_ROLLBACK_CHECKOUT:
 		n.rollbackCheckout(msg)
@@ -487,8 +496,8 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 
 	default:
 		log.WithFields(nodeLogFields).
-		WithField("Ifrit RPC message", "Unknown message type").
-		Errorf("Unknown message type: %s\n", msg.GetType())
+			WithField("Ifrit RPC message", "Unknown message type").
+			Errorf("Unknown message type: %s\n", msg.GetType())
 	}
 
 	return n.pbMarshalAcknowledgeMessage()
@@ -503,59 +512,55 @@ func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 }
 
 // Check all messages in the gossip batch and see which ones we should apply
-func (n *NodeCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
+func (n *NodeCore) processPolicyBatch(msg *pb.Message) error {
 	if msg.GetGossipMessage() == nil {
 		err := errors.New("Gossip message is nil")
 		log.Errorln(err.Error())
-		return nil, err
+		return err
 	}
 
 	gspMsg := msg.GetGossipMessage()
 	if gspMsg.GetGossipMessageBody() == nil {
 		err := errors.New("Gossip message body is nil")
 		log.Errorln(err.Error())
-		return nil, err
+		return err
 	}
 	
-	wg := &sync.WaitGroup{}
+	// Filter between relevant an irrelevant policies
 	for _, m := range gspMsg.GetGossipMessageBody() {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := n.applyPolicy(m.GetPolicy()); err != nil {
-				log.Errorln(err.Error())
+		policy := m.GetPolicy()
+		if policy == nil {
+			panic("policy was nil")
+		}
+
+		datasetId := policy.GetDatasetIdentifier()
+
+		if n.dsManager.DatasetExists(datasetId) {
+			dataset := n.dsManager.Dataset(datasetId)
+			if dataset == nil {
+				return errors.New("Tried to get dataset description but it was nil")
 			}
-		}()
+
+			if dataset.GetPolicy().GetVersion() >= policy.GetVersion() {
+				log.Infoln("Got an outdated policy. Applies a new version")
+				return nil
+			}
+
+			if err := n.dsManager.SetDatasetPolicy(datasetId, policy); err != nil {
+				return err
+			}
+
+			log.Infof("Changed dataset %s's policy to %s\n", datasetId, policy.GetContent())
+
+			if err := n.policyLog.InsertAppliedPolicy(policy); err != nil {
+				log.Errorln(err.Error())
+				return err
+			}
+		} else {
+			return fmt.Errorf("Dataset %s does not exist", datasetId)
+		}
 	}
 
-	wg.Wait()
-
-	return nil, nil
-}
-
-// Apply the given policy to the correct dataset.
-// TODO: log things better using logrus. 
-func (n *NodeCore) applyPolicy(newPolicy *pb.Policy) error {
-	datasetId := newPolicy.GetDatasetIdentifier()
-	if n.dsManager.DatasetExists(datasetId) {
-		dataset := n.dsManager.Dataset(datasetId)
-		if dataset == nil {
-			return errors.New("Tried to get dataset description but it was nil")
-		}
-
-		if dataset.GetPolicy().GetVersion() >= newPolicy.GetVersion() {
-			log.Infoln("Got an outdated policy. Applies a new version")
-			return nil
-		}
-
-		if err := n.dsManager.SetDatasetPolicy(datasetId, newPolicy); err != nil {
-			return err
-		}
-
-		log.Infof("Changed dataset %s's policy to %s\n", datasetId, newPolicy.GetContent())
-	} else {
-		return fmt.Errorf("Dataset %s does not exist", datasetId)
-	}
 	return nil
 }
 
@@ -590,13 +595,18 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_PROBE:
 		//n.ifritClient.SetGossipContent(data)
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-/*		if !n.policyObs.gossipIsObserved(msg.GetGossipMessage()) {
-			n.policyObs.addObservedGossip(msg.GetGossipMessage())
-			return n.processPolicyBatch(msg)
-		}*/
-		
+		if !n.policyLog.GossipIsObserved(msg.GetGossipMessage()) {
+			if err := n.processPolicyBatch(msg); err != nil {
+				log.Errorln(err.Error())
+			}
+		}
 	default:
 		fmt.Printf("Unknown gossip message type: %s\n", msg.GetType())
+	}
+
+	// Insert observed gossip message
+	if err := n.policyLog.InsertObservedGossip(msg.GetGossipMessage()); err != nil {
+		log.Errorln(err.Error())
 	}
 
 	return nil, nil

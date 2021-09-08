@@ -4,7 +4,7 @@ import (
 	"crypto/x509/pkix"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
-	"github.com/arcsecc/lohpi/core/policygossipobserver"
+	"github.com/arcsecc/lohpi/core/policyobserver"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/node"
 	"github.com/arcsecc/lohpi/core/statesync"
@@ -167,12 +167,10 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	}
 
 	// Policy observer 
-	gossipObsConfig := &policygossipobserver.PolicyGossipObserverConfig{
-		OutputDirectory: config.PolicyObserverWorkingDirectory,
-		LogfilePrefix:   config.Name,
-		Capacity:        10, //config me
+	gossipObsConfig := &policyobserver.PolicyObserverUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
 	}
-	gossipObs, err := policygossipobserver.NewPolicyGossipObserver(gossipObsConfig)
+	gossipObs, err := policyobserver.NewPolicyObserverUnit(config.Name, gossipObsConfig)
 	if err != nil {
 		return nil, err
 	}

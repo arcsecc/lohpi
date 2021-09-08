@@ -76,15 +76,27 @@ func (d *DatasetCheckoutServiceUnit) dbCheckoutDataset(datasetId string, co *pb.
 }
 
 func (d *DatasetCheckoutServiceUnit) dbDatasetIsCheckedOutByClient(datasetId string, client *pb.Client) (bool, error) {
-	var allowed bool
+	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetCheckoutSchema + `.` + d.datsetCheckoutTable + ` WHERE dataset_id = $1 AND client_id = $2 AND
 		client_name = $3 AND mac_address = $4);`
-	err := d.pool.QueryRow(context.Background(), q, datasetId, client.GetID(), client.GetName(), client.GetMacAddress()).Scan(&allowed)
+	err := d.pool.QueryRow(context.Background(), q, datasetId, client.GetID(), client.GetName(), client.GetMacAddress()).Scan(&exists)
 	if err != nil {
 		log.WithFields(checkoutLogFields).Error(err.Error())
 		return false, err
 	}
-	return allowed, nil
+	return exists, nil
+}
+
+func (d *DatasetCheckoutServiceUnit) dbDatasetIsCheckedOut(datasetId string) (bool, error) {
+	var exists bool
+	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetCheckoutSchema + `.` + d.datsetCheckoutTable + ` WHERE dataset_id = $1);`
+
+	err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&exists)
+	if err != nil {
+		log.WithFields(checkoutLogFields).Error(err.Error())
+		return false, err
+	}
+	return exists, nil
 }
 
 func (d *DatasetCheckoutServiceUnit) dbCheckinDataset(datasetId string, client *pb.Client) error {

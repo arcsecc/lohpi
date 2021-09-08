@@ -238,6 +238,7 @@ func (d *DatasetIndexerUnit) dbDatasetExists(datasetId string) (bool, error) {
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + ` WHERE dataset_id = $1);`
 	err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&exists)
 	if err != nil {
+		panic(err)
 		log.WithFields(dbLogFields).
 			WithField("database query", fmt.Sprintf("could not find '%s' in database", datasetId)).
 			Errorln(err.Error())
