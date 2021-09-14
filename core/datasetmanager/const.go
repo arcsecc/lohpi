@@ -17,6 +17,7 @@ var (
 	errNoId 				= errors.New("Id must be set")
 	errNilNode 				= errors.New("Node is nil")
 	errNoNodeName 			= errors.New("Node name is empty")
+	ErrNoIdentifiers 		= errors.New("Dataset identifiers is nil")
 )
 
 var (
@@ -25,6 +26,8 @@ var (
 	ErrInsertDataset    = errors.New("Failed to insert dataset")
 	ErrNoRedisPong = errors.New("Redis' ping response was wrong")
 	ErrInsertPolicy = errors.New("Failed to insert policy")
+	ErrInsertDatasetIdentifiers = errors.New("Inserting dataset identifiers failed")
+	ErrResolveDatasetIdentifiers = errors.New("Resolving dataset identifiers failed") 
 )
 
 // policy_table attributes

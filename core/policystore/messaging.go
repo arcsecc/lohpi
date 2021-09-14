@@ -48,9 +48,9 @@ func (ps *PolicyStoreCore) pbMarshalDatasetsMap(datasetsMap map[string]*pb.Datas
 
 	resp := &pb.Message{
 		Sender: ps.pbNode(), 
-		DatasetCollectionSummary: &pb.DatasetCollectionSummary{
+		/*ifDatasetCollectionSummary: &pb.DatasetCollectionSummary{
 			DatasetMap: datasetsMap,
-		},
+		},*/
 	}
 	
 	if err := ps.pbAddMessageSignature(resp); err != nil {

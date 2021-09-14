@@ -3,6 +3,7 @@ package lohpi
 import (
 	"crypto/x509/pkix"
 	"errors"
+	"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
@@ -24,10 +25,6 @@ type DirectoryServerConfig struct {
 	// The database connection string. Default value is "". If it is not set, the database connection
 	// will not be used. This means that only the in-memory maps will be used for storage.
 	SQLConnectionString string
-
-	// Backup retention time. Default value is 0. If it is zero, backup retentions will not be issued.
-	// NOT USED
-	BackupRetentionTime time.Time
 
 	// Hostname of the node. Default value is "127.0.1.1".
 	HostName string
@@ -52,6 +49,9 @@ type DirectoryServerConfig struct {
 
 	// Ifrit's UDP port. Default value is 6000.
 	IfritUDPPort int
+
+	// Interval in seconds between each dataset identifiers synchronization procedure.
+	DatasetIdentifiersSyncInterval time.Duration
 }
 
 type DirectoryServer struct {
@@ -111,6 +111,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 			IfritTCPPort: 		 config.IfritTCPPort,
 			IfritUDPPort: 		 config.IfritUDPPort,
+			DatasetIdentifiersSyncInterval: config.DatasetIdentifiersSyncInterval,
 		},
 	}
 
@@ -191,7 +192,13 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		return nil, err
 	}
 
-	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, ds.conf)
+	// Policy synchronization service
+	stateSync, err := setsync.NewSetSyncUnit()
+	if err != nil {
+		return nil, err
+	}
+
+	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, stateSync, ds.conf)
 	if err != nil {
 		return nil, err
 	}

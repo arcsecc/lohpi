@@ -156,7 +156,7 @@ func (n *NodeCore) pbAddMessageSignature(msg *pb.Message) error {
 // Returns the protobuf message of the indexed identifiers in this node.
 func (n *NodeCore) pbMarshalDatasetIdentifiers(msg *pb.Message) ([]byte, error) {
 	respMsg := &pb.Message{
-//		StringSlice: n.dsManager.DatasetIdentifiers(),
+		StringSlice: n.dsManager.DatasetIdentifiers(0, 1000),
 	}
 
 	if err := n.pbAddMessageSignature(respMsg); err != nil {
@@ -236,4 +236,22 @@ func (n *NodeCore) pbSendDatasetRevocationUpdate(dataset, policyContent string) 
 	n.ifritClient.SendTo(n.directoryServerIP, data)
 
 	return nil
+}
+
+func (n *NodeCore) pbMarshalDatasetIdentifiersResponse(newIdentifiers []string, staleIdentifiers []string) ([]byte, error) {
+	log.Println("newIdentifiers:", newIdentifiers)
+	log.Println("staleIdentifiers:", staleIdentifiers)
+
+	msg := &pb.Message{
+		DatasetIdentifiersResponse: &pb.DatasetIdentifiersResponse{
+			NewIdentifiers: newIdentifiers,
+			StaleIdentifiers: staleIdentifiers,
+		},
+	}
+
+	if err := n.pbAddMessageSignature(msg); err != nil {
+		return nil, err
+	}
+	
+	return proto.Marshal(msg)
 }

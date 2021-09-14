@@ -184,6 +184,7 @@ func (d *DatasetLookupService) InsertDatasetLookupEntry(datasetId string, nodeNa
 
 	if nodeName == "" {
 		log.WithFields(datasetResolverLogFields).Error(errNoNodeName.Error())
+		return errNoNodeName
 	}
 
 	if err := d.dbInsertDatasetLookupEntry(datasetId, nodeName); err != nil {
@@ -241,7 +242,7 @@ func (d *DatasetLookupService) DatasetNodeExists(datasetId string) bool {
 	exists := d.dbDatasetNodeExists(datasetId)
 	if exists && d.redisClient != nil {
 		log.WithFields(datasetResolverLogFields).
-			Infof(`Found entry in database but not in Redis. Inserting %s into redis`, datasetId)
+			Infof(`Found entry in database but not in Redis. Inserting '%s' into redis`, datasetId)
 
 		node, err := d.dbSelectDatasetNode(datasetId)
 		if err != nil {
@@ -354,8 +355,48 @@ func (d *DatasetLookupService) cacheDatasetIdentifiers() ([]string, error) {
 	return ids, nil
 }
 
+func (d *DatasetLookupService) DatasetIdentifiersAtNode(nodeName string) []string {
+	if nodeName == "" {
+		log.WithFields(datasetResolverLogFields).Error(errNoNodeName.Error())
+		return nil
+	}
+
+	ids, err := d.dbSelectDatasetIdentifiersAtNode(nodeName)
+	if err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return nil
+	}
+	return ids
+}
+
 func (d *DatasetLookupService) DatasetNodeName(datasetId string) string {
 	return ""
+}
+
+func (d *DatasetLookupService) ResolveDatasetIdentifiers(newIdentifiers []string, staleIdentifiers []string, node *pb.Node) error {
+	if node == nil {
+		return errNilNode
+	}
+
+	if len(newIdentifiers) == 0 {
+		log.WithFields(datasetResolverLogFields).Infoln("No dataset identifiers to add")
+	}
+
+	if len(staleIdentifiers) == 0 {
+		log.WithFields(datasetResolverLogFields).Infoln("No dataset identifiers to remove")
+	}
+
+	if err := d.dbRemoveDatasetIdentifiers(staleIdentifiers, node); err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return ErrResolveDatasetIdentifiers	
+	}
+
+	if err := d.dbInsertDatasetIdentifiers(newIdentifiers, node); err != nil {
+		log.WithFields(datasetResolverLogFields).Error(err.Error())
+		return ErrInsertDatasetIdentifiers	
+	}
+
+	return nil
 }
 
 func (d *DatasetLookupService) flushAll() error {

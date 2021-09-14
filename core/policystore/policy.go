@@ -367,15 +367,16 @@ func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 		
 	// TODO: refine me a lot. Move sync logic to a sidecart module
 	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
-		incomingDatasets := msg.GetDatasetCollectionSummary().GetDatasetMap()
+		/*incomingDatasets := msg.GetDatasetCollectionSummary().GetDatasetMap()
 		deltaSet, err := ps.resolveDatasetDeltas(context.Background(), incomingDatasets)
 		if err != nil {
 			log.Errorln(err.Error())
 			return nil, err
 		}
 
-		// Returns a correct set of datasets, along with their policies, to the node. 
-		return ps.pbMarshalDatasetsMap(deltaSet)
+		// Returns a correct set of datasets, along with their policies, to the node. */
+//		return ps.pbMarshalDatasetsMap(deltaSet)
+		return nil, nil
 
 	case message.MSG_TYPE_GET_DATASET_POLICY:
 		return ps.processStorageNodePolicyRequest(msg)

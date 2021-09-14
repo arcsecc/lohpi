@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"time"
 	"github.com/arcsecc/lohpi"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
@@ -26,6 +27,7 @@ var config = struct {
 	Hostname                        string `required:"true"`
 	IfritTCPPort                    int    `required:"true"`
 	IfritUDPPort                    int    `required:"true"`
+	DatasetIdentifiersSyncInterval  int `required:"true"`
 }{}
 
 func main() {
@@ -90,6 +92,7 @@ func getDirectoryServerConfiguration() (*lohpi.DirectoryServerConfig, error) {
 		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 		IfritTCPPort:                    config.IfritTCPPort,
 		IfritUDPPort:                    config.IfritUDPPort,
+		DatasetIdentifiersSyncInterval:	 time.Duration(config.DatasetIdentifiersSyncInterval) * time.Second,
 	}, nil
 }
 

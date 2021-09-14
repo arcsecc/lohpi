@@ -12,3 +12,4 @@ ifritudpport: 5001
 hostname: "127.0.1.1"
 lohpicryptounitworkingdirectory: "crypto/dev/lohpi"
 ifritcryptounitworkingdirectory: "crypto/dev/ifrit"
+datasetidentifierssyncinterval: 1

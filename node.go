@@ -7,7 +7,7 @@ import (
 	"github.com/arcsecc/lohpi/core/policyobserver"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/node"
-	"github.com/arcsecc/lohpi/core/statesync"
+	"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/pkg/errors"
 	"github.com/go-redis/redis/v8"
 _	"github.com/spf13/viper"
@@ -186,7 +186,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	}
 
 	// Policy synchronization service
-	stateSync, err := statesync.NewStateSyncUnit()
+	stateSync, err := setsync.NewSetSyncUnit()
 	if err != nil {
 		return nil, err
 	}

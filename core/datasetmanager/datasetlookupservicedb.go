@@ -161,7 +161,7 @@ func (d *DatasetLookupService) dbSelectDatasetNode(datasetId string) (*pb.Node, 
 // TODO add ranges
 func (d *DatasetLookupService) dbSelectDatasetIdentifiers() []string {
 	q := `SELECT dataset_id FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `;`
-	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+	log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
 
 	rows, err := d.pool.Query(context.Background(), q)
     if err != nil {
@@ -187,3 +187,71 @@ func (d *DatasetLookupService) dbSelectDatasetIdentifiers() []string {
 	return ids
 }
 
+// TODO add ranges
+func (d *DatasetLookupService) dbSelectDatasetIdentifiersAtNode(nodeName string) ([]string, error) {
+	q := `SELECT dataset_id FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `
+		WHERE node_name = $1;`
+	log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
+
+	rows, err := d.pool.Query(context.Background(), q, nodeName)
+    if err != nil {
+		log.WithFields(dbLogFields).Error(err.Error())
+        return nil, err
+    }
+    defer rows.Close()
+    
+	ids := make([]string, 0)
+
+    for rows.Next() {
+        var datasetId string
+        if err := rows.Scan(&datasetId); err != nil {
+			log.WithFields(dbLogFields).Error(err.Error())
+			return nil, err
+        }
+
+		ids = append(ids, datasetId)
+    } 
+
+	log.WithFields(dbLogFields).Infof("Successfully selected dataset identifiers stored by '%s'", nodeName)
+
+	return ids, nil
+}
+
+func (d *DatasetLookupService) dbInsertDatasetIdentifiers(identifiers []string, node *pb.Node) error {
+	for _, i := range identifiers {
+		q := `INSERT INTO ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `
+		(dataset_id, node_name) VALUES ($1, $2)
+		ON CONFLICT (dataset_id) DO UPDATE	
+		SET 
+			dataset_id = $1,
+			node_name = $2
+		WHERE ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `.dataset_id = $1;`
+
+		log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+
+		if _, err := d.pool.Exec(context.Background(), q, i, node.GetName()); err != nil {
+			log.WithFields(dbLogFields).Error(err.Error())
+			continue
+		}
+	}
+
+	return nil
+}
+
+// TODO: optimize me!
+func (d *DatasetLookupService) dbRemoveDatasetIdentifiers(identifiers []string, node *pb.Node) error {
+	for _, i := range identifiers {
+		q := `DELETE FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE dataset_id = $1`
+		
+		cmdTag, err := d.pool.Exec(context.Background(), q, i)
+		if err != nil {
+			log.WithFields(dbLogFields).Error(err.Error())
+			continue
+		}
+
+		if cmdTag.RowsAffected() == 0 {
+			log.Infoln("Zero rows were affected after deletion of dataset with identifier", i)
+		}
+	}
+	return nil
+}

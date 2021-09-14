@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS directory_server_schema.directory_server_dataset_look
 
 CREATE TABLE IF NOT EXISTS directory_server_schema.directory_server_dataset_checkout_table (
     "id" SERIAL PRIMARY KEY,
-	"dataset_id" VARCHAR NOT NULL REFERENCES directory_server_schema.directory_server_dataset_lookup_table(dataset_id),
+	"dataset_id" VARCHAR NOT NULL,
 	"client_id" VARCHAR NOT NULL,	
 	"client_name" VARCHAR NOT NULL,
 	"dns_name" VARCHAR NOT NULL,

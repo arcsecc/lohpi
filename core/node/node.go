@@ -188,8 +188,10 @@ type datasetCheckoutManager interface {
 
 type stateSyncer interface {
 	RegisterIfritClient(client *ifrit.Client) 
-	SynchronizeDatasetIdentifiers(ctx context.Context, identifiers []string, remoteAddr string) error
+	ResolveDatasetIdentifiersDeltas(currentDatasets []string, incomingDatasets []string) ([]string, []string)
+
 	SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error)
+
 	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
 }
 
@@ -301,15 +303,18 @@ func (n *NodeCore) startStateSyncer() {
 	for {
 		select {
 		case <-n.exitChan:
+			// TODO: cleanup everything gracefully
 			log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
 			return
 		case <-time.After(n.config().DatasetIdentifiersSyncInterval):
+			log.Println("Sync ids")
 			// For now, let's sync all identifiers. If the gRPC messages get too big, use iteration and/or streaming.
-			// See Ifrit and gRPC for more information. 
-			datasetIdentifiers := n.dsManager.DatasetIdentifiers(0, 2000)
+			// See Ifrit and gRPC for more information. Set sane range values.
+
+			/*datasetIdentifiers := n.dsManager.DatasetIdentifiers(0, 2000)
 			if err :=  n.pbSendDatsetIdentifiers(datasetIdentifiers, n.getDirectoryServerIP()); err != nil {
 				log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
-			}
+			}*/
 
 			/*deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
 			if err != nil {
@@ -467,6 +472,13 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_GET_NODE_INFO:
 		return []byte(n.String()), nil
+
+	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
+		currentIdentifiers := n.dsManager.DatasetIdentifiers(0, -1)
+		incomingIdentifiers := msg.GetStringSlice()
+		newIdentifiers, staleIdentifiers := n.stateSync.ResolveDatasetIdentifiersDeltas(currentIdentifiers, incomingIdentifiers)
+
+		return n.pbMarshalDatasetIdentifiersResponse(newIdentifiers, staleIdentifiers)
 
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
 		return n.pbMarshalDatasetIdentifiers(msg)

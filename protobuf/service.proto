@@ -35,11 +35,11 @@ message Message {
     //DatasetIdentifierStateRequest datasetIdentifierStateRequest = 11;
 //    DatasetDeltaRequest datasetDeltaRequest = 11;
 //    DatasetDeltaResponse DatasetDeltaResponse = 12;
-    DatasetCollectionSummary datasetCollectionSummary = 13;
+    DatasetIdentifiersResponse datasetIdentifiersResponse = 13;
 
     // Other fields
     string stringValue = 14;
-    repeated string stringSlice = 15;  // Arbitrary ue
+    repeated string stringSlice = 15;  // Arbitrary use
     bytes Bytes = 16;
     repeated bytes BytesSlice = 17;
     bool boolValue = 18;
@@ -163,8 +163,9 @@ message MembershipState {
 // DEFINITIONS BELOW THIS LINE: MOVE TO ANOTHER PACKAGE/FILE
 
 // Send from the node to LDS/PS
-message DatasetCollectionSummary {
-    map<string, Dataset> datasetMap = 2;
+message DatasetIdentifiersResponse {
+    repeated string newIdentifiers = 1;
+    repeated string staleIdentifiers = 2;
 }
 
 /*message DatasetIdentifierStateResponse {

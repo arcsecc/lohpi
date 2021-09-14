@@ -7,7 +7,7 @@ import (
 _	"github.com/go-redis/redis/v8"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policystore"
-	"github.com/arcsecc/lohpi/core/statesync"
+	//"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/arcsecc/lohpi/core/comm"
 	"crypto/x509/pkix"
 	//log "github.com/sirupsen/logrus"
@@ -201,10 +201,10 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	}
 
 	// State syncer
-	stateSync, err := statesync.NewStateSyncUnit()
+/*	stateSync, err := statesync.NewStateSyncUnit()
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	// Membership manager
 	memManagerConfig := &membershipmanager.MembershipManagerUnitConfig{
@@ -231,7 +231,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 		return nil, err
 	}
 	
-	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, stateSync, memManager, dsManager, p.config)
+	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, nil, memManager, dsManager, p.config)
 	if err != nil {
 		return nil, err
 	}
