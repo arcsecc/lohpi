@@ -7,7 +7,8 @@ import (
 	pb "github.com/arcsecc/lohpi/protobuf"
 	_"regexp"
 	log "github.com/sirupsen/logrus"
-	//pbtime "google.golang.org/protobuf/types/known/timestamppb"
+	"time"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (d *DatasetLookupService) dbInsertDatasetLookupEntry(datasetId string, nodeName string) error {
@@ -19,7 +20,7 @@ func (d *DatasetLookupService) dbInsertDatasetLookupEntry(datasetId string, node
 		node_name = $2
 	WHERE ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `.dataset_id = $1;`
 
-	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+	log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
 
 	if _, err := d.pool.Exec(context.Background(), q, datasetId, nodeName); err != nil {
 		log.WithFields(dbLogFields).Error(err.Error())
@@ -32,7 +33,7 @@ func (d *DatasetLookupService) dbDatasetNodeExists(datasetId string) bool {
 	var exists bool
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE dataset_id = $1);`
 
-	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+	log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
 
 	err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&exists)
 	if err != nil {
@@ -50,7 +51,7 @@ func (d *DatasetLookupService) dbRemoveDatasetNode(datasetId string) error {
 	}
 
 	q := `DELETE FROM ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + ` WHERE dataset_id = $1;`
-	log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+	log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
 
 	cmdTag, err := d.pool.Exec(context.Background(), q, datasetId)
 	if err != nil {
@@ -86,10 +87,9 @@ func (d *DatasetLookupService) dbGetAllDatasetNodes() (map[string]*pb.Node, erro
 			continue
         }
 
-		bTime, err := toTimestamppb(boottime)
+		bTime, err := time.Parse(time.RFC1123Z, boottime)
 		if err != nil {
 			log.WithFields(dbLogFields).Error(err.Error())
-			continue
 		}
 
 		node := &pb.Node{
@@ -98,7 +98,7 @@ func (d *DatasetLookupService) dbGetAllDatasetNodes() (map[string]*pb.Node, erro
 			Id: publicId,
 			HttpsAddress: httpsAddress,
 			Port: port,
-			BootTime: bTime,
+			BootTime: pbtime.New(bTime),
 		}
 
 		nodes[datasetId] = node
@@ -116,7 +116,7 @@ func (d *DatasetLookupService) dbSelectDatasetNode(datasetId string) (*pb.Node, 
 		d.datasetLookupSchema + `.` + d.storageNodeTable + `.port, ` +
 		d.datasetLookupSchema + `.` + d.storageNodeTable + `.boottime 
 		FROM ` + d.datasetLookupSchema + `.` + d.storageNodeTable + ` INNER JOIN ` +
-		d.datasetLookupSchema + `.` + d.datasetLookupTable + ` ON (`  +
+		d.datasetLookupSchema + `.` + d.datasetLookupTable + ` ON (` +
 		d.datasetLookupSchema + `.` + d.datasetLookupTable + `.node_name = ` +
 		d.datasetLookupSchema + `.` + d.storageNodeTable + `.node_name AND ` + 
 		d.datasetLookupSchema + `.` + d.datasetLookupTable + `.dataset_id = $1);`
@@ -140,10 +140,9 @@ func (d *DatasetLookupService) dbSelectDatasetNode(datasetId string) (*pb.Node, 
 		return nil, err
 	}
 
-	bTime, err := toTimestamppb(boottime)
+	bTime, err := time.Parse(time.RFC1123Z, boottime)
 	if err != nil {
 		log.WithFields(dbLogFields).Error(err.Error())
-		return nil, err
 	}
 
 	log.WithFields(dbLogFields).Infof("Successfully selected dataset node with dataset identifier '%s'\n", datasetId)
@@ -154,7 +153,7 @@ func (d *DatasetLookupService) dbSelectDatasetNode(datasetId string) (*pb.Node, 
 		Id: publicId,
 		HttpsAddress: httpsAddress,
 		Port: port,
-		BootTime: bTime,
+		BootTime: pbtime.New(bTime),
 	}, nil
 }
 
@@ -227,7 +226,7 @@ func (d *DatasetLookupService) dbInsertDatasetIdentifiers(identifiers []string, 
 			node_name = $2
 		WHERE ` + d.datasetLookupSchema + `.` + d.datasetLookupTable + `.dataset_id = $1;`
 
-		log.WithFields(dbLogFields).Info("Running PSQL query %s\n", q)
+		log.WithFields(dbLogFields).Infof("Running PSQL query %s\n", q)
 
 		if _, err := d.pool.Exec(context.Background(), q, i, node.GetName()); err != nil {
 			log.WithFields(dbLogFields).Error(err.Error())

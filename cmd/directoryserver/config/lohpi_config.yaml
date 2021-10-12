@@ -1,6 +1,7 @@
 httpport: 8080
 grpcport: 6000
-lohpicaaddr: 127.0.1.1:8301
+name: "directory_server"
+lohpicaaddr: lohpi-cauth.norwayeast.azurecontainer.io:8301
 azurekeyvaultname: "lohpi-key-vault"
 azurekeyvaultsecret: "directory-server-db-connection-string-prod"
 azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
@@ -9,6 +10,6 @@ azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
 azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
 ifrittcpport: 5000
 ifritudpport: 8000
-hostname: "lohpi-directoryserver.norwayeast.azurecontainer.io"
-lohpicryptodirectory: "crypto/production/lohpi"
-ifritcryptodirectory: "crypto/production/ifrit"
+hostname: "lohpi-directoryserver-eval.norwayeast.azurecontainer.io"
+lohpicryptounitworkingdirectory: "crypto/production/lohpi"
+ifritcryptounitworkingdirectory: "crypto/production/ifrit"

@@ -44,7 +44,7 @@ func (m *membershipManager) lruNodes() map[string]int {
 // and only if 0 < numDirectRecipients < 4. numDirectRecipients is a whole number (not percetage).
 // TODO: numDirectRecipients tends to live its own life. Fix this!
 func (m *membershipManager) lruMembers(members []string, numDirectRecipients int) ([]string, error) {
-	log.Debugln("Implement lruMembers!")
+	log.Fatal("Implement lruMembers!")
 	return nil, nil
 
 	m.updateLruMembers()
@@ -57,12 +57,10 @@ func (m *membershipManager) lruMembers(members []string, numDirectRecipients int
 
 	// Sanitize input
 	if numDirectRecipients < 0 {
-		log.Println("numDirectRecipients is negative! -", numDirectRecipients)
 		numDirectRecipients = 1
 	}
 
 	if numDirectRecipients > len(m.lruNodes()) {
-		log.Println("numDirectRecipients is greater than n! -", numDirectRecipients)
 		numDirectRecipients = 1
 	}
 
@@ -99,7 +97,6 @@ func (m *membershipManager) lruMembers(members []string, numDirectRecipients int
 			recipients = append(recipients, k)
 			iterations += 1
 			m.lruNodesMap[k] += 1
-			log.Println("In memmanger:", numDirectRecipients)
 			if iterations >= int(numDirectRecipients) {
 				break
 			}
@@ -118,15 +115,6 @@ func (m *membershipManager) AllMembers() []string {
 		}
 	}
 	return members
-}
-
-// Sets the given list as a black-list for Ifrit IP addresses that receive
-// multicast messages. If the internal black-list is empty, all nodes can
-// possibly receive a message.
-func (m *membershipManager) setIgnoredIfritNodes(ignoredIPs map[string]string) {
-	m.ignoredIPLock.Lock()
-	defer m.ignoredIPLock.Unlock()
-	m.ignoredIPAddresses = ignoredIPs
 }
 
 // Update LRU members list by mirroring the underlying Ifrit network membership list
@@ -157,20 +145,21 @@ func (m *membershipManager) updateLruMembers() {
 	}
 }
 
-// TODO: test me
 func (m *membershipManager) randomMembers(members []string, numDirectRecipients int) ([]string, error) {
 	if len(members) == 0 {
-		return nil, errors.New("Members list is empty")
+		err := errors.New("List of members list is empty")
+		log.WithFields(logFields).Error(err.Error())
+		return nil, err
 	}
 
 	if numDirectRecipients < 0 {
-		log.Warnln("numDirectRecipients is negative. Setting it to 1")
 		numDirectRecipients = 1
 	}
 
 	if numDirectRecipients > len(members) {
-		log.Warnln(`numDirectRecipients is greater than number of available members.
-			Sets numDirectRecipients equal to number of available members`)
+		log.WithFields(logFields).Warnln(
+			`Number of direct recipients is greater than number of available members in the network.
+			Sets the number of direct recipients equal to number of available members`)
 		numDirectRecipients = len(members)
 	}
 
@@ -178,16 +167,14 @@ func (m *membershipManager) randomMembers(members []string, numDirectRecipients 
 		numDirectRecipients = 1
 	}
 
-	// Populate 'result' from n random members from 'members'
 	result := make([]string, 0, numDirectRecipients)
-
 	rand.Seed(time.Now().UnixNano())
 	p := rand.Perm(numDirectRecipients)
 	for i := range p {
 		result = append(result, members[i])
 	}
 
-	log.Println("result:", result)
+	log.WithFields(logFields).Infof("Selected %d members as multicast recipients", numDirectRecipients)
 	return result, nil
 }
 

@@ -10,6 +10,7 @@ azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
 ifrittcpport: 5000
 ifritudpport: 5001
 hostname: "127.0.1.1"
+name: "directory_server"
 lohpicryptounitworkingdirectory: "crypto/dev/lohpi"
 ifritcryptounitworkingdirectory: "crypto/dev/ifrit"
 datasetidentifierssyncinterval: 1

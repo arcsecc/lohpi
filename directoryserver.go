@@ -9,8 +9,6 @@ import (
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
 	"github.com/arcsecc/lohpi/core/policyobserver"
-	"github.com/go-redis/redis/v8"
-
 	"time"
 	"fmt"
 )
@@ -86,7 +84,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	}
 
 	if config.LohpiCryptoUnitWorkingDirectory == "" {
-		return nil, errors.New("Lohpi crypto configuration is nil")
+		return nil, errors.New("Lohpi crypto working directory is nil")
 	}
 
 	if config.IfritTCPPort == 0 {
@@ -98,7 +96,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	}
 
 	if config.IfritCryptoUnitWorkingDirectory == "" {
-		return nil, errors.New("Ifrit crypto configuration is nil")
+		return nil, errors.New("Ifrit crypto working directory is nil")
 	}
 
 	ds := &DirectoryServer{
@@ -151,12 +149,6 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	// Dataset manager
 	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		RedisClientOptions: &redis.Options{
-			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6379),
-			Password: "",
-			DB: 0,
-		},
 	}
 	datasetLookupService, err := datasetmanager.NewDatasetLookupService("directory_server", datasetLookupServiceConfig)
 	if err != nil {
@@ -198,7 +190,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		return nil, err
 	}
 
-	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, stateSync, ds.conf)
+	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, stateSync, ds.conf, new)
 	if err != nil {
 		return nil, err
 	}

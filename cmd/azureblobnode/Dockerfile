@@ -24,12 +24,12 @@ COPY ./keyvault.go ./keyvault.go
 COPY ./core/node ./core/node
 COPY ./core/datasetmanager ./core/datasetmanager
 COPY ./core/comm ./core/comm
-COPY ./core/gossipobserver ./core/gossipobserver
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
 COPY ./core/util ./core/util
-COPY ./core/statesync ./core/statesync
+COPY ./core/policyobserver ./core/policyobserver
 COPY ./protobuf ./protobuf
+COPY ./core/setsync ./core/setsync
 COPY ./cmd/azureblobnode/main.go ./cmd/azureblobnode/main.go
 
 # Run test
@@ -56,8 +56,12 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY ./cmd/azureblobnode/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/azureblobnode/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
 COPY ./cmd/azureblobnode/config/lohpi_config.yaml ./config/lohpi_config.yaml
-COPY ./cmd/azureblobnode/crypto/lohpi/*.pem crypto/lohpi/
-COPY ./cmd/azureblobnode/crypto/ifrit/*pem crypto/ifrit/
+COPY ./cmd/azureblobnode/crypto/production/lohpi/owncert.pem crypto/production/lohpi/owncert.pem
+COPY ./cmd/azureblobnode/crypto/production/lohpi/cacert.pem crypto/production/lohpi/cacert.pem
+COPY ./cmd/azureblobnode/crypto/production/lohpi/key.pem crypto/production/lohpi/key.pem
+COPY ./cmd/azureblobnode/crypto/production/ifrit/*.pem crypto/production/ifrit/
 
 # Command to run the executable
-ENTRYPOINT ["/node", "-name", "azureblobnode", "-c", "config/lohpi_config.yaml"]
+ENTRYPOINT ["/node", "-c", "config/lohpi_config.yaml"]
+
+EXPOSE 8000 9000 5000

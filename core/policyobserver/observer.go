@@ -1,8 +1,8 @@
 package policyobserver
 
 import (
-	"strings"
 	"context"
+	"encoding/base64"
 	"errors"
 	log "github.com/sirupsen/logrus"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -102,9 +102,11 @@ func (p *PolicyObserverUnit) GossipIsObserved(msg *pb.GossipMessage) bool {
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + p.gossipObserverSchema + `.` + p.gossipObserverTable + ` WHERE
 	sequence_number = $1 AND policy_store_id = $2 AND date_sent = $3);`
 
-	err := p.pool.QueryRow(context.Background(), q, id.GetSequenceNumber(), strings.ToValidUTF8(id.GetPolicyStoreID(), ""), msg.GetDateSent().String()).Scan(&exists)
+	err := p.pool.QueryRow(context.Background(), q, 
+		id.GetSequenceNumber(), 
+		id.GetPolicyStoreID(), 
+		msg.GetDateSent().AsTime().Format(time.RFC1123Z)).Scan(&exists)
 	if err != nil {
-		panic(err)
 		log.WithFields(observerLogFields).Error(err.Error())
 		return false
 	}
@@ -123,14 +125,16 @@ func (p *PolicyObserverUnit) InsertObservedGossip(msg *pb.GossipMessage) error {
 		return ErrNoMessageID
 	}
 
+	dateSent := msg.GetDateSent().AsTime().Format(time.RFC1123Z)
+
 	q := `INSERT INTO ` + p.gossipObserverSchema + `.` + p.gossipObserverTable + `
 	(sequence_number, date_received, policy_store_id, date_sent) VALUES ($1, $2, $3, $4);`
 
 	_, err := p.pool.Exec(context.Background(), q, 
 		id.GetSequenceNumber(), 
 		time.Now().String(),
-		strings.ToValidUTF8(id.GetPolicyStoreID(), ""), 
-		msg.GetDateSent().String())
+		base64.StdEncoding.EncodeToString(id.GetPolicyStoreID()),
+		dateSent)
 	if err != nil {
 		log.WithFields(observerLogFields).Error(err.Error())
 		return ErrFailedInsertGossip
@@ -147,13 +151,14 @@ func (p *PolicyObserverUnit) InsertAppliedPolicy(policy *pb.Policy) error {
 	}
 
 	q := `INSERT INTO ` + p.gossipObserverSchema + `.` + p.appliedPolicyTable + `
-	(dataset_id, policy_version, date_applied, date_issued) VALUES ($1, $2, $3, $4);`
+	(dataset_id, policy_version, date_created, date_updated, date_applied) VALUES ($1, $2, $3, $4, $5);`
 
 	_, err := p.pool.Exec(context.Background(), q, 
 		policy.GetDatasetIdentifier(),
 		policy.GetVersion(), 
-		policy.GetDateApplied().String(), 
-		policy.GetDateCreated().String())
+		policy.GetDateCreated().String(),
+		policy.GetDateUpdated().String(),
+		time.Now().Format(time.RFC1123Z))
 	if err != nil {
 		log.WithFields(observerLogFields).Error(err.Error())
 		return ErrFailedInsertGossip
@@ -161,5 +166,9 @@ func (p *PolicyObserverUnit) InsertAppliedPolicy(policy *pb.Policy) error {
 	
 	log.WithFields(observerLogFields).Info("Succsessfully inserted policy change")
 		
+	return nil
+}
+
+func (p *PolicyObserverUnit) InsertPolicyGossip(policy *pb.Policy) error {
 	return nil
 }

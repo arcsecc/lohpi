@@ -239,9 +239,6 @@ func (n *NodeCore) pbSendDatasetRevocationUpdate(dataset, policyContent string) 
 }
 
 func (n *NodeCore) pbMarshalDatasetIdentifiersResponse(newIdentifiers []string, staleIdentifiers []string) ([]byte, error) {
-	log.Println("newIdentifiers:", newIdentifiers)
-	log.Println("staleIdentifiers:", staleIdentifiers)
-
 	msg := &pb.Message{
 		DatasetIdentifiersResponse: &pb.DatasetIdentifiersResponse{
 			NewIdentifiers: newIdentifiers,
@@ -254,4 +251,27 @@ func (n *NodeCore) pbMarshalDatasetIdentifiersResponse(newIdentifiers []string, 
 	}
 	
 	return proto.Marshal(msg)
+}
+
+func (n *NodeCore) pbMarshalDatasetCollectionResponse(msg *pb.Message) ([]byte, error) {
+	datasets := n.dsManager.Datasets()
+
+	sets := make([]*pb.Dataset, len(datasets))
+	for _, d := range datasets{
+		sets = append(sets, d)
+	}
+
+	respMsg := &pb.Message{
+		DatasetSyncronization: &pb.DatasetSyncronization{
+			SessionID: msg.GetBytes(),
+			Datasets: sets,
+		},
+	}
+	
+	if err := n.pbAddMessageSignature(respMsg); err != nil {
+		panic(err)
+		return nil, err
+	}
+	
+	return proto.Marshal(respMsg)
 }

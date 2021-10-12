@@ -23,11 +23,12 @@ import (
 )
 
 var config = struct {
-	HTTPPort                int    `default:"9000"`
+	Port                	int    `required:"true"`
 	Hostname         		string `default:"127.0.1.1"`
 	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
 	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
 	LohpiCaAddr             string `default:"127.0.1.1:8301"`
+	Name 					string `required:"true"`
 	AzureKeyVaultName       string `required:"true"`
 	AzureKeyVaultSecret     string `required:"true"`
 	AzureClientSecret       string `required:"true"`
@@ -36,6 +37,9 @@ var config = struct {
 	AzureTenantID           string `required:"true"`
 	AzureStorageAccountName string `required:"true"`
 	AzureStorageAccountKey  string `required:"true"`
+	LohpiCryptoUnitWorkingDirectory string `required:"true"`
+	IfritCryptoUnitWorkingDirectory string `required:"true"`
+	GossipInterval int `required:"true"`
 }{}
 
 type StorageNode struct {
@@ -45,31 +49,23 @@ type StorageNode struct {
 func main() {
 	var configFile string
 	var createNew bool
-	var nodeName string
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// Logfile and name flags
 	args := flag.NewFlagSet("args", flag.ExitOnError)
-	args.StringVar(&nodeName, "name", "", "Human-readable identifier of node.")
-	args.StringVar(&configFile, "c", "", `Configuration file for the node.`)
-	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi node.")
+	args.StringVar(&configFile, "c", "./config/lohpi_config.yaml", `Configuration file for the node.`)
+	args.BoolVar(&createNew, "new", false, "Initialize new Azure blob node instance.")
 	args.Parse(os.Args[1:])
 
 	configor.New(&configor.Config{
 		Debug: true, 
 		ENVPrefix: "PS_NODE"}).Load(&config, configFile)
 
-	// Require node identifier
-	if nodeName == "" {
-		log.Errorln("Missing node identifier. Exiting.")
-		os.Exit(2)
-	}
-
 	var sn *StorageNode
 	var err error
 
-	sn, err = newNodeStorage(nodeName, createNew)
+	sn, err = newNodeStorage(createNew)
 	if err != nil {
 		log.Errorln(err.Error())
 		os.Exit(1)
@@ -87,8 +83,8 @@ func main() {
 	os.Exit(0)
 }
 
-func newNodeStorage(name string, createNew bool) (*StorageNode, error) {
-	c, err := getNodeConfiguration(name)
+func newNodeStorage(createNew bool) (*StorageNode, error) {
+	c, err := getNodeConfiguration()
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +97,8 @@ func newNodeStorage(name string, createNew bool) (*StorageNode, error) {
 	sn := &StorageNode{
 		node: n,
 	}
+
+	log.Println("config.PolicyStoreAddr:", config.PolicyStoreAddr)
 
 	if err := sn.node.HandshakeNetwork(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
 		return nil, err
@@ -214,18 +212,20 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getNodeConfiguration(name string) (*lohpi.NodeConfig, error) {
+func getNodeConfiguration() (*lohpi.NodeConfig, error) {
 	dbConn, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
 	
 	return &lohpi.NodeConfig{
+		Name:                config.Name,
 		Hostname: 		  	 config.Hostname,
 		CaAddress:           config.LohpiCaAddr,
-		Name:                name,
 		SQLConnectionString: dbConn,
-		PolicyObserverWorkingDirectory: ".",
+		LohpiCryptoUnitWorkingDirectory: config.LohpiCryptoUnitWorkingDirectory,
+		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
+		Port: config.Port,
 	}, nil
 }
 

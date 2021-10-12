@@ -27,7 +27,7 @@ var (
 	errNoAddrs            = errors.New("Not enough addresses present in identity")
 	errNoCa               = errors.New("No Lohpi ca address supplied")
 	errNoCryptoUnitConfig = errors.New("No crypto unit config present")
-	errNoPath             = errors.New("Path is not set")
+	errNoPath             = errors.New("Crypto unit path is not set")
 	errNoHostnames        = errors.New("Hostnames is not set")
 )
 

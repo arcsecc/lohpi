@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/util"
+	"github.com/arcsecc/lohpi/core/policystore/multicast"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/gorilla/mux"
 	"github.com/lestrrat-go/jwx/jwa"
@@ -25,12 +26,19 @@ import (
 
 func (ps *PolicyStoreCore) startHttpServer(addr string) error {
 	m := mux.NewRouter()
-	router := m.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
-	router.HandleFunc("/identifiers", ps.getDatasetIdentifiers).Methods("GET")
-	router.HandleFunc("/metadata/{id:.*}", ps.getDatasetMetadata).Methods("GET")
-	router.HandleFunc("/getpolicy/{id:.*}", ps.getObjectPolicy).Methods("GET")
-	router.HandleFunc("/setpolicy/{id:.*}", ps.setObjectPolicy).Methods("PUT")
+	datasetRouter := m.PathPrefix("/dataset").Schemes("HTTP").Subrouter()
+	datasetRouter.HandleFunc("/identifiers", ps.getDatasetIdentifiers).Methods("GET")
+	datasetRouter.HandleFunc("/metadata/{id:.*}", ps.getDatasetMetadata).Methods("GET")
+	datasetRouter.HandleFunc("/getpolicy/{id:.*}", ps.getObjectPolicy).Methods("GET")
+	datasetRouter.HandleFunc("/setpolicy/{id:.*}", ps.setObjectPolicy).Methods("PUT")
 	//dRouter.HandleFunc("/probe}", ps.probe).Methods("GET")
+
+	evalRouter 	:= m.PathPrefix("/evaluation").Schemes("HTTP").Subrouter()
+	evalRouter.HandleFunc("/gossip", ps.gossip).Methods("GET")
+
+	configRouter := m.PathPrefix("/config").Schemes("HTTP").Subrouter()
+	configRouter.HandleFunc("/setconfig", ps.setMulticastConfigHandler).Methods("PUT")
+	configRouter.HandleFunc("/getconfig", ps.getMulticastConfigHandler).Methods("GET")
 
 	handler := cors.AllowAll().Handler(m)
 
@@ -40,11 +48,11 @@ func (ps *PolicyStoreCore) startHttpServer(addr string) error {
 	}
 
 	ps.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      handler,
+		Addr: addr,
+		Handler: handler,
 		WriteTimeout: time.Second * 30,
-		ReadTimeout:  time.Second * 30,
-		IdleTimeout:  time.Second * 60,
+		ReadTimeout: time.Second * 30,
+		IdleTimeout: time.Second * 60,
 		TLSConfig: serverConfig,
 	}
 
@@ -81,12 +89,12 @@ func (ps *PolicyStoreCore) middlewareValidateTokenSignature(next http.Handler) h
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+ ": " + err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		if err := ps.validateTokenSignature(token); err != nil {
-			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+			http.Error(w, http.StatusText(http.StatusBadRequest)+ ": " + err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -148,6 +156,59 @@ func getBearerToken(r *http.Request) ([]byte, error) {
 	return []byte(authHeaderContent[1]), nil
 }
 
+func (ps *PolicyStoreCore) gossip(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	log.Println("Started gossiping")
+	fmt.Fprintln(w, "Started gossiping...")
+	ps.ifritClient.SetGossipContent([]byte("Some gossip content"))
+}
+
+func (ps *PolicyStoreCore) setMulticastConfigHandler(w http.ResponseWriter, r *http.Request) {
+	log.Infoln("Got request to", r.URL.String())
+	defer r.Body.Close()
+
+	reqBody := struct {
+		Sigma int
+		Tau int
+		Phi float64
+	}{}
+
+	if err := util.DecodeJSONBody(w, r, "application/json", &reqBody); err != nil {
+		var e *util.MalformedParserReponse
+		if errors.As(err, &e) {
+			log.Errorln(err.Error())
+			http.Error(w, e.Msg, e.Status)
+		} else {
+			log.Errorln(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	config := &multicast.MulticastConfig{
+		MulticastDirectRecipients: reqBody.Sigma,
+		AcceptanceLevel: reqBody.Phi,
+	}
+	ps.multicastManager.SetMulticastConfiguration(config)
+	ps.PolicyStoreConfig().GossipInterval = time.Duration(reqBody.Tau) * time.Second
+
+	respString := fmt.Sprintf(`Succsessfully set new multicast parameters for policy store. 
+		Sigma: %d\tTau: %d\tPhi: %f`, reqBody.Sigma, time.Duration(reqBody.Tau) * time.Second, reqBody.Phi)
+	log.Info(respString)
+	fmt.Fprintf(w, "%s\n", respString)
+}
+
+func (ps *PolicyStoreCore) getMulticastConfigHandler(w http.ResponseWriter, r *http.Request) {
+	log.Infoln("Got request to", r.URL.String())
+	defer r.Body.Close()
+
+	config := ps.multicastManager.GetMulticastConfiguration()
+	respString := fmt.Sprintf("Current multicast parameters for policy store: Sigma: %d\tTau: %f\tPhi: %f", config.MulticastDirectRecipients, ps.PolicyStoreConfig().GossipInterval.Seconds(), config.AcceptanceLevel)
+	log.Info(respString)
+	fmt.Fprintf(w, "%s\n", respString)
+}
+
 // Returns the dataset identifiers stored in the network
 func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
@@ -173,7 +234,7 @@ func (ps *PolicyStoreCore) getDatasetIdentifiers(w http.ResponseWriter, r *http.
 	_, err := w.Write(b.Bytes())
 	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+ ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -190,7 +251,7 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 	if ds == nil {
 		err := fmt.Errorf("Dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+ ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
@@ -198,7 +259,7 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 	if policy == nil {
 		err := fmt.Errorf("Policy for dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+ ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
@@ -223,7 +284,7 @@ func (ps *PolicyStoreCore) getObjectPolicy(w http.ResponseWriter, r *http.Reques
 	_, err := w.Write(b.Bytes())
 	if err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+ ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
@@ -235,7 +296,7 @@ func (ps *PolicyStoreCore) getDatasetMetadata(w http.ResponseWriter, r *http.Req
 
 	err := errors.New("getDatasetMetadata is not implemented")
 	log.Warnln(err.Error())
-	http.Error(w, http.StatusText(http.StatusNotImplemented)+": "+err.Error(), http.StatusNotImplemented)
+	http.Error(w, http.StatusText(http.StatusNotImplemented)+ ": " + err.Error(), http.StatusNotImplemented)
 }
 
 // Assigns a new policy to the dataset
@@ -248,8 +309,8 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	dataset := ps.dsManager.Dataset(datasetId)
 	if dataset == nil {
 		err := fmt.Errorf("Dataset '%s' is not stored in the network", datasetId)
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusNotFound)+ ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
@@ -275,7 +336,7 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	if oldPolicy == nil {
 		err := fmt.Errorf("Policy for dataset '%s' was not found", datasetId)
 		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+ ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
@@ -284,13 +345,13 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 		Content:          	reqBody.Policy,
 		Version:			oldPolicy.GetVersion() + 1,
 		DateCreated:		oldPolicy.GetDateCreated(),
-		DateApplied:        pbtime.Now(),
+		DateUpdated:        pbtime.Now(),
 	}
 
-	// Store the dataset entry in map
+	// Store the dataset entry 
 	if err := ps.dsManager.SetDatasetPolicy(datasetId, newPolicy); err != nil {
-		log.Infoln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		log.Error(err.Error())
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+ ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -298,15 +359,16 @@ func (ps *PolicyStoreCore) setObjectPolicy(w http.ResponseWriter, r *http.Reques
 	node := ps.dsLookupService.DatasetLookupNode(datasetId)
 	if node == nil {
 		err := fmt.Errorf("The network node that stores the dataset is not available anymore")
+		log.Errorf("A policy was set for a dataset id that does not exist. ID was %s", datasetId)
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound)+": "+err.Error(), http.StatusNotFound)
+		http.Error(w, http.StatusText(http.StatusNotFound)+ ": " + err.Error(), http.StatusNotFound)
 		return
 	}
 
 	// Store the dataset policy in Git
 	if err := ps.gitStorePolicy(node.GetName(), datasetId, newPolicy); err != nil {
 		log.Errorln(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+ ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 

@@ -5,10 +5,7 @@ import (
 	"errors"
 	"fmt"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	"regexp"
 	"time"
-	//"github.com/sirupsen/logrus"
-	"strconv"
 	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	log "github.com/sirupsen/logrus"
 )
@@ -18,17 +15,19 @@ var (
 )
 
 var dbLogFields = log.Fields{
-	"package": "datasetmanagers",
+	"package": "core/datasetmanager",
 	"action": "database client",
 }
 
-func (d *DatasetIndexerUnit) dbSelectAllDatasets() (chan *pb.Dataset, chan error) {
+func (d *DatasetIndexerUnit) dbSelectAllDatasets() (chan *pb.Dataset, chan error, chan struct{}) {
 	dsChan := make(chan *pb.Dataset, 1)
 	errChan := make(chan error, 1)
+	doneChan := make(chan struct{})
 
 	go func() {
 		defer close(dsChan)
 		defer close(errChan)
+		defer close(doneChan)
 		
 		rows, err := d.pool.Query(context.Background(), `SELECT * FROM ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + `;`)
     	if err != nil {
@@ -40,24 +39,22 @@ func (d *DatasetIndexerUnit) dbSelectAllDatasets() (chan *pb.Dataset, chan error
 	
     	for rows.Next() {
 			var id, policyVersion uint64
-    	    var datasetId, dateCreated, dateApplied string
+    	    var datasetId, dateCreated, dateUpdated string
 			var policyContent, allowMultipleCheckout bool
-    	    if err := rows.Scan(&id, &datasetId, &allowMultipleCheckout, &policyContent, &policyVersion, &dateCreated, &dateApplied); err != nil {
+    	    if err := rows.Scan(&id, &datasetId, &allowMultipleCheckout, &policyContent, &policyVersion, &dateCreated, &dateUpdated); err != nil {
 				log.WithFields(dbLogFields).Error(err.Error())
 				continue
     	    }
 
-			created, err := toTimestamppb(dateCreated)
+			created, err := time.Parse(time.RFC1123Z, dateCreated)
 			if err != nil {
 				log.WithFields(dbLogFields).Error(err.Error())
-				continue
 			}
-
-			applied, err := toTimestamppb(dateApplied)
+	  
+			updated, err := time.Parse(time.RFC1123Z, dateUpdated)
 			if err != nil {
 				log.WithFields(dbLogFields).Error(err.Error())
-				continue
-			}	
+			}
 			
 			dsChan <- &pb.Dataset{
 				Identifier: datasetId,
@@ -65,16 +62,18 @@ func (d *DatasetIndexerUnit) dbSelectAllDatasets() (chan *pb.Dataset, chan error
 					DatasetIdentifier: datasetId,
 					Content: policyContent,
 					Version: policyVersion,
-					DateCreated: created,
-					DateApplied: applied,
+					DateCreated: pbtime.New(created),
+					DateUpdated: pbtime.New(updated),
 				},
 			}
     	}
 
+		doneChan <-struct{}{}
+
 		log.WithFields(dbLogFields).Infoln("Succsessfully selected a collection of datasets")
 	}()
 
-	return dsChan, errChan 
+	return dsChan, errChan, doneChan
 }
 
 func (d *DatasetIndexerUnit) dbRemoveDataset(datasetId string) error {
@@ -91,7 +90,7 @@ func (d *DatasetIndexerUnit) dbRemoveDataset(datasetId string) error {
 
 	if commangTag.RowsAffected() != 1 {
 		err := fmt.Errorf("Could not delete dataset with id '%s'", datasetId)
-		log.WithFields(dbLogFields).Error(err)
+		log.WithFields(dbLogFields).Error(err.Error())
 		return err
 	}
 	
@@ -110,18 +109,26 @@ func (d *DatasetIndexerUnit) dbInsertDataset(datasetId string, dataset *pb.Datas
 	}
 
 	q := `INSERT INTO ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + `
-	(dataset_id, allow_multiple_checkout, policy_content, policy_version, date_created, date_applied) VALUES ($1, $2, $3, $4, $5, $6)
-	ON CONFLICT (dataset_id) DO NOTHING;		`
+	(dataset_id, allow_multiple_checkout, policy_content, policy_version, date_created, date_updated) VALUES ($1, $2, $3, $4, $5, $6)
+	ON CONFLICT (dataset_id) DO UPDATE	
+	SET 
+		dataset_id = $1,
+		allow_multiple_checkout = $2,
+		policy_content = $3, 
+		policy_version = $4, 
+		date_created = $5, 
+		date_updated = $6
+	WHERE ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + `.dataset_id = $1;`
 
 	_, err := d.pool.Exec(context.Background(), q, 
 		datasetId, 
 		dataset.GetAllowMultipleCheckouts(),
 		dataset.GetPolicy().GetContent(), 
 		dataset.GetPolicy().GetVersion(),
-		dataset.GetPolicy().GetDateCreated().String(),
-		dataset.GetPolicy().GetDateApplied().String())
+		dataset.GetPolicy().GetDateCreated().AsTime().Format(time.RFC1123Z),
+		dataset.GetPolicy().GetDateUpdated().AsTime().Format(time.RFC1123Z))
 	if err != nil {
-		log.WithFields(dbLogFields).Error(err)
+		log.WithFields(dbLogFields).Error(err.Error())
 		return err
 	}
 
@@ -140,15 +147,17 @@ func (d *DatasetIndexerUnit) dbInsertDatasetPolicy(datasetId string, policy *pb.
 		return errNilPolicy
 	}
 
-	q:= `UPDATE ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + ` SET policy_content = $2, policy_version = $3, date_applied = $4
+	updated := policy.GetDateUpdated().AsTime().Format(time.RFC1123Z)
+
+	q:= `UPDATE ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + ` SET policy_content = $2, policy_version = $3, date_updated = $4
 	WHERE dataset_id = $1;`
 	_, err := d.pool.Exec(context.Background(), q, 
 		datasetId,
 		policy.GetContent(), 
 		policy.GetVersion(),
-		policy.GetDateApplied().String())
+		updated)
 	if err != nil {
-		log.WithFields(dbLogFields).Error(err)
+		log.WithFields(dbLogFields).Error(err.Error())
 		return err
 	}
 	
@@ -156,7 +165,7 @@ func (d *DatasetIndexerUnit) dbInsertDatasetPolicy(datasetId string, policy *pb.
 		WithField("Dataset id", datasetId).
 		WithField("Policy content",	policy.GetContent()).
 		WithField("Policy version",	policy.GetVersion()).
-		WithField("Date applied",	policy.GetDateApplied().String()).
+		WithField("Date updated",	policy.GetDateUpdated().String()).
 		Infof("Succsessfully updated the policy of dataset '%s'\n", datasetId)
 
 	return nil
@@ -167,26 +176,32 @@ func (d *DatasetIndexerUnit) dbSelectDataset(datasetId string) (*pb.Dataset, err
 		return nil, errNoDatasetId
 	}
 
-	q := `SELECT dataset_id, allow_multiple_checkout, policy_content, policy_version, date_created, date_applied FROM ` + 
+	q := `SELECT dataset_id, allow_multiple_checkout, policy_content, policy_version, date_created, date_updated FROM ` + 
 		d.datasetStorageSchema + `.` + d.datasetStorageTable + ` WHERE dataset_id = $1 ;`
 
+	log.WithFields(dbLogFields).
+		WithField("context", "select one dataset").
+		Debugf("Running PSQL query %s\n", q)
+
 	var policyVersion uint64
-	var dataset, dateCreated, dateApplied string
+	var dataset, dateCreated, dateUpdated string
 	var policyContent, allowMultipleCheckout bool
 
-	if err := d.pool.QueryRow(context.Background(),q, datasetId).Scan(&dataset, &allowMultipleCheckout, &policyContent, &policyVersion, &dateCreated, &dateApplied); err != nil {
-		log.WithFields(dbLogFields).Error(err)
+	if err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&dataset, &allowMultipleCheckout, &policyContent, &policyVersion, &dateCreated, &dateUpdated); err != nil {
+		log.WithFields(dbLogFields).Error(err.Error())
 		return nil, err
   	}
 	
-	created, err := toTimestamppb(dateCreated)
+	created, err := time.Parse(time.RFC1123Z, dateCreated)
 	if err != nil {
-		log.WithFields(dbLogFields).Error(err)
+		log.WithFields(dbLogFields).Error(err.Error())
+		return nil, err
 	}
 
-	applied, err := toTimestamppb(dateApplied)
+	updated, err := time.Parse(time.RFC1123Z, dateUpdated)
 	if err != nil {
-		log.WithFields(dbLogFields).Error(err)
+		log.WithFields(dbLogFields).Error(err.Error())
+		return nil, err
 	}
   
 	log.WithFields(dbLogFields).Infof("Succsessfully selected dataset '%s'\n", datasetId)
@@ -197,8 +212,8 @@ func (d *DatasetIndexerUnit) dbSelectDataset(datasetId string) (*pb.Dataset, err
 			DatasetIdentifier: datasetId,
 			Content: policyContent,
 			Version: policyVersion,
-			DateCreated: created,
-			DateApplied: applied,
+			DateCreated: pbtime.New(created),
+			DateUpdated: pbtime.New(updated),
 		},
 		AllowMultipleCheckouts: allowMultipleCheckout,
 	}, nil
@@ -207,7 +222,7 @@ func (d *DatasetIndexerUnit) dbSelectDataset(datasetId string) (*pb.Dataset, err
 func (d *DatasetIndexerUnit) dbSelectDatasetIdentifiers() ([]string, error) {
 	rows, err := d.pool.Query(context.Background(), `SELECT dataset_id FROM ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + `;`)
     if err != nil {
-		log.WithFields(dbLogFields).Error(err)
+		log.WithFields(dbLogFields).Error(err.Error())
         return nil, err
     }
     defer rows.Close()
@@ -217,7 +232,7 @@ func (d *DatasetIndexerUnit) dbSelectDatasetIdentifiers() ([]string, error) {
     for rows.Next() {
         var datasetId string
         if err := rows.Scan(&datasetId); err != nil {
-			log.WithFields(dbLogFields).Error(err)
+			log.WithFields(dbLogFields).Error(err.Error())
 			continue
 		}
 		
@@ -238,7 +253,6 @@ func (d *DatasetIndexerUnit) dbDatasetExists(datasetId string) (bool, error) {
 	q := `SELECT EXISTS ( SELECT 1 FROM ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + ` WHERE dataset_id = $1);`
 	err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&exists)
 	if err != nil {
-		panic(err)
 		log.WithFields(dbLogFields).
 			WithField("database query", fmt.Sprintf("could not find '%s' in database", datasetId)).
 			Errorln(err.Error())
@@ -252,28 +266,26 @@ func (d *DatasetIndexerUnit) dbSelectDatasetPolicy(datasetId string) (*pb.Policy
 		return nil, errNoDatasetId
 	}
 
-	q := `SELECT dataset_id, policy_content, policy_version, date_created, date_applied FROM ` + 
+	q := `SELECT dataset_id, policy_content, policy_version, date_created, date_updated FROM ` + 
 	d.datasetStorageSchema + `.` + d.datasetStorageTable + ` WHERE dataset_id = $1 ;`
 
-	var datasetIdentifier, dateCreated, dateApplied string
+	var datasetIdentifier, dateCreated, dateUpdated string
 	var content bool
 	var version uint64
 	
-	if err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&datasetIdentifier, &content, &version, &dateCreated, &dateApplied); err != nil {
+	if err := d.pool.QueryRow(context.Background(), q, datasetId).Scan(&datasetIdentifier, &content, &version, &dateCreated, &dateUpdated); err != nil {
 		log.WithFields(dbLogFields)
 		return nil, err
   	}
 	
-	created, err := toTimestamppb(dateCreated)
+	created, err := time.Parse(time.RFC1123Z, dateCreated)
 	if err != nil {
-		log.WithFields(dbLogFields)
-		return nil, err
+		log.WithFields(dbLogFields).Error(err.Error())
 	}
-
-	applied, err := toTimestamppb(dateApplied)
+  
+	updated, err := time.Parse(time.RFC1123Z, dateUpdated)
 	if err != nil {
-		log.WithFields(dbLogFields)
-		return nil, err
+		log.WithFields(dbLogFields).Error(err.Error())
 	}
 
 	log.WithFields(dbLogFields).Infof("Succsessfully selected the policy of dataset '%s'\n", datasetId)
@@ -282,35 +294,70 @@ func (d *DatasetIndexerUnit) dbSelectDatasetPolicy(datasetId string) (*pb.Policy
 		DatasetIdentifier: datasetId,
 		Content: content,
 		Version: version,
-		DateCreated: created,
-		DateApplied: applied,
+		DateCreated: pbtime.New(created),
+		DateUpdated: pbtime.New(updated),
 	}, nil
 }
 
-func toTimestamppb(tString string) (*pbtime.Timestamp, error) {
-	if tString == "" {
-		return nil, fmt.Errorf("Timestamp string is empty!")
+func (d *DatasetIndexerUnit) dbSelectAllDatasetsAtNode(node *pb.Node) ([]*pb.Dataset, error) {
+	if node == nil {
+		return nil, errNilNode
 	}
 
-	rxp := regexp.MustCompile("[0-9]+").FindAllStringSubmatch(tString, -1)
-	if len(rxp) == 0 {
-		err := fmt.Errorf("Regexp string is empty!")
-		log.Error(err.Error())
-		return nil, err
+	q := `SELECT ` + 
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.dataset_id, ` + 
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.allow_multiple_checkout, ` + 
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.policy_content, ` + 
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.policy_version, ` + 
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.date_created, ` + 
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.date_updated
+	FROM ` + d.datasetStorageSchema + `.` + d.datasetStorageTable + ` INNER JOIN ` + 
+	d.datasetStorageSchema + `.` + d.datasetLookupTable  + ` ON (` +
+	d.datasetStorageSchema + `.` + d.datasetStorageTable + `.dataset_id = ` + 
+	d.datasetStorageSchema + `.` + d.datasetLookupTable + `.dataset_id AND ` + 
+	d.datasetStorageSchema + `.` + d.datasetLookupTable + `.node_name = $1);`
+
+	rows, err := d.pool.Query(context.Background(), q, node.GetName())
+    if err != nil {
+		log.WithFields(dbLogFields).Error(err.Error())
+        return nil, err
+    }
+
+	sets := make([]*pb.Dataset, 0)
+
+	for rows.Next() {
+		var policyVersion uint64
+		var datasetId, dateCreated, dateUpdated string
+		var policyContent, allowMultipleCheckout bool
+		if err := rows.Scan(&datasetId, &allowMultipleCheckout, &policyContent, &policyVersion, &dateCreated, &dateUpdated); err != nil {
+			log.WithFields(dbLogFields).Error(err.Error())
+			continue
+		}
+
+		created, err := time.Parse(time.RFC1123Z, dateCreated)
+		if err != nil {
+			log.WithFields(dbLogFields).Error(err.Error())
+		}
+  
+		updated, err := time.Parse(time.RFC1123Z, dateUpdated)
+		if err != nil {
+			log.WithFields(dbLogFields).Error(err.Error())
+		}
+
+		set := &pb.Dataset{
+			Identifier: datasetId,
+			AllowMultipleCheckouts: allowMultipleCheckout,
+			Policy: &pb.Policy{
+				DatasetIdentifier: datasetId,
+				Content: policyContent,
+				Version: policyVersion,
+				DateCreated: pbtime.New(created),
+				DateUpdated: pbtime.New(updated),
+			},
+		}
+
+		sets = append(sets, set)
 	}
 
-	secsAsString := rxp[0][0]
-	nanosAsString := rxp[1][0]		
-
-	seconds, err := strconv.ParseInt(secsAsString, 10, 64)
-	if err != nil {
-		return nil, err
-	}
-
-	nanos, err := strconv.ParseInt(nanosAsString, 10, 64)
-	if err != nil {
-		return nil, err
-	}
-
-	return pbtime.New(time.Unix(seconds, nanos)), nil
+	return sets, nil
 }

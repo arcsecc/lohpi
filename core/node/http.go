@@ -48,7 +48,7 @@ func (n *NodeCore) startHTTPServer() error {
 		Methods("GET")
 
 	dRouter.HandleFunc("/info/{id:.*}", n.getDatasetSummary).Methods("GET")
-	dRouter.HandleFunc("/new_policy/{id:.*}", n.setDatasetPolicy).Methods("PUT")
+	dRouter.HandleFunc("/setpolicy/{id:.*}", n.setDatasetPolicy).Methods("PUT")
 	dRouter.HandleFunc("/data/{id:.*}", n.getDataset).Methods("GET")
 	dRouter.HandleFunc("/metadata/{id:.*}", n.getMetadata).Methods("GET")
 	dRouter.HandleFunc("/is_available/{id:.*}", n.datasetIsAvailable).Methods("GET")
@@ -116,7 +116,6 @@ func (n *NodeCore) middlewareValidateTokenSignature(next http.Handler) http.Hand
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, err := getBearerToken(r)
 		if err != nil {
-			panic(err)
 			http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -183,14 +182,6 @@ func (n *NodeCore) test(w http.ResponseWriter, r *http.Request) {
 
 func (n *NodeCore) datasetIsAvailable(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	token, err := getBearerToken(r)
-	if err != nil {
-		log.WithFields(httpLogFields).Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	_ = token
 
 	datasetId := strings.Split(r.URL.Path, "/dataset/is_available/")[1]
 	if !n.dsManager.DatasetExists(datasetId) {
@@ -219,14 +210,13 @@ func (n *NodeCore) datasetIsAvailable(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	r.Header.Add("Content-Length", strconv.Itoa(len(b.Bytes())))
 
-	_, err = w.Write(b.Bytes())
+	_, err := w.Write(b.Bytes())
 	if err != nil {
 		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 }
-
 
 func (n *NodeCore) removeDataset(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
@@ -333,7 +323,8 @@ func (n *NodeCore) getDataset(w http.ResponseWriter, r *http.Request) {
 	policy := n.dsManager.GetDatasetPolicy(datasetId)
 	if !policy.GetContent() {
 		log.WithFields(httpLogFields).Error(errNoDatasetAccessDenied.Error())
-		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + errNoDatasetAccessDenied.Error(), http.StatusUnauthorized)
+		errMsg := fmt.Sprintf("You do not have access to dataset with id '%s'", datasetId)
+		http.Error(w, http.StatusText(http.StatusUnauthorized) + ": " + errMsg, http.StatusUnauthorized)
 		return
 	}
 
@@ -488,13 +479,6 @@ func (n *NodeCore) getDatasetSummary(w http.ResponseWriter, r *http.Request) {
 	}*/
 }
 
-/* Assigns a new policy to the dataset. The request body must be a JSON object with a string similar to this:
- *{
- *	"policy": true/false
- *}
- */
-// TODO: restrict this function only to be used to set the initial dataset policy.
-// SHOULD NOT BE USED
 func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	log.Infoln("Got request to", r.URL.String())
 	defer r.Body.Close()
@@ -507,17 +491,11 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the dataset if
-	dataset := mux.Vars(r)["id"]
-	if dataset == "" {
-		err := errors.New("Missing dataset identifier")
-		log.WithFields(httpLogFields).Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
-		return
-	}
+	datasetId := mux.Vars(r)["id"]
 
 	// Check if dataset exists in the external repository
-	if !n.dsManager.DatasetExists(dataset) {
-		err := fmt.Errorf("Dataset '%s' is not stored in this node", dataset)
+	if !n.dsManager.DatasetExists(datasetId) {
+		err := fmt.Errorf("Dataset '%s' is not stored in this node", datasetId)
 		log.WithFields(httpLogFields).Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusNotFound) + ": " + err.Error(), http.StatusNotFound)
 		return
@@ -525,7 +503,7 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Destination struct
 	reqBody := struct {
-		Policy string
+		Policy bool
 	}{}
 
 	if err := util.DecodeJSONBody(w, r, "application/json", &reqBody); err != nil {
@@ -540,12 +518,21 @@ func (n *NodeCore) setDatasetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	currentDataset := n.dsManager.Dataset(datasetId)
 
-/*	if err := n.dsManager.SetDatasetPolicy(dataset, reqBody.Policy); err != nil {
+	newPolicy := &pb.Policy{
+		DatasetIdentifier: 	datasetId,
+		Content:          	reqBody.Policy,
+		Version:			currentDataset.GetPolicy().GetVersion() + 1,
+		DateCreated:		currentDataset.GetPolicy().GetDateCreated(),
+		DateUpdated:        pbtime.Now(),
+	}
+
+	if err := n.dsManager.SetDatasetPolicy(datasetId, newPolicy); err != nil {
 		log.Warnln(err.Error())
-	}*/
+	}
 
-	respMsg := "Successfully set a new policy for " + dataset + "\n"
+	respMsg := "Successfully set a new policy for " + datasetId + "\n"
 	w.WriteHeader(http.StatusCreated)
 	w.Header().Set("Content-Type", "application/text")
 	w.Header().Set("Content-Length", strconv.Itoa(len(respMsg)))

@@ -17,7 +17,7 @@ var DefaultPermission = os.FileMode(0750)
 // Config contains all configurable parameters for the Ifrit CA daemon.
 var config = struct {
 	CaAddress 					string 	`default:"127.0.1.1:8301"`
-	Name        				string 	`default:"Lohpi Policy store"`
+	Name        				string 	`default:"policy_store"`
 	PolicyStoreGitRepository  	string 	`default:"/tmp/lohpi/policy_store/policies"`
 	Hostname       				string 	`default:"127.0.1.1"`
 	GossipInterval 				int 	`default:"60"`
@@ -84,7 +84,7 @@ func getPolicyStoreConfig() (*lohpi.PolicyStoreConfig, error) {
 	return &lohpi.PolicyStoreConfig{
 		Hostname: config.Hostname,
 		CaAddress: config.CaAddress,
-		Name: "Policy store",
+		Name: config.Name,
 		PolicyStoreGitRepository: config.PolicyStoreGitRepository,		
 		GossipInterval: time.Duration(config.GossipInterval) * time.Second,
 		HTTPPort: config.HTTPPort,

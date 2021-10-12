@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
-_	"github.com/go-redis/redis/v8"
+	"github.com/arcsecc/lohpi/core/policyobserver"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policystore"
-	//"github.com/arcsecc/lohpi/core/setsync"
+	"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/arcsecc/lohpi/core/comm"
 	"crypto/x509/pkix"
 	//log "github.com/sirupsen/logrus"
@@ -15,7 +15,7 @@ _	"github.com/go-redis/redis/v8"
 )
 
 var (
-	errNoConnectionString = errors.New("SQL connection is not set")
+	errNoSQLConnectionString = errors.New("SQL connection is not set")
 )
 
 type PolicyStoreConfig struct {
@@ -83,7 +83,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	}
 
 	if config.Name == "" {
-		config.Name = "Lohpi directory server"
+		config.Name = "policy_store"
 	}
 
 	if config.CaAddress == "" {
@@ -127,7 +127,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	}
 
 	if config.SQLConnectionString == "" {
-		return nil, errNoConnectionString
+		return nil, errNoSQLConnectionString
 	}
 
 	if config.LohpiCryptoUnitWorkingDirectory == "" {
@@ -149,6 +149,7 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 			IfritTCPPort: 		 	  config.IfritTCPPort,
 			IfritUDPPort: 		 	  config.IfritUDPPort,
 			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
+			SQLConnectionString: config.SQLConnectionString,
 		},
 	}
 
@@ -188,30 +189,18 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	// Dataset manager
 	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		/*RedisClientOptions: &redis.Options{
-			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6380),
-			Password: "",
-			DB: 0,
-		},*/
 	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService("policy_store", datasetLookupServiceConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService(config.Name, datasetLookupServiceConfig)
 	if err != nil {
 		return nil, err
 	}
-
-	// State syncer
-/*	stateSync, err := statesync.NewStateSyncUnit()
-	if err != nil {
-		return nil, err
-	}*/
 
 	// Membership manager
 	memManagerConfig := &membershipmanager.MembershipManagerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 		UseDB: true,
 	}
-	memManager, err := membershipmanager.NewMembershipManager("policy_store", memManagerConfig)
+	memManager, err := membershipmanager.NewMembershipManager(config.Name, memManagerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -219,19 +208,36 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 	// Dataset manager service
 	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		/*RedisClientOptions: &redis.Options{
-			Network: "tcp",
-			Addr: fmt.Sprintf("%s:%d", "127.0.1.1", 6380),
-			Password: "",
-			DB: 1,
-		},*/
 	}
-	dsManager, err := datasetmanager.NewDatasetIndexerUnit("policy_store", datasetIndexerUnitConfig)
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, datasetIndexerUnitConfig)
 	if err != nil {
 		return nil, err
 	}
 	
-	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, nil, memManager, dsManager, p.config)
+	// Policy synchronization service
+	stateSync, err := setsync.NewSetSyncUnit()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := stateSync.InitializeReconciliationDatabaseConnection(config.SQLConnectionString); err != nil {
+		return nil, err
+	}
+
+	if err := stateSync.InitializePolicyReconciliationTable(config.Name); err != nil {
+		return nil, err
+	}
+
+	// Policy observer 
+	policyObserverConfig := &policyobserver.PolicyObserverUnitConfig{
+		SQLConnectionString: config.SQLConnectionString,
+	}
+	policyObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, policyObserverConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, stateSync, memManager, dsManager, p.config, policyObserver, new)
 	if err != nil {
 		return nil, err
 	}

@@ -5,11 +5,8 @@ import (
 	"context"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"time"
-	"regexp"
 	"fmt"
 	"github.com/jackc/pgx/v4"
-	_ "github.com/lib/pq"
-	"strconv"
 	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/sirupsen/logrus"
 )
@@ -39,6 +36,8 @@ func (m *MembershipManagerUnit) dbInsertNetworkNode(nodeId string, node *pb.Node
 		return errNilNode
 	}
 
+	boottime := node.GetBootTime().AsTime().Format(time.RFC1123Z)
+
 	q := `INSERT INTO ` + m.storageNodeSchema + `.` + m.storageNodeTable + `
 	(node_name, ip_address, public_id, https_address, port, boottime) VALUES ($1, $2, $3, $4, $5, $6)
 	ON CONFLICT (node_name) DO UPDATE
@@ -56,7 +55,7 @@ func (m *MembershipManagerUnit) dbInsertNetworkNode(nodeId string, node *pb.Node
 		node.GetId(),
 		node.GetHttpsAddress(), 
 		node.GetPort(), 
-		node.GetBootTime().String())
+		boottime)
 	if err != nil {
 		log.WithFields(dbLogFields).Error(err.Error())
 		return err
@@ -110,21 +109,10 @@ func (m *MembershipManagerUnit) dbSelectAllNetworkNodes() (map[string]*pb.Node, 
 			continue
         }
 
-		rxp := regexp.MustCompile("[0-9]+").FindAllStringSubmatch(boottime, -1)
-
-		secsAsString := rxp[0][0]
-		nanosAsString := rxp[1][0]		
-
-		seconds, err := strconv.ParseInt(secsAsString, 10, 64)
+		bTime, err := time.Parse(time.RFC1123Z, boottime)
 		if err != nil {
 			log.WithFields(dbLogFields).Errorln(err.Error())
-			continue
-		}
-
-		nanos, err := strconv.ParseInt(nanosAsString, 10, 64)
-		if err != nil {
-			log.WithFields(dbLogFields).Errorln(err.Error())
-			continue
+			return nil, err
 		}
 
 		node := &pb.Node{
@@ -133,7 +121,7 @@ func (m *MembershipManagerUnit) dbSelectAllNetworkNodes() (map[string]*pb.Node, 
 			Id: []byte(publicId),
 			HttpsAddress: httpsAddress,
 			Port: port,
-			BootTime: pbtime.New(time.Unix(seconds, nanos)),
+			BootTime: pbtime.New(bTime),
 		}
 
 		nodes[nodeName] = node
@@ -163,7 +151,7 @@ func (m *MembershipManagerUnit) dbSelectNetworkNode(nodeId string) (*pb.Node, er
 		return nil, err
 	}
 	
-	bTime, err := toTimestamppb(boottime)
+	bTime, err := time.Parse(time.RFC1123Z, boottime)
 	if err != nil {
 		log.WithFields(dbLogFields).Errorln(err.Error())
 		return nil, err
@@ -177,7 +165,7 @@ func (m *MembershipManagerUnit) dbSelectNetworkNode(nodeId string) (*pb.Node, er
 		Id: publicId,
 		HttpsAddress: httpsAddress,
 		Port: port,
-		BootTime: bTime,
+		BootTime: pbtime.New(bTime),
 	}, nil
 }
 
@@ -196,31 +184,4 @@ func (m *MembershipManagerUnit) dbNetworkNodeExists(nodeId string) (bool, error)
 		return false, err
 	}
 	return exists, nil
-}
-
-func toTimestamppb(tString string) (*pbtime.Timestamp, error) {
-	if tString == "" {
-		return nil, fmt.Errorf("Timestamp string is empty!")
-	}
-
-	rxp := regexp.MustCompile("[0-9]+").FindAllStringSubmatch(tString, -1)
-	if len(rxp) == 0 {
-		err := errors.New("Regexp string is empty!")
-		return nil, err
-	}
-
-	secsAsString := rxp[0][0]
-	nanosAsString := rxp[1][0]		
-
-	seconds, err := strconv.ParseInt(secsAsString, 10, 64)
-	if err != nil {
-		return nil, errNoRegexString
-	}
-
-	nanos, err := strconv.ParseInt(nanosAsString, 10, 64)
-	if err != nil {
-		return nil, errNoRegexString
-	}
-
-	return pbtime.New(time.Unix(seconds, nanos)), nil
 }

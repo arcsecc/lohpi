@@ -1,9 +1,8 @@
 hostname: "lohpi-azureblobnode.norwayeast.azurecontainer.io"
+name: "azureblobnode"
 directoryserveraddr: lohpi-directoryserver.norwayeast.azurecontainer.io:6000
 policystoreaddr: lohpi-policystore.norwayeast.azurecontainer.io:6000
-lohpicaaddr: 127.0.1.1:8301
-remoteport: "8085"
-httpport: 8090
+port: 9000
 azurekeyvaultname: "lohpi-key-vault"
 azurekeyvaultsecret: "azureblobnode-db-connection-string-prod"
 azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
@@ -12,4 +11,7 @@ azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
 azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
 azurestorageaccountname: "lohpistorageaccount"
 azurestorageaccountkey: "LjLw/vAflQW0gy2Q+l9laYacNKl+fUr2C7X3PQAwax9syamdO1C5xtyBwr2SQFxVTJ7PWpMPDLqJP9cGUAU5ww=="
-
+lohpicryptounitworkingdirectory: "crypto/production/lohpi"
+ifritcryptounitworkingdirectory: "crypto/production/ifrit"
+ifrittcpport: 5000
+ifritudpport: 8000

@@ -8,6 +8,7 @@ import (
 _	"github.com/go-redis/redis/v8"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
+_	"github.com/inconshreveable/log15"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,6 +30,8 @@ var config = struct {
 	IfritTCPPort            int    `required:"true"`
 	IfritUDPPort            int    `required:"true"`
 	HTTPPort                int    `required:"true"`
+	LohpiCryptoUnitWorkingDirectory string `required:"true"`
+	IfritCryptoUnitWorkingDirectory string `required:"true"`
 }{}
 
 type node struct {
@@ -51,6 +54,8 @@ func main() {
 	args.IntVar(&nNodes, "nodes", 0, "Number of nodes to boot.")
 	args.IntVar(&nSets, "sets", 0, "Number of sets per node.")
 	args.Parse(os.Args[1:])
+
+	log.SetLevel(log.ErrorLevel)
 
 	configor.New(&configor.Config{
 		Debug:     true,
@@ -77,6 +82,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Ifrit logging
+	/*r := log15.Root()
+	h := log15.CallerFileHandler(log15.Must.FileHandler("ifrit.log", log15.LogfmtFormat()))
+	r.SetHandler(h)*/
+
 	// Wait for SIGTERM signal from the environment
 	channel := make(chan os.Signal, 2)
 	signal.Notify(channel, os.Interrupt, syscall.SIGTERM)
@@ -91,17 +101,16 @@ func NewApp(nNodes, nSets int) (*App, error) {
 	ifritTCTPort := config.IfritTCPPort
 	ifritUDPPort := config.IfritUDPPort
 	httpPort := config.HTTPPort
-	redisPport := 6390
 
-	log.Printf("Booting %s nodes on local machine...\n", nNodes)
 	for i := 0; i < nNodes; i++ {
 		func () {
 			name := fmt.Sprintf("node%d", i+1)
+			log.Warnln("Booting node %s", name)
 			defer func() { ifritTCTPort += 100 }()
 			defer func() { ifritUDPPort += 100}()
 			defer func() { httpPort += 1}()
 
-			c, err := getNodeConfiguration(name, httpPort, ifritTCTPort, ifritUDPPort, redisPport)
+			c, err := getNodeConfiguration(name, httpPort, ifritTCTPort, ifritUDPPort)
 			if err != nil {
 				log.Errorln(err.Error())
 				return
@@ -115,8 +124,6 @@ func NewApp(nNodes, nSets int) (*App, error) {
 
 			lohpiNode.RegisterDatasetHandler(handler)
 
-			log.Println("Current node name:", name)
-
 			go lohpiNode.Start()
 
 			if err := lohpiNode.HandshakeNetwork(config.DirectoryServerAddr, config.PolicyStoreAddr); err != nil {
@@ -126,7 +133,6 @@ func NewApp(nNodes, nSets int) (*App, error) {
 			// Create datasets
 			sets := datasets(name, nSets)
 			for _, s := range sets {
-				log.Println("Dataset id:", s)
 				if err := lohpiNode.IndexDataset(s, &lohpi.DatasetIndexingOptions{AllowMultipleCheckouts: true}); err != nil {
 					log.Errorln(err.Error())
 					return
@@ -139,8 +145,7 @@ func NewApp(nNodes, nSets int) (*App, error) {
 			}
 
 			nodes = append(nodes, node)
-			time.Sleep(4 * time.Second)
-			redisPport += 1
+			time.Sleep(0 * time.Second)
 		}()
 	}
 
@@ -158,33 +163,26 @@ func handler(id string, w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	log.Println("Invoked handler! Dataset:", id)
-	fmt.Fprintf(w, "Invoked handler! Dataset:", id)
+	fmt.Fprintln(w, "Invoked handler! Dataset:", id)
 }
 
-func getNodeConfiguration(name string, httpPort int, ifritTCPPort int, ifritUDPPort int, redisPort int) (*lohpi.NodeConfig, error) {
+func getNodeConfiguration(name string, httpPort int, ifritTCPPort int, ifritUDPPort int) (*lohpi.NodeConfig, error) {
 	dbConnString, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
 
 	c := &lohpi.NodeConfig{
-		CaAddress:                      config.LohpiCaAddr,
-		Name:                           name,
-		SQLConnectionString:            dbConnString,
-		PolicyObserverWorkingDirectory: ".",
-		/*RedisClientOptions: &redis.Options{
-			Network:  "tcp",
-			Addr:     fmt.Sprintf("127.0.1.1:%d", redisPort),
-			Password: "",
-			DB:       0,
-		},*/
+		CaAddress: config.LohpiCaAddr,
+		Name: name,
+		SQLConnectionString: dbConnString,
+		Port: httpPort,
+		LohpiCryptoUnitWorkingDirectory: config.LohpiCryptoUnitWorkingDirectory,
+		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 		IfritTCPPort: ifritTCPPort,
 		IfritUDPPort: ifritUDPPort,
-		Port:         httpPort,
 	}
 	
-	log.Println("C:", c)
-
 	return c, nil
 }
 
@@ -204,18 +202,15 @@ func getDatabaseConnectionString() (string, error) {
 func datasets(nodename string, nDatasets int) []string {
 	sets := make([]string, 0)
 	for i := 0; i < nDatasets; i++ {
-		s := fmt.Sprintf("%sdataset_%d", nodename, i+1)
+		s := fmt.Sprintf("%sdataset%d", nodename, i+1)
 		sets = append(sets, s)
 	}
 	return sets
 }
 
 func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
-	c := &lohpi.AzureKeyVaultClientConfig{
-		AzureKeyVaultClientID:     config.AzureClientID,
+	return lohpi.NewAzureKeyVaultClient(&lohpi.AzureKeyVaultClientConfig{
+		AzureKeyVaultClientID: config.AzureClientID,
 		AzureKeyVaultClientSecret: config.AzureClientSecret,
-		AzureKeyVaultTenantID:     config.AzureTenantID,
-	}
-
-	return lohpi.NewAzureKeyVaultClient(c)
+		AzureKeyVaultTenantID: config.AzureTenantID})
 }

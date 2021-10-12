@@ -29,8 +29,9 @@ COPY ./core/membershipmanager ./core/membershipmanager
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
 COPY ./core/comm ./core/comm
+COPY ./core/setsync ./core/setsync
+COPY ./core/policyobserver ./core/policyobserver
 COPY ./core/policystore ./core/policystore
-COPY ./core/statesync ./core/statesync
 COPY ./protobuf ./protobuf
 COPY ./core/util ./core/util
 COPY ./keyvault.go ./keyvault.go
@@ -57,10 +58,10 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY ./cmd/policy_store/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/policy_store/config/lohpi_config.yaml ./config/lohpi_config.yaml
 COPY ./cmd/policy_store/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
-COPY ./cmd/policy_store/crypto/lohpi/owncert.pem crypto/lohpi/owncert.pem
-COPY ./cmd/policy_store/crypto/lohpi/cacert.pem crypto/lohpi/cacert.pem
-COPY ./cmd/policy_store/crypto/lohpi/key.pem crypto/lohpi/key.pem
-COPY ./cmd/policy_store/crypto/ifrit/*.pem crypto/ifrit/
+COPY ./cmd/policy_store/crypto/production/lohpi/owncert.pem crypto/production/lohpi/owncert.pem
+COPY ./cmd/policy_store/crypto/production/lohpi/cacert.pem crypto/production/lohpi/cacert.pem
+COPY ./cmd/policy_store/crypto/production/lohpi/key.pem crypto/production/lohpi/key.pem
+COPY ./cmd/policy_store/crypto/production/ifrit/*.pem crypto/production/ifrit/
 
 # Command to run the executable
 ENTRYPOINT ["/policy_store", "-c", "config/lohpi_config.yaml"]

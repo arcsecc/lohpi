@@ -36,24 +36,8 @@ type Config struct {
 	// The name of this node
 	Name string
 
-	// If true, a dataset can be checked out multiple times by the same client
-	AllowMultipleCheckouts bool
-
 	// Port used by the HTTP server
 	Port int
-
-	// Interval at which the policy synchronization procedure will run
-	PolicySyncInterval time.Duration
-
-	// Interval at which the dataset objects synchronization procedure will run
-	DatasetSyncInterval time.Duration
-
-	// Interval at which the dataset identifiers synchronization procedure will run
-	DatasetIdentifiersSyncInterval time.Duration
-
-	// Interval at which the node initiates a synchronization between itself and the directory
-	// to resolve deltas in the checked-out datasets' policies.
-	CheckedOutDatasetPolicySyncInterval time.Duration
 
 	// Hostname used by the HTTP server
 	Hostname string
@@ -63,6 +47,8 @@ type Config struct {
 
 	// Ifrit's UDP port. Default value is 6000.
 	IfritUDPPort int
+
+	IfritCryptoUnitWorkingDirectory string
 }
 
 func init() { 
@@ -189,24 +175,21 @@ type datasetCheckoutManager interface {
 type stateSyncer interface {
 	RegisterIfritClient(client *ifrit.Client) 
 	ResolveDatasetIdentifiersDeltas(currentDatasets []string, incomingDatasets []string) ([]string, []string)
-
-	SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error)
-
 	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
 }
 
 // TODO: reload dateapplied and datecreated from the databases on boot time.
-func NewNodeCore(cm certManager, policyLog policyLogger, dsManager datasetManager, stateSync stateSyncer, dcManager datasetCheckoutManager, config *Config) (*NodeCore, error) {
+func NewNodeCore(cm certManager, policyLog policyLogger, dsManager datasetManager, stateSync stateSyncer, dcManager datasetCheckoutManager, config *Config, new bool) (*NodeCore, error) {
 	if config == nil {
 		return nil, ErrNoConfig
 	}
 	
 	ifritClient, err := ifrit.NewClient(&ifrit.Config{
-		New: true,
+		New: new,
 		TCPPort: config.IfritTCPPort,
 		UDPPort: config.IfritUDPPort, 
 		Hostname: config.Hostname,
-		CryptoUnitPath: "kake",})
+		CryptoUnitPath: config.IfritCryptoUnitWorkingDirectory})
 	if err != nil {
 		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
@@ -227,6 +210,7 @@ func NewNodeCore(cm certManager, policyLog policyLogger, dsManager datasetManage
 	pbnode := &pb.Node{
 		Name:         	config.Name,
 		IfritAddress: 	fmt.Sprintf("%s:%d", config.Hostname, config.IfritTCPPort),
+		//IfritAddress: 	ifritClient.Addr(),
 		Id:           	[]byte(ifritClient.Id()),
 		HttpsAddress:	config.Hostname,
 		Port: 			int32(config.Port),
@@ -266,7 +250,6 @@ func (n *NodeCore) IfritClient() *ifrit.Client {
 func (n *NodeCore) Start() {
 	log.WithFields(nodeLogFields).Infoln("Starting Lohpi node's services...")
 	go n.ifritClient.Start()
-	go n.startStateSyncer()
 	go n.startHTTPServer()
 	<-n.exitChan
 
@@ -298,45 +281,6 @@ func (n *NodeCore) isStopping() bool {
 	return false
 }
 
-// TODO: refine me! Fix the abstraction boundaries
-func (n *NodeCore) startStateSyncer() {
-	for {
-		select {
-		case <-n.exitChan:
-			// TODO: cleanup everything gracefully
-			log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
-			return
-		case <-time.After(n.config().DatasetIdentifiersSyncInterval):
-			log.Println("Sync ids")
-			// For now, let's sync all identifiers. If the gRPC messages get too big, use iteration and/or streaming.
-			// See Ifrit and gRPC for more information. Set sane range values.
-
-			/*datasetIdentifiers := n.dsManager.DatasetIdentifiers(0, 2000)
-			if err :=  n.pbSendDatsetIdentifiers(datasetIdentifiers, n.getDirectoryServerIP()); err != nil {
-				log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
-			}*/
-
-			/*deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
-			if err != nil {
-				log.Errorln(err.Error())
-			}
-
-			if deltaMap != nil {
-				for id, ds := range deltaMap {
-					if err := n.dsManager.SetDatasetPolicy(id, ds.GetPolicy()); err != nil {
-						log.Error(err.Error())
-					}
-				}
-			}
-
-			// Send the correct identifiers to the directory server
-			if err := n.pbResolveDatsetIdentifiers(n.directoryServerIP); err != nil {
-				log.Error(err.Error())
-			}*/
-		}
-	}
-}
-
 // RequestPolicy requests policies from policy store that are assigned to the dataset given by the id.
 // It will also populate the node's database with the available identifiers and assoicate them with policies.
 // You will have to call this method to make the datasets available to the clients. 
@@ -359,13 +303,13 @@ func (n *NodeCore) IndexDataset(datasetId string, indexOptions *DatasetIndexingO
 
 	// Apply the update from policy store to storage
 	if err := n.dsManager.InsertDataset(datasetId, dataset); err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return ErrFailedIndexing
 	}
 
 	// Notify the directory server of the newest policy update
 	if err := n.pbSendDatsetIdentifier(datasetId, n.directoryServerIP); err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return ErrFailedIndexing
 	}
 
@@ -394,17 +338,17 @@ func (n *NodeCore) HandshakeDirectoryServer(addr string) error {
 	log.WithFields(nodeLogFields).Infof("Performing handshake with directory server at address %s\n", addr)
 	conn, err := n.directoryServerClient.Dial(addr)
 	if err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return ErrDirectoryServerHandshakeFailed
 	}
 
 	defer conn.CloseConn()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute * 1)
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return ErrDirectoryServerHandshakeFailed
 	}
 
@@ -430,17 +374,17 @@ func (n *NodeCore) HandshakePolicyStore(addr string) error {
 	log.WithFields(nodeLogFields).Infof("Performing handshake with policy store at address %s\n", addr)
 	conn, err := n.psClient.Dial(addr)
 	if err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return ErrPolicyStoreHandshakeFailed
 	}
 	defer conn.CloseConn()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute * 1)
 	defer cancel()
 
 	r, err := conn.Handshake(ctx, n.getPbNode())
 	if err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return ErrNoPolicyStoreHandshakeAddress
 	}
 
@@ -456,7 +400,7 @@ func (n *NodeCore) HandshakePolicyStore(addr string) error {
 func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
 	}
 
@@ -465,7 +409,7 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		Infof("Node '%s' got direct message %s\n", n.config().Name, msg.GetType())
 
 	if err := n.verifyMessageSignature(msg); err != nil {
-		log.WithFields(nodeLogFields).Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
 	}
 
@@ -474,10 +418,12 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		return []byte(n.String()), nil
 
 	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
-		currentIdentifiers := n.dsManager.DatasetIdentifiers(0, -1)
+		currentIdentifiers := n.dsManager.DatasetIdentifiers(0, -1) // range?
 		incomingIdentifiers := msg.GetStringSlice()
 		newIdentifiers, staleIdentifiers := n.stateSync.ResolveDatasetIdentifiersDeltas(currentIdentifiers, incomingIdentifiers)
 
+		log.WithFields(nodeLogFields).
+			Infof(``)
 		return n.pbMarshalDatasetIdentifiersResponse(newIdentifiers, staleIdentifiers)
 
 	case message.MSG_TYPE_GET_DATASET_IDENTIFIERS:
@@ -491,12 +437,11 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 		
 		if g := msg.GetGossipMessage(); g != nil {
 			if err := n.processPolicyBatch(msg); err != nil {
-				log.Errorln(err.Error())
+				log.WithFields(nodeLogFields).Error(err.Error())
 			}
 
-			// Insert gossip message 
 			if err := n.policyLog.InsertObservedGossip(g); err != nil {
-				log.Errorln(err.Error())
+				log.WithFields(nodeLogFields).Error(err.Error())
 			}
 		}
 
@@ -506,6 +451,14 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	case message.MSG_TYPE_PROBE:
 		return n.acknowledgeProbe(msg, data)
 
+	case message.MSG_SYNCHRONIZE_DATASETS:
+		return n.pbMarshalDatasetCollectionResponse(msg)
+
+	case message.MSG_DELTA_DATASETS:
+		if err := n.insertDeltaDataset(msg); err != nil {
+			log.WithFields(nodeLogFields).Error(err.Error())
+		}
+	
 	default:
 		log.WithFields(nodeLogFields).
 			WithField("Ifrit RPC message", "Unknown message type").
@@ -515,11 +468,23 @@ func (n *NodeCore) messageHandler(data []byte) ([]byte, error) {
 	return n.pbMarshalAcknowledgeMessage()
 }
 
+func (n *NodeCore) insertDeltaDataset(msg *pb.Message) error {
+	if deltaDatasets := msg.GetDatasetSyncronizationDelta().GetDatasets(); deltaDatasets != nil {
+		for _, d := range deltaDatasets {
+			if err := n.dsManager.InsertDataset(d.GetIdentifier(), d); err != nil {
+				log.WithFields(nodeLogFields).Error(err.Error())
+			}
+		}
+	}
+
+	return nil
+}
+
 // TODO finish me
 func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 	/*id := msg.GetStringValue()
 	if err := n.dbCheckinDataset(id); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 	}*/
 }
 
@@ -527,49 +492,52 @@ func (n *NodeCore) rollbackCheckout(msg *pb.Message) {
 func (n *NodeCore) processPolicyBatch(msg *pb.Message) error {
 	if msg.GetGossipMessage() == nil {
 		err := errors.New("Gossip message is nil")
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return err
 	}
 
 	gspMsg := msg.GetGossipMessage()
 	if gspMsg.GetGossipMessageBody() == nil {
 		err := errors.New("Gossip message body is nil")
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return err
 	}
 	
 	// Filter between relevant an irrelevant policies
 	for _, m := range gspMsg.GetGossipMessageBody() {
-		policy := m.GetPolicy()
-		if policy == nil {
-			panic("policy was nil")
-		}
-
-		datasetId := policy.GetDatasetIdentifier()
-
-		if n.dsManager.DatasetExists(datasetId) {
-			dataset := n.dsManager.Dataset(datasetId)
-			if dataset == nil {
-				return errors.New("Tried to get dataset description but it was nil")
-			}
-
-			if dataset.GetPolicy().GetVersion() >= policy.GetVersion() {
-				log.Infoln("Got an outdated policy. Applies a new version")
-				return nil
-			}
-
-			if err := n.dsManager.SetDatasetPolicy(datasetId, policy); err != nil {
-				return err
-			}
-
-			log.Infof("Changed dataset %s's policy to %s\n", datasetId, policy.GetContent())
-
-			if err := n.policyLog.InsertAppliedPolicy(policy); err != nil {
-				log.Errorln(err.Error())
-				return err
+		if newPolicy := m.GetPolicy(); newPolicy != nil {
+			if datasetId := newPolicy.GetDatasetIdentifier(); datasetId != "" {
+				if n.dsManager.DatasetExists(datasetId) {
+					if dataset := n.dsManager.Dataset(datasetId); dataset != nil {
+						if dataset.GetPolicy().GetVersion() >= newPolicy.GetVersion() {
+							log.WithFields(nodeLogFields).Infof("Got an outdated policy: Current version is %d. Got version %d", dataset.GetPolicy().GetVersion(), newPolicy.GetVersion())
+							return nil
+						}
+			
+						if err := n.dsManager.SetDatasetPolicy(datasetId, newPolicy); err != nil {
+							log.WithFields(nodeLogFields).Error(err.Error())
+							return err
+						}
+			
+						log.WithFields(nodeLogFields).Infof("Changed dataset %s's policy to %t\n", datasetId, newPolicy.GetContent())
+			
+						if err := n.policyLog.InsertAppliedPolicy(newPolicy); err != nil {
+							log.WithFields(nodeLogFields).Error(err.Error())
+							return err
+						}		
+					} else {
+						err := fmt.Errorf("Tried to get dataset identifier but it was nil")
+						log.WithFields(nodeLogFields).Error(err.Error())
+						return err
+					}
+				} else {
+					return fmt.Errorf("Dataset %s is not indexed at node %s", datasetId, n.Name())
+				}
+			} else {
+				log.WithFields(nodeLogFields).Errorf("Dataset identifier was an emtpy string")	
 			}
 		} else {
-			return fmt.Errorf("Dataset %s does not exist", datasetId)
+			log.WithFields(nodeLogFields).Errorf("Policy entry in gossip message body was nil")
 		}
 	}
 
@@ -581,7 +549,7 @@ func (n *NodeCore) processPolicyBatch(msg *pb.Message) error {
 // return false otherwise. Also, verify that all the fields are present
 func (n *NodeCore) clientIsAllowed(r *pb.DatasetRequest) bool {
 	if r == nil {
-		log.Errorln("Dataset request is nil")
+		log.WithFields(nodeLogFields).Error("Dataset request is nil")
 		return false
 	}
 
@@ -593,24 +561,32 @@ func (n *NodeCore) clientIsAllowed(r *pb.DatasetRequest) bool {
 func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return nil, err
 	}
 
-	log.Infof("Node '%s' got gossip message %s\n", n.config().Name, msg.GetType())
+	log.WithFields(nodeLogFields).Infof("Node '%s' got gossip message %s\n", n.config().Name, msg.GetType())
 
 	if err := n.verifyPolicyStoreMessage(msg); err != nil {
-		log.Warnln(err.Error())
+		log.WithFields(nodeLogFields).Warn(err.Error())
 	}
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_PROBE:
 		//n.ifritClient.SetGossipContent(data)
 	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		if !n.policyLog.GossipIsObserved(msg.GetGossipMessage()) {
-			if err := n.processPolicyBatch(msg); err != nil {
-				log.Errorln(err.Error())
+		if gspMsg := msg.GetGossipMessage(); gspMsg != nil {
+			if !n.policyLog.GossipIsObserved(gspMsg) {
+				if err := n.processPolicyBatch(msg); err != nil {
+					log.WithFields(nodeLogFields).Error(err.Error())
+				}
+			} else {
+				log.WithFields(nodeLogFields).
+					WithField("gossip handler", "observation").
+					Debugf("Already seen gossip meesage %+v", gspMsg)
 			}
+		} else {
+			log.WithFields(nodeLogFields).Errorf("Gossip message body was nil")
 		}
 	default:
 		fmt.Printf("Unknown gossip message type: %s\n", msg.GetType())
@@ -618,7 +594,7 @@ func (n *NodeCore) gossipHandler(data []byte) ([]byte, error) {
 
 	// Insert observed gossip message
 	if err := n.policyLog.InsertObservedGossip(msg.GetGossipMessage()); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 	}
 
 	return nil, nil
@@ -666,7 +642,7 @@ func (n *NodeCore) acknowledgeProbe(msg *pb.Message, d []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	log.Println(n.config().Name, "sending ack to Policy store")
+	log.WithFields(nodeLogFields).Print(n.config().Name, "sending ack to Policy store")
 	n.ifritClient.SendTo(n.policyStoreIP, data)
 	return nil, nil
 }
@@ -681,13 +657,13 @@ func (n *NodeCore) verifyPolicyStoreMessage(msg *pb.Message) error {
 
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return err
 	}
 
 	if !n.ifritClient.VerifySignature(r, s, data, string(n.policyStoreID)) {
 		err := errors.New("Could not securely verify the integrity of the policy store message")
-		log.Errorln(err.Error())
+		log.WithFields(nodeLogFields).Error(err.Error())
 		return err
 	}
 

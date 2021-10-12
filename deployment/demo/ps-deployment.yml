@@ -1,0 +1,40 @@
+#apiVersion: 2019-12-01
+location: norwayeast
+name: lohpi-policystore
+properties:
+  containers:
+  - name: lohpi-policystore
+    properties:
+      image: lohpi.azurecr.io/lohpi-policystore:latest
+      resources:
+        requests:
+          cpu: 2
+          memoryInGb: 1.5
+      ports:
+        - protocol: UDP
+          port: 8000
+        - protocol: TCP
+          port: 8083
+        - protocol: TCP
+          port: 6000
+        - protocol: TCP
+          port: 5000
+  osType: Linux
+  ipAddress:
+    type: Public
+    ports:
+    - protocol: UDP
+      port: 8000
+    - protocol: TCP
+      port: 8083
+    - protocol: TCP
+      port: 6000
+    - protocol: TCP
+      port: 5000
+    dnsnamelabel: "lohpi-policystore"
+  imageRegistryCredentials:
+    - server: lohpi.azurecr.io
+      username: lohpi
+      password: jQA8j+27P11I36IOJGf9lXWwKqqbo/Ym
+tags: {exampleTag: tutorial}
+type: Microsoft.ContainerInstance/containerGroups

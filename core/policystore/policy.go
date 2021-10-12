@@ -27,17 +27,18 @@ import (
 )
 
 type Config struct {
-	Name                     string 
-	Hostname                     string 
-	GossipInterval           time.Duration 
-	HTTPPort                 int    
-	GRPCPort                 int    
+	Name string 
+	Hostname string 
+	GossipInterval time.Duration 
+	HTTPPort int    
+	GRPCPort int    
 	MulticastAcceptanceLevel float64
-	NumDirectRecipients	     int    
-	CaAddress           	 string 
-	DirectoryServerAddress   string 
-	DirectoryServerGPRCPort  int
-	GitRepositoryPath 		 string
+	NumDirectRecipients int    
+	CaAddress string 
+	DirectoryServerAddress string 
+	DirectoryServerGPRCPort int
+	GitRepositoryPath string
+	SQLConnectionString string
 
 	// Configuration used by Ifrit client
 	IfritCryptoUnitWorkingDirectory string
@@ -52,6 +53,8 @@ type storageNodeLookupService interface {
 	InsertDatasetLookupEntry(datasetId string, nodeName string) error
 	DatasetLookupNode(datasetId string) *pb.Node
 	DatasetIdentifiers() []string
+	DatasetIdentifiersAtNode(nodeName string) []string
+
 }
 
 type datasetManager interface {
@@ -62,11 +65,7 @@ type datasetManager interface {
 	RemoveDataset(datasetId string) error 
 	SetDatasetPolicy(datasetId string, policy *pb.Policy) error
 	InsertDataset(datasetId string, dataset *pb.Dataset) error
-}
-
-type stateSyncer interface {
-	RegisterIfritClient(client *ifrit.Client)
-	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
+	DatasetsAtNode(node *pb.Node) []*pb.Dataset 
 }
 
 type membershipManager interface {
@@ -82,6 +81,22 @@ type certManager interface {
 	CaCertificate() *x509.Certificate
 	PrivateKey() *ecdsa.PrivateKey
 	PublicKey() *ecdsa.PublicKey
+}
+
+type setSyncer interface {
+	RegisterIfritClient(client *ifrit.Client) 
+	RequestDatasetSync(ctx context.Context, node *pb.Node, currentSets []*pb.Dataset) (int, error)
+	DBLogDatasetReconciliation(nodeName string, numResolved int) error
+}
+
+type policyLogger interface {
+	InsertObservedGossip(g *pb.GossipMessage) error
+	InsertAppliedPolicy(p *pb.Policy) error
+}
+
+var logFields = log.Fields{
+	"package": "core/policy",
+	"description": "policy engine",
 }
 
 type PolicyStoreCore struct {
@@ -117,19 +132,20 @@ type PolicyStoreCore struct {
 	ar *jwk.AutoRefresh
 
 	cm certManager
-	stateSync stateSyncer
+	setSync setSyncer
 	dsManager datasetManager
 	memManager membershipManager
 	dsLookupService storageNodeLookupService
+	policyLog policyLogger
 }
 
-func NewPolicyStoreCore(cm certManager, dsLookupService storageNodeLookupService, stateSync stateSyncer, memManager membershipManager, dsManager datasetManager, config *Config) (*PolicyStoreCore, error) {
+func NewPolicyStoreCore(cm certManager, dsLookupService storageNodeLookupService, setSync setSyncer, memManager membershipManager, dsManager datasetManager, config *Config, policyLog policyLogger, new bool) (*PolicyStoreCore, error) {
 	ifritClient, err := ifrit.NewClient(&ifrit.Config{
-		New: true,
+		New: new,
 		TCPPort: config.IfritTCPPort,
 		UDPPort: config.IfritUDPPort,
 		Hostname: config.Hostname,
-		CryptoUnitPath: "kake",})
+		CryptoUnitPath: config.IfritCryptoUnitWorkingDirectory})
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +166,7 @@ func NewPolicyStoreCore(cm certManager, dsLookupService storageNodeLookupService
 		return nil, err
 	}
 
-	multicastManager, err := multicast.NewMulticastManager(ifritClient, config.MulticastAcceptanceLevel, config.NumDirectRecipients)
+	multicastManager, err := multicast.NewMulticastManager(ifritClient, config.MulticastAcceptanceLevel, config.NumDirectRecipients, config.SQLConnectionString, config.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -166,14 +182,16 @@ func NewPolicyStoreCore(cm certManager, dsLookupService storageNodeLookupService
 		multicastManager: multicastManager,
 		stopBatching:     make(chan bool),
 		dsLookupService:  dsLookupService,
-		stateSync:		  stateSync,
 		memManager:		  memManager,
 		dsManager: 		  dsManager,
+		setSync: 		  setSync,
+		policyLog: 		  policyLog,
 	}
 
 	ps.grpcs.Register(ps)
 
 	// Set Ifrit callbacks
+	ps.setSync.RegisterIfritClient(ifritClient)
 	ps.ifritClient.RegisterMsgHandler(ps.messageHandler)
 	ps.ifritClient.RegisterGossipHandler(ps.gossipHandler)
 
@@ -181,10 +199,11 @@ func NewPolicyStoreCore(cm certManager, dsLookupService storageNodeLookupService
 }
 
 func (ps *PolicyStoreCore) Start() error {
-	log.Println("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
+	log.WithFields(logFields).Printf("Policy store running gRPC server at", ps.grpcs.Addr(), "and Ifrit client at", ps.ifritClient.Addr())
 	go ps.grpcs.Start()
 	go ps.startHttpServer(fmt.Sprintf(":%d", ps.PolicyStoreConfig().HTTPPort))
 	go ps.ifritClient.Start()
+	go ps.startStateSynchronizer()
 	return nil
 }
 
@@ -201,16 +220,22 @@ func (ps *PolicyStoreCore) RunPolicyBatcher() {
 			func() {
 				defer mcTimer.Reset(ps.PolicyStoreConfig().GossipInterval)
 				if ps.multicastManager.IsProbing() {
+					log.WithFields(logFields).Info("Manager is probing the network")
 					return
 				}
 
-				if err := ps.multicastManager.Multicast(
-					&multicast.Config{
-						Mode:    multicast.RandomMembers,
-						Members: ps.ifritMembersAddress(),
-					}); err != nil {
-						log.Println(err.Error())
+				if ps.multicastManager.IsMulticasting() {
+					log.WithFields(logFields).Info("Manager is already multicasting a policy batch")
+					return
+				}
+				
+				if err := ps.multicastManager.Multicast(&multicast.Config{
+					Mode: multicast.RandomMembers,
+					Members: ps.ifritMembersAddress()}); err != nil {
+						log.WithFields(logFields).Error(err.Error())
 					}
+
+					log.WithFields(logFields).Info("Multicast manager completed a burst of message multicasting")
 			}()
 			case <-ps.stopBatching:
 				// TODO: garbage collect timer
@@ -219,9 +244,41 @@ func (ps *PolicyStoreCore) RunPolicyBatcher() {
 	}
 }
 
+func (ps *PolicyStoreCore) startStateSynchronizer() {
+	for {
+		for _, node := range ps.memManager.NetworkNodes() {
+			select {
+			case <-ps.exitChan:
+				log.WithFields(logFields).Info("Exiting state synchronization")
+				return 
+			case <-time.After(10 * time.Second):
+				log.WithFields(logFields).Infof("Started policy set reconciliation towards node with identifier '%s'", node.GetName())
+				ctx, cancel := context.WithTimeout(context.Background(), 60 * time.Second)
+				defer cancel()
+
+				sets := ps.dsManager.DatasetsAtNode(node)
+
+				numResolved, err := ps.setSync.RequestDatasetSync(ctx, node, sets)
+				if err != nil {
+					log.WithFields(logFields).Error(err.Error())
+					continue
+				}
+
+				if err := ps.setSync.DBLogDatasetReconciliation(node.GetName(), numResolved); err != nil {
+					log.WithFields(logFields).Error(err.Error())
+					continue
+				}
+
+				log.WithFields(logFields).
+					Infof("Dataset sync done. Resolved %d dataset policies with node '%s'", numResolved, node.GetName())
+			}
+		}
+	}
+}
+
 // Stops the policy batcher.
 func (ps *PolicyStoreCore) StopPolicyBatcher() {
-	log.Infoln("Stopping policy batcher")
+	log.WithFields(logFields).Infoln("Stopping policy batcher")
 	ps.stopBatching <- true
 }
 
@@ -252,7 +309,7 @@ func (ps *PolicyStoreCore) verifyMessageSignature(msg *pb.Message) error {
 	// Marshal it before verifying its integrity
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Println(err.Error())
+		log.WithFields(logFields).Print(err.Error())
 		return err
 	}
 
@@ -271,6 +328,7 @@ func (ps *PolicyStoreCore) verifyMessageSignature(msg *pb.Message) error {
 
 // Invoked by ifrit message handler
 func (ps *PolicyStoreCore) verifyPolicyStoreGossipSignature(msg *pb.Message) error {
+	return nil
 	// Verify the integrity of the node
 	r := msg.GetSignature().GetR()
 	s := msg.GetSignature().GetS()
@@ -280,7 +338,7 @@ func (ps *PolicyStoreCore) verifyPolicyStoreGossipSignature(msg *pb.Message) err
 	// Marshal it before verifying its integrity
 	data, err := proto.Marshal(msg)
 	if err != nil {
-		log.Println(err.Error())
+		log.WithFields(logFields).Print(err.Error())
 		return err
 	}
 
@@ -341,7 +399,7 @@ func (ps *PolicyStoreCore) Handshake(ctx context.Context, node *pb.Node) (*pb.Ha
 		return nil, err
 	}
 
-	log.Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n", node.GetName(), node.GetIfritAddress())
+	log.WithFields(logFields).Infof("Policy store added node '%s' to map with Ifrit IP '%s'\n", node.GetName(), node.GetIfritAddress())
 	ipString := fmt.Sprintf("%s:%d", ps.PolicyStoreConfig().Hostname, ps.PolicyStoreConfig().IfritTCPPort)
 
 	return &pb.HandshakeResponse{
@@ -354,40 +412,27 @@ func (ps *PolicyStoreCore) Handshake(ctx context.Context, node *pb.Node) (*pb.Ha
 func (ps *PolicyStoreCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
 	if err := ps.verifyMessageSignature(msg); err != nil {
-		log.Errorln(err.Error())
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
 	switch msgType := msg.GetType(); msgType {
-		
-	// TODO: refine me a lot. Move sync logic to a sidecart module
-	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
-		/*incomingDatasets := msg.GetDatasetCollectionSummary().GetDatasetMap()
-		deltaSet, err := ps.resolveDatasetDeltas(context.Background(), incomingDatasets)
-		if err != nil {
-			log.Errorln(err.Error())
-			return nil, err
-		}
-
-		// Returns a correct set of datasets, along with their policies, to the node. */
-//		return ps.pbMarshalDatasetsMap(deltaSet)
-		return nil, nil
-
 	case message.MSG_TYPE_GET_DATASET_POLICY:
+		// Bug: allowmultiplecheckouts field remains false in psql table at policy store!
 		return ps.processStorageNodePolicyRequest(msg)
 		
 	case message.MSG_TYPE_PROBE_ACK:
-		log.Println("POLICY STORE: received DM acknowledgment from node:", *msg)
-		//log.Println("MSG HANDLER IN PS:", msg)
+		log.WithFields(logFields).Print("POLICY STORE: received DM acknowledgment from node:", *msg)
+		//log.WithFields(logFields).Print("MSG HANDLER IN PS:", msg)
 		//		ps.multicastManager.RegisterProbeMessage(msg)
 
 	default:
-		fmt.Printf("Unknown message at policy store: %s\n", msgType)
+		log.WithFields(logFields).Errorf("Unknown direct message at policy store: %s\n", msgType)
 	}
 
 	// Sign response too
@@ -409,15 +454,13 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 		if !ps.gitDatasetExists(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier()) {
 			newDefaultPolicy := ps.getInitialDatasetPolicy(msg.GetPolicyRequest().GetIdentifier())
 			if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newDefaultPolicy); err != nil {
-				panic(err)
-				log.Errorln(err.Error())
+				log.WithFields(logFields).Error(err.Error())
 				return nil, err
 			}
 
 			// Insert the policy into git
 			if err := ps.gitStorePolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier(), newDefaultPolicy); err != nil {
-				panic(err)
-				log.Errorln(err.Error())
+				log.WithFields(logFields).Error(err.Error())
 				return nil, err
 			}
 
@@ -427,35 +470,35 @@ func (ps *PolicyStoreCore) processStorageNodePolicyRequest(msg *pb.Message) ([]b
 			// The dataset policy exists in Git. Restore the dataset entry
 			policyString, err := ps.gitGetDatasetPolicy(msg.GetSender().GetName(), msg.GetPolicyRequest().GetIdentifier())
 			if err != nil {
-				panic(err)
-				log.Errorln(err.Error())
+				log.WithFields(logFields).Error(err.Error())
 				return nil, err
 			}
 
 			b, err := strconv.ParseBool(policyString)
 			if err != nil {
-				panic(err)
-				log.Errorln(err.Error())
+				log.WithFields(logFields).Error(err.Error())
 				return nil, err
 			}
 
 			newDataset.Identifier = msg.GetPolicyRequest().GetIdentifier()
 			// TOOO: store the timestamps in git too. Return a complete pb node from git interface?
-			newDataset.Policy = &pb.Policy{DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),Content:b, DateCreated: pbtime.Now(), DateApplied: pbtime.Now()} 
+			newDataset.Policy = &pb.Policy{
+				DatasetIdentifier: msg.GetPolicyRequest().GetIdentifier(),
+				Content: b, 
+				DateCreated: pbtime.Now(), 
+				DateUpdated: pbtime.Now()} 
 		}
 
 		// Insert the dataset into the collection, given the dataset identifier
 		if err := ps.dsManager.InsertDataset(msg.GetPolicyRequest().GetIdentifier(), newDataset); err != nil {
-			panic(err)
-			log.Errorln(err.Error())
+			log.WithFields(logFields).Error(err.Error())
 			return nil, err
 		}
 	} 
 
 	// Add the dataset to the lookup manager
 	if err := ps.dsLookupService.InsertDatasetLookupEntry(msg.GetPolicyRequest().GetIdentifier(), msg.GetSender().GetName()); err != nil {
-		panic(err)
-		log.Errorln(err.Error())
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 	
@@ -482,7 +525,7 @@ func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDat
 			}
 			
 			if err := ps.dsManager.InsertDataset(incomingDataset.GetIdentifier(), newDataset); err != nil {
-				log.Errorln(err.Error())
+				log.WithFields(logFields).Error(err.Error())
 				continue
 			}
 			deltaSet[incomingDataset.GetIdentifier()] = newDataset
@@ -491,7 +534,7 @@ func (ps *PolicyStoreCore) resolveDatasetDeltas(ctx context.Context, incomingDat
 		// Add datasets with stale policies
 		currentDataset := ps.dsManager.Dataset(datasetId)
 		if incomingDataset.GetPolicy().GetVersion() < currentDataset.GetPolicy().GetVersion() {
-			currentDataset.Policy.DateApplied = pbtime.Now()
+			currentDataset.Policy.DateUpdated = pbtime.Now()
 			deltaSet[datasetId] = currentDataset
 		}
 	}
@@ -529,7 +572,7 @@ func (ps *PolicyStoreCore) getInitialDatasetPolicy(datasetId string) *pb.Policy 
 		DatasetIdentifier:  datasetId,
 		Content:          	false,
 		DateCreated: 		pbtime.Now(),
-		DateApplied:   		pbtime.Now(),
+		DateUpdated:   		pbtime.Now(),
 	}
 }
 
@@ -537,36 +580,41 @@ func (ps *PolicyStoreCore) getInitialDatasetPolicy(datasetId string) *pb.Policy 
 func (ps *PolicyStoreCore) gossipHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		panic(err)
+		log.WithFields(logFields).Error(err.Error())
+		return nil, err
+	}
+
+	if err := ps.policyLog.InsertObservedGossip(msg.GetGossipMessage()); err != nil {
+		log.WithFields(logFields).Error(err.Error())
 	}
 
 	if err := ps.verifyPolicyStoreGossipSignature(msg); err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	switch msgType := msg.GetType(); msgType {
 	case message.MSG_TYPE_PROBE:
 		ps.ifritClient.SetGossipContent(data)	
 	default:
-		fmt.Printf("Unknown message at policy store: %s\n", msgType)
+		log.WithFields(logFields).Warnf("Unknown gossip message at policy store: %s\n", msgType)
 	}
 
 	return []byte(message.MSG_TYPE_OK), nil
 }
 
 func (ps *PolicyStoreCore) submitPolicyForDistribution(p *pb.Policy) {
-	ps.multicastManager.PolicyChan <- *p
+	ps.multicastManager.InsertPolicy(p)
 }
 
-func (ps *PolicyStoreCore) PolicyStoreConfig() Config {
+func (ps *PolicyStoreCore) PolicyStoreConfig() *Config {
 	ps.configLock.RLock()
 	defer ps.configLock.RUnlock()
-	return *ps.config
+	return ps.config
 }
 
 // Shut down all resources assoicated with the policy store
 func (ps *PolicyStoreCore) Shutdown() {
-	log.Println("Shutting down policy store")
+	log.WithFields(logFields).Print("Shutting down policy store")
 	// TODO: shut down servers too
 	ps.ifritClient.Stop()
 }

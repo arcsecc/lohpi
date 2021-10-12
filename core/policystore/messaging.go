@@ -2,7 +2,6 @@ package policystore
 
 import (
 	"fmt"
-	"errors"
 	"github.com/golang/protobuf/proto"
 	"github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
@@ -24,8 +23,6 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, err
 		return nil, err
 	}
 
-	log.Infoln("DS:", ds)
-
 	policy := ds.GetPolicy()
 	if policy == nil {
 		err := fmt.Errorf("Policy for dataset '%s' is nil\n", datasetId)
@@ -35,25 +32,6 @@ func (ps *PolicyStoreCore) pbMarshalDatasetPolicy(datasetId string) ([]byte, err
 	resp.Policy = policy
 	if err := ps.pbAddMessageSignature(resp); err != nil {
 		panic(err)
-		return nil, err
-	}
-
-	return proto.Marshal(resp)
-}
-
-func (ps *PolicyStoreCore) pbMarshalDatasetsMap(datasetsMap map[string]*pb.Dataset) ([]byte, error) {
-	if datasetsMap == nil {
-		return nil, errors.New("Datasets map cannot be nil")
-	}
-
-	resp := &pb.Message{
-		Sender: ps.pbNode(), 
-		/*ifDatasetCollectionSummary: &pb.DatasetCollectionSummary{
-			DatasetMap: datasetsMap,
-		},*/
-	}
-	
-	if err := ps.pbAddMessageSignature(resp); err != nil {
 		return nil, err
 	}
 

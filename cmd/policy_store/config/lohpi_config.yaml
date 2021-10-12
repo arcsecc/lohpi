@@ -1,5 +1,5 @@
-name: "Policy Store"
-host: "lohpi-policystore.norwayeast.azurecontainer.io"
+name: "policy_store"
+hostname: "lohpi-policystore.norwayeast.azurecontainer.io"
 httport: 8083
 grpcport: 6000
 gossipinterval: 10
@@ -14,7 +14,7 @@ azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
 azuretenantid: "c628abe3-0fe1-4381-bcc0-4721d4387973"
 azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
 azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
-lohpicryptodirectory: "crypto/lohpi"
-ifritcryptodirectory: "crypto/ifrit"
+lohpicryptounitworkingdirectory: "crypto/production/lohpi"
+ifritcryptounitworkingdirectory: "crypto/production/ifrit"
 ifrittcpport: 5000
 ifritudpport: 8000

@@ -32,17 +32,16 @@ message Message {
     DatasetResponse datasetResponse = 9;
     PolicyRequest policyRequest = 10;
     
-    //DatasetIdentifierStateRequest datasetIdentifierStateRequest = 11;
-//    DatasetDeltaRequest datasetDeltaRequest = 11;
-//    DatasetDeltaResponse DatasetDeltaResponse = 12;
+    DatasetSyncronization datasetSyncronization = 11;
     DatasetIdentifiersResponse datasetIdentifiersResponse = 13;
+    DatasetSyncronizationDelta datasetSyncronizationDelta = 14;
 
     // Other fields
-    string stringValue = 14;
-    repeated string stringSlice = 15;  // Arbitrary use
-    bytes Bytes = 16;
-    repeated bytes BytesSlice = 17;
-    bool boolValue = 18;
+    string stringValue = 15;
+    repeated string stringSlice = 16; 
+    bytes Bytes = 17;
+    repeated bytes BytesSlice = 18;
+    bool boolValue = 19;
 }
 
 message Response {
@@ -114,8 +113,9 @@ message Policy {
     string datasetIdentifier = 2;
     bool content = 3; // Acutal policy content
     uint64 version = 4; // Version number set by policy store when a new policy is set.
-    google.protobuf.Timestamp DateCreated = 5; // Time of creation of policy. Timezone?
-    google.protobuf.Timestamp DateApplied = 6; // Set by recipient when policy is applied.
+    google.protobuf.Timestamp DateCreated = 5; // Local time when the policy was created
+    google.protobuf.Timestamp DateUpdated = 6; // Local time when the policy was updated, if it exists
+    google.protobuf.Timestamp DateApplied = 7; // Local time when the policy was applied to a dataset at a node
 }
 
 message MsgSignature {
@@ -128,7 +128,6 @@ message HandshakeResponse {
     bytes id = 2;   // From fireflies
 }
 
-// Fix later
 message GossipMessage {
     string Sender = 1;              // Who sent it?
     string MessageType = 2;         // Gossip or probing?
@@ -139,7 +138,7 @@ message GossipMessage {
 }
 
 message GossipMessageID {
-    string PolicyStoreID = 1;
+    bytes PolicyStoreID = 1;
     int32 SequenceNumber = 2; // increased every time a batch is sent. Has to be retained
 }
 
@@ -168,19 +167,13 @@ message DatasetIdentifiersResponse {
     repeated string staleIdentifiers = 2;
 }
 
-/*message DatasetIdentifierStateResponse {
-    repeated string CorrectSetOfIdentifiers = 1;
-}*/
-
 // Request by node to PS. Includes policies as well
-/*message DatasetDeltaRequest {
-    repeated Dataset datasetToAdd = 1;
-    repeated Dataset datasetToRemove = 2;
+message DatasetSyncronizationDelta {
+    bytes sessionID = 1;
+    repeated Dataset datasets = 2;
 }
 
-message DatasetDeltaResponse {
-    repeated Dataset datasetToAdd = 1;
-    repeated Dataset datasetToRemove = 2;
-}
-*/
-// Policies list
+message DatasetSyncronization {
+    bytes sessionID = 1;
+    repeated Dataset datasets = 2;
+}   

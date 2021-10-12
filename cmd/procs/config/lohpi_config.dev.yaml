@@ -1,4 +1,4 @@
-hostname: "127.0.1.1"
+hostname: "127.0.0.1"
 directoryserveraddr: 127.0.1.1:8081
 policystoreaddr: 127.0.1.1:8084
 lohpicaaddr: 127.0.1.1:8301
@@ -14,3 +14,5 @@ azurestorageaccountname: "lohpistorageaccount"
 azurestorageaccountkey: "LjLw/vAflQW0gy2Q+l9laYacNKl+fUr2C7X3PQAwax9syamdO1C5xtyBwr2SQFxVTJ7PWpMPDLqJP9cGUAU5ww=="
 ifrittcpport: 10000
 ifritudpport: 10001
+lohpicryptounitworkingdirectory: crypto/lohpi
+ifritcryptounitworkingdirectory: crypto/ifrit

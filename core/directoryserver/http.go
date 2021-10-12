@@ -506,22 +506,24 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		Header: http.Header{},
 	}
 
+	log.Println("Host:", node.GetHttpsAddress() + ":" + strconv.Itoa(int(node.GetPort())))
+
 	// Shallow copy headers
 	datasetReq.Header = r.Header
 
 	client := &http.Client{}
-	resp, err := client.Do(datasetReq)
+	datasetResp, err := client.Do(datasetReq)
 	if err != nil {
 		log.Error(err.Error())
 		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	defer resp.Body.Close()
+	defer datasetResp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		log.Errorln(resp.Status + ": " + resp.Status)
-		http.Error(w, http.StatusText(resp.StatusCode)+": "+resp.Status, resp.StatusCode)
+	if datasetResp.StatusCode != http.StatusOK {
+		log.Errorln("Got response code", datasetResp.Status)
+		http.Error(w, http.StatusText(datasetResp.StatusCode) + ": " + datasetResp.Status, datasetResp.StatusCode)
 		return
 	}
 
@@ -537,28 +539,31 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 	}
 
 	client = &http.Client{}
-	resp, err = client.Do(policyVersionReq)
+	policyVersionResp, err := client.Do(policyVersionReq)
 	if err != nil {
 		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	defer resp.Body.Close()
+	defer policyVersionResp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		log.Errorln(resp.Status + ": " + resp.Status)
-		http.Error(w, http.StatusText(resp.StatusCode)+": "+resp.Status, resp.StatusCode)
-		return
+	if policyVersionResp.StatusCode != http.StatusOK {
+		reader := bufio.NewReader(datasetResp.Body)
+		if err := util.StreamToResponseWriter(reader, w, 1000*1024); err != nil {
+			log.Error(err.Error())
+			http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	policyVersionResponse := struct {
 		PolicyVersion uint64 `json:"policy_version"`
 	}{}
 
-	if err := json.NewDecoder(resp.Body).Decode(&policyVersionResponse); err != nil {
+	if err := json.NewDecoder(policyVersionResp.Body).Decode(&policyVersionResponse); err != nil {
 		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusBadRequest)+": "+err.Error(), http.StatusBadRequest)
+		http.Error(w, http.StatusText(http.StatusBadRequest) + ": " + err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -569,16 +574,17 @@ func (d *DirectoryServerCore) getDataset(w http.ResponseWriter, r *http.Request)
 		PolicyVersion:     policyVersionResponse.PolicyVersion,
 	}
 
+	// TODO move above download :) 
 	if err := d.checkoutManager.CheckoutDataset(dataset, dsCheckout); err != nil {
 		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	reader := bufio.NewReader(resp.Body)
+	reader := bufio.NewReader(datasetResp.Body)
 	if err := util.StreamToResponseWriter(reader, w, 1000*1024); err != nil {
 		log.Error(err.Error())
-		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + err.Error(), http.StatusInternalServerError)
 		return
 	}
 }

@@ -25,6 +25,8 @@ COPY ./core/datasetmanager ./core/datasetmanager
 COPY ./core/membershipmanager ./core/membershipmanager
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
+COPY ./core/setsync ./core/setsync
+COPY ./core/policyobserver ./core/policyobserver
 COPY ./core/comm ./core/comm
 COPY ./protobuf ./protobuf
 COPY ./core/util ./core/util
@@ -35,7 +37,7 @@ COPY ./cmd/directoryserver/config/lohpi_config.yaml ./cmd/directoryserver/config
 COPY ./cmd/directoryserver/config/ifrit_config.yaml ./cmd/directoryserver/config/ifrit_config.yaml
 
 
-# Run testb
+# Run tests
 #RUN go test ./...
 
 # Build the application
@@ -58,10 +60,10 @@ COPY ./cmd/directoryserver/crypto/ ./cmd/directoryserver/crypto/
 COPY ./cmd/directoryserver/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/directoryserver/config/lohpi_config.yaml ./config/lohpi_config.yaml
 COPY ./cmd/directoryserver/config/lohpi_config.dev.yaml ./config/lohpi_config.dev.yaml
-COPY ./cmd/directoryserver/crypto/lohpi/owncert.pem crypto/lohpi/owncert.pem
-COPY ./cmd/directoryserver/crypto/lohpi/cacert.pem crypto/lohpi/cacert.pem
-COPY ./cmd/directoryserver/crypto/lohpi/key.pem crypto/lohpi/key.pem
-COPY ./cmd/directoryserver/crypto/ifrit/*.pem crypto/ifrit/
+COPY ./cmd/directoryserver/crypto/production/lohpi/owncert.pem crypto/production/lohpi/owncert.pem
+COPY ./cmd/directoryserver/crypto/production/lohpi/cacert.pem crypto/production/lohpi/cacert.pem
+COPY ./cmd/directoryserver/crypto/production/lohpi/key.pem crypto/production/lohpi/key.pem
+COPY ./cmd/directoryserver/crypto/production/ifrit/*.pem crypto/production/ifrit/
 
 # Command to run the executable
 ENTRYPOINT ["/directoryserver", "-c", "config/lohpi_config.yaml"]

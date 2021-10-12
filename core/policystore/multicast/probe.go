@@ -23,7 +23,7 @@ var (
 type probeSessionConfig struct {
 	// Percentage of network nodes needed to achieve consistency
 	// Phi. Static
-	acceptanceLevel float64
+	AcceptanceLevel float64
 
 	// Unique session ID
 	sessionID []byte
@@ -57,11 +57,11 @@ type probeManager struct {
 	probeConfigLock sync.RWMutex
 
 	// Multicast configuration
-	multicastConfig multicastConfig
+	MulticastConfig MulticastConfig
 	mcConfigLock    sync.RWMutex
 
 	// Percentage of nodes we require to receive the messages
-	acceptanceLevel float64
+	AcceptanceLevel float64
 
 	isProbing      bool
 	isProbingMutex sync.RWMutex
@@ -97,12 +97,12 @@ func (p *probeManager) IsProbing() bool {
 }
 
 // Returns a probe session using the given multicast configuration
-func (p *probeManager) initializeProbingSession(mcConfig multicastConfig) {
+func (p *probeManager) initializeProbingSession(mcConfig MulticastConfig) {
 	sessionID := make([]byte, 4)
 	rand.Read(sessionID)
 
 	config := &probeSessionConfig{
-		acceptanceLevel: mcConfig.acceptanceLevel,
+		AcceptanceLevel: mcConfig.AcceptanceLevel,
 		sessionID:       sessionID,
 		numMembers:      len(p.ifritClient.Members()) - 1, // Subtract mux from the set
 	}
@@ -112,8 +112,9 @@ func (p *probeManager) initializeProbingSession(mcConfig multicastConfig) {
 
 // Probes the network by multicasting a probing messages to the given members.
 // It uses the current configuration assoicated with the probing manager.
-// If probing is aborted prematurely, multicastConfig is nil.
-func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode) (*multicastConfig, error) {
+// If probing is aborted prematurely, MulticastConfig is nil.
+func (p *probeManager) probeNetwork(mcConfig *MulticastConfig, mode MessageMode) (*MulticastConfig, error) {
+	/*
 	p.isProbingMutex.Lock()
 	p.isProbing = true
 	p.isProbingMutex.Unlock()
@@ -126,14 +127,14 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 
 	p.initializeProbingSession(*mcConfig)
 
-	// Timer used to wait for acks. Using initial value from multicastConfig
-	ackTimer := time.NewTimer(mcConfig.multicastInterval)
+	// Timer used to wait for acks. Using initial value from MulticastConfig
+	ackTimer := time.NewTimer(mcConfig.MulticastInterval)
 	order := 1
 	consecutiveSuccesses := 0
 
-	sigma := mcConfig.multicastDirectRecipients
-	tau := mcConfig.multicastInterval
-	phi := mcConfig.acceptanceLevel
+	sigma := mcConfig.MulticastDirectRecipients
+	tau := mcConfig.MulticastInterval
+	phi := mcConfig.AcceptanceLevel
 
 	// Main probing loop
 	for { //i := 0; i < 20; i++ {
@@ -192,7 +193,7 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 				consecutiveSuccesses++
 			}
 			ackTimer.Reset(prbSessionConfig.multicastInterval)
-			*/
+			*
 		}
 
 		if consecutiveSuccesses > 2 {
@@ -206,12 +207,13 @@ func (p *probeManager) probeNetwork(mcConfig *multicastConfig, mode MessageMode)
 
 	r := p.getCurrentRound()
 
-	cc := &multicastConfig{
-		multicastDirectRecipients: r.multicastDirectRecipients,
-		multicastInterval:         r.multicastInterval,
+	cc := &MulticastConfig{
+		MulticastDirectRecipients: r.multicastDirectRecipients,
+		MulticastInterval:         r.multicastInterval,
 	}
 
-	return cc, nil
+	return cc, nil*/
+	return nil, nil
 }
 
 func (p *probeManager) Stop() {
@@ -232,16 +234,16 @@ func (p *probeManager) probeConfiguration() probeSessionConfig {
 }
 
 // Sets the multicast configuration
-func (p *probeManager) SetMulticastConfiguration(config multicastConfig) {
+func (p *probeManager) SetMulticastConfiguration(config MulticastConfig) {
 	p.mcConfigLock.Lock()
 	defer p.mcConfigLock.Unlock()
-	p.multicastConfig = config
+	p.MulticastConfig = config
 }
 
-func (p *probeManager) MulticastConfiguration() multicastConfig {
+func (p *probeManager) MulticastConfiguration() MulticastConfig {
 	p.mcConfigLock.RLock()
 	defer p.mcConfigLock.RUnlock()
-	return p.multicastConfig
+	return p.MulticastConfig
 }
 
 // Multicasts a set of probe messages given the order number of the configuration
@@ -335,7 +337,7 @@ func (p *probeManager) probeAcknowledger() {
 
 			// Check if all acks have arrived. Signal if all have arrived
 			/*n := config.numMembers
-			a := config.acceptanceLevel*/
+			a := config.AcceptanceLevel*/
 
 			/*if len(currentRound.table) >= nAcceptanceNodes(n, a) {
 				p.allAcksChan <-true
@@ -404,7 +406,7 @@ func (p *probeManager) probeRoundRecipients(mode MessageMode, directRecipients i
 func (p *probeManager) acknowledgmentsArrivedInTime() bool {
 	config := p.probeConfiguration()
 	n := config.numMembers
-	a := config.acceptanceLevel
+	a := config.AcceptanceLevel
 
 	round := p.getCurrentRound()
 	round.acktableLock.RLock()
@@ -424,7 +426,7 @@ func (p *probeManager) increaseProbeParameters(tau *time.Duration, sigma *int) {
 
 	// Phi is the acceptance level. Always increase sigma until
 	// it reaches its upper bound of ceil((phi * n ) / 2)
-	accLevel := sessionConfig.acceptanceLevel
+	accLevel := sessionConfig.AcceptanceLevel
 	n := sessionConfig.numMembers
 
 	if *sigma < int(math.Ceil((accLevel*float64(n))/2)) {
@@ -453,15 +455,11 @@ func (p *probeManager) increaseProbeParameters(tau *time.Duration, sigma *int) {
 	//	p.setCurrentRound(&config)
 	//log.Println("After increasing:")
 	//log.Println("config.MulticastDirectRecipients:", config.MulticastDirectRecipients)
-	//log.Println("config.MulticastInterval:", config.MulticastInterval)
+	//log.Println("config.multicastInterval:", config.multicastInterval)
 }
 
-func (p *probeManager) setIgnoredIfritNodes(ignoredIPs map[string]string) {
-	p.memManager.setIgnoredIfritNodes(ignoredIPs)
-}
-
-func nAcceptanceNodes(n int, acceptanceLevel float64) int {
-	return int(math.Ceil(float64(n) * acceptanceLevel))
+func nAcceptanceNodes(n int, AcceptanceLevel float64) int {
+	return int(math.Ceil(float64(n) * AcceptanceLevel))
 }
 
 // Returns true if now is before limit, returns false otherwise

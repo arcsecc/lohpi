@@ -147,24 +147,23 @@ type certManager interface {
 
 type setSyncer interface {
 	RegisterIfritClient(client *ifrit.Client) 
-	RequestDatasetIdentifiersSync(ctx context.Context, currentIdentifiers []string, remoteAddr string) ([]string, []string, error)
-	SynchronizeDatasets(ctx context.Context, datasets map[string]*pb.Dataset, targetAddr string) (map[string]*pb.Dataset, error)
-	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
+	RequestDatasetIdentifiersSync(ctx context.Context, currentIdentifiers []string, remoteAddr string) ([]string, []string, error)	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
 }
 
 // Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
-func NewDirectoryServerCore(cm certManager, gossipObs gossipObserver, dsLookupService datasetLookupService, memManager membershipManager, checkoutManager datasetCheckoutManager, setSync setSyncer, config *Config) (*DirectoryServerCore, error) {
+func NewDirectoryServerCore(cm certManager, gossipObs gossipObserver, dsLookupService datasetLookupService, memManager membershipManager, checkoutManager datasetCheckoutManager, setSync setSyncer, config *Config, new bool) (*DirectoryServerCore, error) {
 	if config == nil {
 		return nil, errors.New("Configuration for directory server is nil")
 	}
 
 	ifritClient, err := ifrit.NewClient(&ifrit.Config{
-		New:            true,
+		New: 			new,
 		TCPPort:        config.IfritTCPPort,
 		UDPPort:        config.IfritUDPPort,
 		Hostname:       config.Hostname,
 		CryptoUnitPath: config.IfritCryptoUnitWorkingDirectory})
 	if err != nil {
+		panic(err)
 		return nil, err
 	}
 
@@ -241,7 +240,6 @@ func (d *DirectoryServerCore) startStateSynchronizer() {
 			case <-d.exitChan:
 				log.Println("Exiting state synchronization")
 				return 
-				// TODO: cleanup everything gracefullys
 			case <-time.After(5 * time.Second):
 				ids := d.dsLookupService.DatasetIdentifiersAtNode(node.GetName())
 				newIdentifiers, staleIdentifiers, err := d.setSync.RequestDatasetIdentifiersSync(context.Background(), ids, node.GetIfritAddress())				
@@ -257,41 +255,6 @@ func (d *DirectoryServerCore) startStateSynchronizer() {
 			}
 		}
 	}
-
-	/*for {
-		select {
-		
-			
-			return
-		case <-time.After(d.config.DatasetIdentifiersSyncInterval):
-			ids := d.dsLookupService.DatasetIdentifiersAtNode("node1")
-			log.Println("ids stored by node1:", ids)
-			// For now, let's sync all identifiers. If the gRPC messages get too big, use iteration and/or streaming.
-			// See Ifrit and gRPC for more information. Set sane range values.
-/*			datasetIdentifiers := d.dsLookupService.DatasetIdentifiers()
-			if err :=  n.pbSendDatsetIdentifiers(datasetIdentifiers, n.getDirectoryServerIP()); err != nil {
-				log.WithFields(nodeLogFields).Infoln("Stopping synchronization process")
-			}*/
-
-			/*deltaMap, err := n.stateSync.SynchronizeDatasets(context.Background(), n.dsManager.Datasets(), n.policyStoreIP)
-			if err != nil {
-				log.Errorln(err.Error())
-			}
-
-			if deltaMap != nil {
-				for id, ds := range deltaMap {
-					if err := n.dsManager.SetDatasetPolicy(id, ds.GetPolicy()); err != nil {
-						log.Error(err.Error())
-					}
-				}
-			}
-
-			// Send the correct identifiers to the directory server
-			if err := n.pbResolveDatsetIdentifiers(n.directoryServerIP); err != nil {
-				log.Error(err.Error())
-			}*
-		}
-	}*/
 }
 
 // Create a node that performs a handshake with
@@ -322,16 +285,9 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 
 	switch msgType := msg.Type; msgType {
 	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
-		//if err := d.dsLookupService.InsertDatasetLookupEntry(msg.GetStringValue(), msg.GetSender()); err != nil {
 		if err := d.dsLookupService.InsertDatasetLookupEntry(msg.GetStringValue(), msg.GetSender().GetName()); err != nil {
 			log.Errorln(err.Error())
 			return nil, ErrDatasetLookupInsert
-		}
-
-	case message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS:
-		if err := d.resolveDatasetIdentifiersDeltas(msg.GetStringSlice(), msg.GetSender()); err != nil {
-			log.Errorln(err.Error())
-			return nil, err
 		}
 
 	default:
@@ -349,49 +305,6 @@ func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 	return resp, nil
 }
 
-func (d *DirectoryServerCore) resolveDatasetIdentifiersDeltas(newIdentifiers []string, node *pb.Node) error {
-	if newIdentifiers == nil {
-		return errors.New("newIdentifiers is nil")
-	}
-
-	if node == nil {
-		return errors.New("node is nil")
-	}
-
-	/*currentIdentifiers := d.dsLookupService.DatasetIdentifiers()
-	for _, id := range newIdentifiers {
-	/*	if err := d.dsLookupService.InsertDatasetNode(id, node); err != nil {
-			log.Errorln(err.Error())
-		}
-	}
-
-	superfluous := make([]string, 0)
-
-	// Find superfluous datasets in the collection and remove them. Use identifier as key
-	for _, currentDatasetIdentifier := range currentIdentifiers {
-		found := false
-		for _, newIdentifier := range newIdentifiers {
-			if currentDatasetIdentifier == newIdentifier {
-				found = true
-				break
-			}
-		}
-
-		if found {
-			continue
-		} else {
-			superfluous = append(superfluous, currentDatasetIdentifier)
-		}
-	}
-
-	for _, s := range superfluous {
-		d.dsLookupService.RemoveDatasetNode(s)
-	}
-
-	*/
-	return nil
-}
-
 // Adds the given node to the network and returns the DirectoryServerCore's IP address
 func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if node == nil {
@@ -405,6 +318,7 @@ func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb
 	log.Infof("Added '%s' to map with Ifrit IP '%s' and HTTPS address '%s'\n", node.GetName(), node.GetIfritAddress(), node.GetHttpsAddress())
 	return &pb.HandshakeResponse{
 		Ip: fmt.Sprintf("%s:%d", d.config.Hostname, d.config.IfritTCPPort),
+		//Ip: d.ifritClient.Addr(),
 		Id: []byte(d.ifritClient.Id()),
 	}, nil
 }

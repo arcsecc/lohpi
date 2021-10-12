@@ -1,11 +1,11 @@
-ca_addr: 127.0.1.1:8300
+ca_addr: lohpi-cauth.norwayeast.azurecontainer.io:8300
 gossip_interval: 3
 max_concurrent_messages: 10
 monitor_interval: 10
 ping_limit: 10
 pings_per_interval: 3
 removal_timeout: 20
-use_ca: true
+use_ca: false
 use_compression: true
 view_update_interval: 10
 viz_update_interval: 10

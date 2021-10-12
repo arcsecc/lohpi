@@ -3,16 +3,17 @@ package main
 import (
 	"flag"
 	"fmt"
-	"time"
 	"github.com/arcsecc/lohpi"
 	"github.com/jinzhu/configor"
 	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 var config = struct {
+	Name                            string `required:"true"`
 	HTTPPort                        int    `default:"8080"`
 	GRPCPort                        int    `default:"8081"`
 	LohpiCaAddr                     string `default:"127.0.1.1:8301"`
@@ -27,7 +28,7 @@ var config = struct {
 	Hostname                        string `required:"true"`
 	IfritTCPPort                    int    `required:"true"`
 	IfritUDPPort                    int    `required:"true"`
-	DatasetIdentifiersSyncInterval  int `required:"true"`
+	DatasetIdentifiersSyncInterval  int    `required:"true"`
 }{}
 
 func main() {
@@ -39,13 +40,13 @@ func main() {
 	args.BoolVar(&createNew, "new", false, "Initialize new Lohpi directory server instance.")
 	args.Parse(os.Args[1:])
 
-	//log.SetLevel(log.ErrorLevel)
+//	log.SetLevel(log.ErrorLevel)
 
 	if configFile == "" {
 		log.Errorln("Configuration file must be provided. Exiting.")
 		os.Exit(2)
 	}
-	
+
 	configor.New(&configor.Config{
 		Debug:                true,
 		ENVPrefix:            "DIRECTORYSERVER",
@@ -76,15 +77,15 @@ func main() {
 }
 
 func getDirectoryServerConfiguration() (*lohpi.DirectoryServerConfig, error) {
-	constring, err := getDatabaseConnectionString()
+	connString, err := getDatabaseConnectionString()
 	if err != nil {
 		return nil, err
 	}
 
 	return &lohpi.DirectoryServerConfig{
 		CaAddress:                       config.LohpiCaAddr,
-		Name:                            "Lohpi directory server",
-		SQLConnectionString:             constring,
+		Name:                            config.Name,
+		SQLConnectionString:             connString,
 		HTTPPort:                        config.HTTPPort,
 		GRPCPort:                        config.GRPCPort,
 		HostName:                        config.Hostname,
@@ -92,7 +93,7 @@ func getDirectoryServerConfiguration() (*lohpi.DirectoryServerConfig, error) {
 		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 		IfritTCPPort:                    config.IfritTCPPort,
 		IfritUDPPort:                    config.IfritUDPPort,
-		DatasetIdentifiersSyncInterval:	 time.Duration(config.DatasetIdentifiersSyncInterval) * time.Second,
+		DatasetIdentifiersSyncInterval:  time.Duration(config.DatasetIdentifiersSyncInterval) * time.Second,
 	}, nil
 }
 

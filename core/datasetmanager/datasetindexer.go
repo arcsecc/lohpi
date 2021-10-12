@@ -1,6 +1,7 @@
 package datasetmanager
 
 import (
+	"sync"
 	"fmt"
 	"strconv"
 	"github.com/go-redis/redis/v8"
@@ -27,6 +28,7 @@ type DatasetIndexerUnit struct {
 	config *DatasetIndexerUnitConfig
 	datasetStorageSchema string
 	datasetStorageTable string
+	datasetLookupTable string
 	pool *pgxpool.Pool
 }
 
@@ -71,6 +73,7 @@ func NewDatasetIndexerUnit(id string, config *DatasetIndexerUnitConfig) (*Datase
 		config: config,			
 		datasetStorageSchema: id + "_schema",
 		datasetStorageTable: id + "_policy_table",
+		datasetLookupTable: id + "_dataset_lookup_table",
 	}
 	
 	if config.RedisClientOptions != nil {
@@ -169,23 +172,30 @@ func (d *DatasetIndexerUnit) Datasets() map[string]*pb.Dataset {
 	}
 
 	sets := make(map[string]*pb.Dataset)
-	dsChan, errChan := d.dbSelectAllDatasets()
-	for {
-		select {
-		case dataset, ok := <-dsChan:
-			if ok {
-				sets[dataset.GetIdentifier()] = dataset
-			} else {
-				break
-			}
-		case err, ok := <-errChan:
-			if ok {
-				log.WithFields(indexerLogFields).Error(err.Error())
-			} else {
-				break
+	dsChan, errChan, doneChan := d.dbSelectAllDatasets()
+	
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case dataset, ok := <-dsChan:
+				if ok {
+					sets[dataset.GetIdentifier()] = dataset
+				}
+			case <-doneChan:
+				return
+			case err, ok := <-errChan:
+				if ok {
+					log.WithFields(indexerLogFields).Error(err.Error())
+				}
 			}
 		}
-	}
+	}()
+
+	wg.Wait()
 
 	return sets
 }
@@ -489,6 +499,16 @@ func (d *DatasetIndexerUnit) GetDatasetPolicy(datasetId string) *pb.Policy {
 	return policy
 }
 
+func (d *DatasetIndexerUnit) DatasetsAtNode(node *pb.Node) []*pb.Dataset {
+	datasets, err := d.dbSelectAllDatasetsAtNode(node)
+	if err != nil {
+		log.WithFields(indexerLogFields).Error(err.Error())
+		return nil
+	}
+
+	return datasets
+}
+
 func (d *DatasetIndexerUnit) flushAll() error {
 	return d.redisClient.FlushAll(context.Background()).Err()
 }
@@ -500,7 +520,7 @@ func (d *DatasetIndexerUnit) reloadRedis() chan error {
 	// Insert each dataset into Redis. 
 	go func() {
 		defer close(errc)
-		dsChan, errChan := d.dbSelectAllDatasets()
+		dsChan, errChan, doneChan := d.dbSelectAllDatasets()
 		pipe := d.redisClient.TxPipeline()
 		idx := -1
 		for {
@@ -538,9 +558,11 @@ func (d *DatasetIndexerUnit) reloadRedis() chan error {
 					log.WithFields(indexerLogFields).Error(err.Error())
 					errc <-err
 				}
+
+			case <-doneChan:
+				return
 			}
 		}
-
 		errc <- nil
 	}()
 

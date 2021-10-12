@@ -9,16 +9,15 @@ import (
 	"github.com/arcsecc/lohpi/core/node"
 	"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/pkg/errors"
-	"github.com/go-redis/redis/v8"
 _	"github.com/spf13/viper"
 	log "github.com/sirupsen/logrus"
 	"net/http"
-	"time"
 )
 
 var (
 	errNoDatasetId = errors.New("Dataset identifier is empty.")
 	errNoDatasetIndexingOptions = errors.New("Dataset indexing options are nil")
+	errNoConnectionString = errors.New("SQL connection is not set")
 )
 
 type Node struct {
@@ -44,33 +43,14 @@ type NodeConfig struct {
 	// Hostname of the node. Default value is "127.0.1.1".
 	Hostname string
 
-	// Output directory of gossip observation unit. Default value is the current working directory.
-	PolicyObserverWorkingDirectory string
-
 	// HTTP port number. Default value is 9000
 	Port int
 
-	// Interval between which the node will initiate a synchronization of the policies between the policy store
-	// and the node itself. Default value is 60 seconds.
-	PolicySyncInterval time.Duration 
+	// Directory path used by Lohpi to store X.509 certificate and private key
+	LohpiCryptoUnitWorkingDirectory string
 
-	// Interval between which the node will initiate a synchronization of datasets the node stores between itself 
-	// and the policy store. Default value is 60 seconds.
-	DatasetSyncInterval time.Duration 
-
-	// Interval between which the node will initiate a synchronization of the datasets available to the 
-	// clients through the directory server. Default value is 60 seconds.
-	DatasetIdentifiersSyncInterval time.Duration 
-
-	// Interval between which the node will initiate a synchronization of the checked out datasets'
-	// policies between itself and the directory server. Default value is 60 seconds.
-	CheckedOutDatasetPolicySyncInterval time.Duration 
-
-	// Path used to store X.509 certificate and private key
-	CryptoUnitWorkingDirectory string
-
-	// Options used by Redis.
-	RedisClientOptions *redis.Options
+	// Directory path used by Ifrit to store X.509 certificate and private key
+	IfritCryptoUnitWorkingDirectory string 
 
 	// Ifrit's TCP port. Default value is 5000.
 	IfritTCPPort int
@@ -93,43 +73,23 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 		config.Hostname = "127.0.1.1"
 	}
 
-	if config.PolicyObserverWorkingDirectory == "" {
-		config.PolicyObserverWorkingDirectory = "."
-	}
-
 	if config.Port == 0 {
 		config.Port = 9000
 	}
 
-	if config.PolicySyncInterval <= 0 {
-		config.PolicySyncInterval = 2 * time.Second
-	}
-	if config.DatasetSyncInterval <= 0 {
-		config.DatasetSyncInterval = 2 * time.Second
-	}
-	if config.DatasetIdentifiersSyncInterval <= 0 {
-		config.DatasetIdentifiersSyncInterval = 2 * time.Second
-	}
-	if config.CheckedOutDatasetPolicySyncInterval <= 0 {
-		config.CheckedOutDatasetPolicySyncInterval = 2 * time.Second
-	}
-
-	if config.CryptoUnitWorkingDirectory == "" {
-		config.CryptoUnitWorkingDirectory = "./crypto/lohpi"
+	if config.SQLConnectionString == "" {
+		return nil, errNoConnectionString
 	}
 
 	n := &Node{
 		conf: &node.Config{
-			Name:                   config.Name,
-			SQLConnectionString:    config.SQLConnectionString,
-			Port:                   config.Port,
-			PolicySyncInterval:		config.PolicySyncInterval,
-			DatasetSyncInterval: 	config.DatasetSyncInterval,
-			DatasetIdentifiersSyncInterval: config.DatasetIdentifiersSyncInterval,
-			CheckedOutDatasetPolicySyncInterval: config.CheckedOutDatasetPolicySyncInterval,
-			Hostname:				config.Hostname,
-			IfritTCPPort: 			config.IfritTCPPort,
-			IfritUDPPort: 			config.IfritUDPPort,
+			Name: config.Name,
+			SQLConnectionString: config.SQLConnectionString,
+			Port: config.Port,
+			Hostname: config.Hostname,
+			IfritTCPPort: config.IfritTCPPort,
+			IfritUDPPort: config.IfritUDPPort,
+			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 		},
 	}
 
@@ -150,8 +110,7 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 			CaAddr: config.CaAddress,
 			Hostnames: []string{config.Hostname},
 		}
-
-		cu, err = comm.NewCu(config.CryptoUnitWorkingDirectory, cryptoUnitConfig)
+		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -160,17 +119,17 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 			return nil, err
 		}	
 	} else {
-		cu, err = comm.LoadCu(config.CryptoUnitWorkingDirectory)
+		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// Policy observer 
-	gossipObsConfig := &policyobserver.PolicyObserverUnitConfig{
+	policyObserverConfig := &policyobserver.PolicyObserverUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 	}
-	gossipObs, err := policyobserver.NewPolicyObserverUnit(config.Name, gossipObsConfig)
+	policyObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, policyObserverConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +137,6 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	// Dataset manager service
 	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		RedisClientOptions: config.RedisClientOptions,
 	}
 	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, datasetIndexerUnitConfig)
 	if err != nil {
@@ -194,14 +152,13 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	// Checkout manager
 	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
-		// skip redis for now
 	}
 	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(config.Name, dsCheckoutManagerConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	nCore, err := node.NewNodeCore(cu, gossipObs, dsManager, stateSync, dsCheckoutManager, n.conf)
+	nCore, err := node.NewNodeCore(cu, policyObserver, dsManager, stateSync, dsCheckoutManager, n.conf, createNew)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +216,7 @@ func (n *Node) RemoveDataset(id string) {
 }
 
 // Shuts down the node
-func (n *Node) Shutdown() {
+func (n *Node) Stop() {
 	n.nodeCore.Shutdown()
 }
 

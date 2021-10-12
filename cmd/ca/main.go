@@ -24,8 +24,8 @@ var IfritCaConfig = struct {
 	Host         string `default:"127.0.1.1"`
 	Port         int    `default:"8300"`
 	Path         string `default:"./ifrit-cad"`
-	NumRings     uint32 `default:"3"`
-	NumBootNodes uint32 `default:"1"`
+	NumRings     uint32 `default:"30"`
+	NumBootNodes uint32 `default:"30"`
 	LogFile      string `default:""`
 }{}
 

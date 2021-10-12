@@ -2,10 +2,12 @@ package datasetmanager
 
 import (
 	"context"
+	"time"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"fmt"
 	"errors"
 	log "github.com/sirupsen/logrus"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (d *DatasetCheckoutServiceUnit) dbGetAllDatasetCheckouts() ([]*pb.DatasetCheckout, error) {
@@ -25,14 +27,15 @@ func (d *DatasetCheckoutServiceUnit) dbGetAllDatasetCheckouts() ([]*pb.DatasetCh
 			continue
         }
 
-		timestamp, err := toTimestamppb(dateCheckout)
+		checkoutTime, err := time.Parse(time.RFC1123Z, dateCheckout)
 		if err != nil {
-			return nil, err
+			log.WithFields(dbLogFields).Error(err.Error())
+			continue
 		}
 		
 		datasetCheckout := &pb.DatasetCheckout{
 			DatasetIdentifier: datasetId,
-			DateCheckout: timestamp,
+			DateCheckout: pbtime.New(checkoutTime),
     		Client: &pb.Client{
 				Name: clientName,
     			ID: clientId,
@@ -145,7 +148,7 @@ func (d *DatasetCheckoutServiceUnit) dbSelectDatasetCheckouts(dataset string) (c
 				return
 			}
 
-			timestamp, err := toTimestamppb(dateCheckout)
+			checkoutTime, err := time.Parse(time.RFC1123Z, dateCheckout)
 			if err != nil {
 				log.WithFields(checkoutLogFields).Error(err.Error())
 				errChan <- err
@@ -154,7 +157,7 @@ func (d *DatasetCheckoutServiceUnit) dbSelectDatasetCheckouts(dataset string) (c
 		
 			dsChan <- &pb.DatasetCheckout{
 				DatasetIdentifier: datasetId,
-				DateCheckout: timestamp,
+				DateCheckout: pbtime.New(checkoutTime),
     			Client: &pb.Client{
 					Name: clientName,
     				ID: clientId,
