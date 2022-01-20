@@ -3,14 +3,13 @@ package lohpi
 import (
 	"crypto/x509/pkix"
 	"errors"
-	"github.com/arcsecc/lohpi/core/setsync"
+	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
-	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
+	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policyobserver"
 	"time"
-	"fmt"
 )
 
 type DirectoryServerConfig struct {
@@ -40,7 +39,7 @@ type DirectoryServerConfig struct {
 	LohpiCryptoUnitWorkingDirectory string
 
 	// Directory path used by Ifrit to store X.509 certificate and private key
-	IfritCryptoUnitWorkingDirectory string 
+	IfritCryptoUnitWorkingDirectory string
 
 	// Ifrit's TCP port. Default value is 5000.
 	IfritTCPPort int
@@ -50,6 +49,9 @@ type DirectoryServerConfig struct {
 
 	// Interval in seconds between each dataset identifiers synchronization procedure.
 	DatasetIdentifiersSyncInterval time.Duration
+
+	// Database connection pool size
+	DBConnPoolSize int
 }
 
 type DirectoryServer struct {
@@ -83,10 +85,6 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.GRPCPort = 8081
 	}
 
-	if config.LohpiCryptoUnitWorkingDirectory == "" {
-		return nil, errors.New("Lohpi crypto working directory is nil")
-	}
-
 	if config.IfritTCPPort == 0 {
 		config.IfritTCPPort = 5000
 	}
@@ -95,21 +93,28 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.IfritUDPPort = 6000
 	}
 
+	if config.DBConnPoolSize <= 0 {
+		return nil, errors.New("Database connection pool size must be greater than zero")
+	}
+
+	if config.LohpiCryptoUnitWorkingDirectory == "" {
+		return nil, errors.New("Lohpi crypto unit working directory is nil")
+	}
+
 	if config.IfritCryptoUnitWorkingDirectory == "" {
-		return nil, errors.New("Ifrit crypto working directory is nil")
+		return nil, errors.New("Ifrit crypto unit working directory is nil")
 	}
 
 	ds := &DirectoryServer{
 		conf: &directoryserver.Config{
-			Name:                 config.Name,
-			HTTPPort:             config.HTTPPort,
-			GRPCPort:             config.GRPCPort,
-			SQLConnectionString:  config.SQLConnectionString,
-			Hostname:			  config.HostName,
-			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
-			IfritTCPPort: 		 config.IfritTCPPort,
-			IfritUDPPort: 		 config.IfritUDPPort,
-			DatasetIdentifiersSyncInterval: config.DatasetIdentifiersSyncInterval,
+			Name: config.Name,
+			HTTPPort: config.HTTPPort,
+			GRPCPort: config.GRPCPort,
+			SQLConnectionString: config.SQLConnectionString,
+			Hostname: config.HostName,
+			IfritCryptoUnitWorkingDirectory: .IfritCryptoUnitWorkingDirectory,
+			IfritTCPPort: config.IfritTCPPort,
+			IfritUDPPort: config.IfritUDPPort,
 		},
 	}
 
@@ -118,17 +123,16 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	var err error
 
 	if new {
-		// Create a new crypto unit 
+		// Create a new crypto unit
 		cryptoUnitConfig := &comm.CryptoUnitConfig{
 			Identity: pkix.Name{
-				Country: []string{"NO"},
 				CommonName: ds.conf.Name,
 				Locality: []string{
-					fmt.Sprintf("%s:%d", config.HostName, config.HTTPPort), 
+					fmt.Sprintf("%s:%d", config.HostName, config.HTTPPort),
 					fmt.Sprintf("%s:%d", config.HostName, config.GRPCPort),
 				},
 			},
-			CaAddr: config.CaAddress,
+			CaAddr:    config.CaAddress,
 			Hostnames: []string{config.HostName},
 		}
 		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
@@ -138,7 +142,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 
 		if err := cu.SaveState(); err != nil {
 			return nil, err
-		}	
+		}
 	} else {
 		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
 		if err != nil {
@@ -146,51 +150,37 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		}
 	}
 
-	// Dataset manager
-	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
-		SQLConnectionString: config.SQLConnectionString,
+	pool, err := dbPool(config.SQLConnectionString, int32(config.DBConnPoolSize))
+	if err != nil {
+		return nil, err
 	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService("directory_server", datasetLookupServiceConfig)
+
+	// Dataset manager
+	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{}
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService(config.Name, datasetLookupServiceConfig, pool)
 	if err != nil {
 		return nil, err
 	}
 
 	// Membership manager
-	memManagerConfig := &membershipmanager.MembershipManagerUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-		UseDB: true,
-	}
-	memManager, err := membershipmanager.NewMembershipManager("directory_server", memManagerConfig)
+	memManager, err := membershipmanager.NewMembershipManager(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
 	// Checkout manager
-	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("directory_server", dsCheckoutManagerConfig)
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
-	// Policy observer 
-	gossipObsConfig := &policyobserver.PolicyObserverUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-
-	gossipObs, err := policyobserver.NewPolicyObserverUnit("directory_server", gossipObsConfig)
+	// Policy observer
+	gossipObs, err := policyobserver.NewPolicyObserverUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
-	// Policy synchronization service
-	stateSync, err := setsync.NewSetSyncUnit()
-	if err != nil {
-		return nil, err
-	}
-
-	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, stateSync, ds.conf, new)
+	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, ds.conf, pool, new)
 	if err != nil {
 		return nil, err
 	}
