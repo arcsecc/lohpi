@@ -70,7 +70,6 @@ func NewCu(path string, config *CryptoUnitConfig) (*CryptoUnit, error) {
 	}
 
 	if err := os.MkdirAll(path, 0700); err != nil {
-		panic(err)
 		return nil, err
 	}
 
@@ -88,12 +87,12 @@ func NewCu(path string, config *CryptoUnitConfig) (*CryptoUnit, error) {
 	}
 
 	return &CryptoUnit{
-		ca:               certs.caCert,
-		self:             certs.ownCert,
-		priv:             priv,
-		keyFilePath:      "key.pem",
+		ca: certs.caCert,
+		self: certs.ownCert,
+		priv: priv,
+		keyFilePath: "key.pem",
 		selfCertFilePath: "owncert.pem",
-		caCertFilePath:   "cacert.pem",
+		caCertFilePath: "cacert.pem",
 		workingDirectory: path,
 	}, nil
 }
