@@ -20,21 +20,21 @@ RUN go mod download
 
 # Local dependencies
 COPY ./directoryserver.go ./directoryserver.go
+COPY ./database.go ./database.go
 COPY ./core/directoryserver ./core/directoryserver
 COPY ./core/datasetmanager ./core/datasetmanager
 COPY ./core/membershipmanager ./core/membershipmanager
 COPY ./core/message ./core/message
 COPY ./core/netutil ./core/netutil
-COPY ./core/setsync ./core/setsync
 COPY ./core/policyobserver ./core/policyobserver
 COPY ./core/comm ./core/comm
 COPY ./protobuf ./protobuf
 COPY ./core/util ./core/util
 COPY ./keyvault.go ./keyvault.go
+COPY ./core/status ./core/status
 COPY ./cmd/directoryserver/main.go ./cmd/directoryserver/main.go
 COPY ./cmd/directoryserver/config/lohpi_config.eval.yaml ./cmd/directoryserver/config/lohpi_config.eval.yaml
 COPY ./cmd/directoryserver/config/ifrit_config.yaml ./cmd/directoryserver/config/ifrit_config.yaml
-
 
 # Run tests
 #RUN go test ./...
@@ -60,6 +60,6 @@ COPY ./cmd/directoryserver/config/ifrit_config.yaml /var/tmp/ifrit_config.yaml
 COPY ./cmd/directoryserver/config/lohpi_config.eval.yaml ./config/lohpi_config.eval.yaml
 
 # Command to run the executable
-ENTRYPOINT ["/directoryserver", "-c", "config/lohpi_config.eval.yaml", "-new", "true"]
+ENTRYPOINT ["/directoryserver", "-c", "config/lohpi_config.eval.yaml", "-new", "true", "-useaca", "false", "-useacme", "true"]
 
-EXPOSE 8080 8081 5000 8000
+EXPOSE 8080 6000 5000 8000 443 80

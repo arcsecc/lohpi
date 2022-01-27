@@ -209,34 +209,22 @@ func (c *Ca) certificateSigning(w http.ResponseWriter, r *http.Request) {
 
 	log.Info("Got a Lohpi certificate request", "addr", reqCert.Subject.Locality)
 
-	/*	ext := pkix.Extension{
-		Id:       []int{2, 5, 13, 37},
-		Critical: false,
-	}*/
-
 	serialNumber, err := genSerialNumber()
 	if err != nil {
 		log.Error(err.Error())
 		return
 	}
 
-/*	ipAddrs, err := extractIPAddresses(reqCert.Subject.Locality)
-	if err != nil {
-		log.Error(err.Error())
-		//return
-	}*/
-
 	newCert := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject:      reqCert.Subject,
 		NotBefore:    time.Now().AddDate(-10, 0, 0),
 		NotAfter:     time.Now().AddDate(10, 0, 0),
-		//ExtraExtensions: []pkix.Extension{ext},
 		PublicKey:   reqCert.PublicKey,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		DNSNames:    reqCert.DNSNames,
-		IPAddresses: []net.IP{net.ParseIP("127.0.1.1")},
+		IPAddresses: []net.IP{net.ParseIP("127.0.1.1")}, // Run only localhost
 	}
 
 	signedCert, err := x509.CreateCertificate(rand.Reader, newCert, c.caCert, reqCert.PublicKey, c.privKey)
@@ -274,7 +262,7 @@ func extractIPAddresses(subjects []string) ([]net.IP, error) {
 		}
 		result = append(result, ipAddr.IP)
 	}
-	return result, nil	
+	return result, nil
 }
 
 func generateCaCert(pubKey crypto.PublicKey, privKey *rsa.PrivateKey) (*x509.Certificate, error) {

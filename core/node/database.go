@@ -41,7 +41,7 @@ func (n *NodeCore) initializePostgreSQLdb(connectionString string) error {
 	if connectionString == "" {
 		log.Warnln("Connection string is empty")
 	}
-	
+
 	// Create schema
 	if err := n.createSchema(connectionString); err != nil {
 		return err
@@ -65,7 +65,7 @@ func (n *NodeCore) initializePostgreSQLdb(connectionString string) error {
 func (n *NodeCore) initializePolicyTable(connectionString string) error {
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetPolicyTable + ` (
 		id SERIAL PRIMARY KEY,
-		dataset_id VARCHAR(200) NOT NULL UNIQUE, 
+		dataset_id VARCHAR(200) NOT NULL UNIQUE,
 		allowed BOOLEAN NOT NULL);`
 
 	db, err := sql.Open("postgres", connectionString)
@@ -89,8 +89,8 @@ func (n *NodeCore) initializePolicyTable(connectionString string) error {
 // Creates the table in the database that tracks which client has checked out datasets
 func (n *NodeCore) initializeDatasetCheckoutTable(connectionString string) error {
 	q := `CREATE TABLE IF NOT EXISTS ` + schemaName + `.` + datasetCheckoutTable + ` (
-		id SERIAL PRIMARY KEY, 
-		client_id VARCHAR(200) NOT NULL, 
+		id SERIAL PRIMARY KEY,
+		client_id VARCHAR(200) NOT NULL,
 		client_name VARCHAR(200) NOT NULL,
 		dataset_id VARCHAR(200) NOT NULL,
 		tstamp TIMESTAMP NOT NULL);` // consider using timezone as well
@@ -117,7 +117,7 @@ func (n *NodeCore) initializeDatasetCheckoutTable(connectionString string) error
 func (n *NodeCore) createSchema(connectionString string) error {
 	log.Println("connectionString:", connectionString)
 	q := `CREATE SCHEMA IF NOT EXISTS ` + schemaName + `;`
-	
+
 	db, err := sql.Open("postgres", connectionString)
 	if err != nil {
 		return err
@@ -141,7 +141,7 @@ func (n *NodeCore) dbSetObjectPolicy(datasetId, allowed string) error {
 	//q := `INSERT INTO ` + schemaName + `.` + datasetPolicyTable + `(` + n.policyIdentifier + `, policyAttributes) VALUES ($1, $2)`
 	q := `INSERT INTO ` + schemaName + `.` + datasetPolicyTable + `
 	(dataset_id, allowed) VALUES ($1, $2)
-	ON CONFLICT (dataset_id) 
+	ON CONFLICT (dataset_id)
 	DO
 		UPDATE SET allowed = $2;`
 
@@ -189,7 +189,7 @@ func (n *NodeCore) dbGetObjectPolicy(datasetId string) (string, error) {
  *
 func (n *NodeCore) dbDatasetIsAvailable(id string) bool {
 	var allowed bool
-	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + ` 
+	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetPolicyTable + `
 		WHERE dataset_id = '` + id + `' AND allowed = 't');`
 	err := n.datasetPolicyDB.QueryRow(q).Scan(&allowed)
 	if err != nil && err != sql.ErrNoRows {
@@ -257,7 +257,7 @@ func (n *NodeCore) dbGetCheckoutList(id string) ([]CheckoutInfo, error) {
 // TODO: add azure id as parameter
 func (n *NodeCore) dbDatasetIsCheckedOutByClient(id string) bool {
 	var exists bool
-	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE 
+	q := `SELECT EXISTS ( SELECT 1 FROM ` + schemaName + `.` + datasetCheckoutTable + ` WHERE
 		dataset_id = '` + id + `');`
 	err := n.datasetPolicyDB.QueryRow(q).Scan(&exists)
 	if err != nil {

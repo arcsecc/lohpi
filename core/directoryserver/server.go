@@ -1,10 +1,8 @@
 package directoryserver
 
 import (
-	"crypto/ecdsa"
-	"crypto/x509"
+	"crypto/tls"
 	"errors"
-	"github.com/arcsecc/lohpi/core/comm"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -27,25 +25,9 @@ type gRPCServer struct {
 	listenAddr string
 }
 
-func newDirectoryGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey, l net.Listener) (*gRPCServer, error) {
+func newDirectoryGRPCServer(serverConf *tls.Config, l net.Listener) (*gRPCServer, error) {
 	var serverOpts []grpc.ServerOption
-	if cert == nil {
-		return nil, errNilCert
-	}
-
-	if caCert == nil {
-		return nil, errNilCaCert
-	}
-
-	if priv == nil {
-		return nil, errNilPriv
-	}
-
-	serverConf, err := comm.ServerConfig(cert, caCert, priv)
-	if err != nil {
-		return nil, err
-	}
-
+	
 	keepAlive := keepalive.ServerParameters{
 		MaxConnectionIdle: time.Minute * 5,
 		Time:              time.Minute * 5,

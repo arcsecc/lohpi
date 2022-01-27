@@ -1,11 +1,14 @@
 package util
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"bufio"
+	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/lestrrat-go/jwx/jws"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -97,21 +100,74 @@ func StreamToResponseWriter(r *bufio.Reader, w http.ResponseWriter, bufSize int)
 	buffer := make([]byte, bufSize)
 
 	for {
-    	len, err := r.Read(buffer)
-        if len > 0 {
+		len, err := r.Read(buffer)
+		if len > 0 {
 			_, err = w.Write(buffer[:len])
 			if err != nil {
 				return err
 			}
 		}
 
-        if err != nil {
-            if err == io.EOF {
+		if err != nil {
+			if err == io.EOF {
 				return nil
-            } else {
+			} else {
 				return err
 			}
-        }
-    }
-	return nil 
+		}
+	}
+	return nil
+}
+
+func ExstractPbClient(r *http.Request) (*pb.Client, error) {
+	token, err := getBearerToken(r)
+	if err != nil {
+		return nil, err
+	}
+
+	msg, err := jws.ParseString(string(token))
+	if err != nil {
+		return nil, err
+	}
+
+	s := msg.Payload()
+	if s == nil {
+		return nil, errors.New("Payload was nil")
+	}
+
+	c := struct {
+		Name         string `json:"name"`
+		Oid          string `json:"oid"`
+		EmailAddress string `json:"email"`
+	}{}
+
+	if err := json.Unmarshal(s, &c); err != nil {
+		return nil, err
+	}
+
+	var ipAddress string
+
+	// Validate IP address format
+	if len(r.Header.Values("ip_address")) > 0 {
+		ipAddress = r.Header.Values("ip_address")[0]
+		if net.ParseIP(ipAddress) == nil {
+			return nil, fmt.Errorf("IP address %s is invalid\n", ipAddress)
+		}
+	}
+
+	return &pb.Client{
+		Name:         c.Name,
+		ID:           c.Oid,
+		EmailAddress: c.EmailAddress,
+		IpAddress:    ipAddress,
+	}, nil
+}
+
+func getBearerToken(r *http.Request) ([]byte, error) {
+	authHeader := r.Header.Get("Authorization")
+	authHeaderContent := strings.Split(authHeader, " ")
+	if len(authHeaderContent) != 2 {
+		return nil, errors.New("Token not provided or malformed")
+	}
+	return []byte(authHeaderContent[1]), nil
 }

@@ -1,58 +1,365 @@
 # Lohpi
 
-Lohpi is a distributed system for sharing and enforcing data policies. By bootstrapping storage nodes close to existing infrastructure, 
-data access is enforced and tracked by employing Azure AD identities and PostgresQL. It uses the underlying [Ifrit](https://www.github.com/joonnna/ifrit) library for message passing and secure membership management.
+Lohpi is a distributed system for sharing and enforcing data policies. By bootstrapping storage nodes close to existing infrastructure, data access is enforced and tracked by employing Azure AD identities and PostgresQL. It uses the underlying [Ifrit](https://www.github.com/joonnna/ifrit) library for message passing and secure membership management.
 
-Lohpi consists of multiple components, each of which is explained below. In addition, each component exposes and API that can be consumed. 
+The Lohpi network consists of the directory server, policy store and a number of nodes. All components communicate using the Ifrit API. This document describes setting up a local development environment, running tests and deployments in Docker.
 
-#### Directory server
-The directory server is a network entity that serves client requests and forwards them to the correct storage node. The directory server keeps track of the datasets that are stored at the nodes and which datasets that have been checked out by clients.
+## Building the components
 
-#### Storage node
-A storage node is a node that assigns policies with dataset identifiers. In addition, it enforces accesses and keeps track of the datasets being checked out by the clients. There can exist multiple nodes, each is assigned a data repository to safeguard data. 
+In development, build the components by running ```go build``` in the sub-directories of ```./cmd```. For building the components, run ```./scripts/build_images_local.sh``` or ```./scripts/build_native_local.sh```. The node implementation is only for demonstrative purposes. You need to consume the Lohpi node API for a customized implementation. 
 
-#### Policy store
-The policy store is a component that accepts policy changes through a web interface and disseminates the policies in batches using multicasting and gossiping.
+## Deployments
 
-#### CA
-The certificate authority is an entity that distributes X.509 certificates upon requests from the storage nodes and the underlying Ifrit network. 
+Deploying the components requires you to supply configurations. The configurations are described below:
 
-# Production environment
-To deploy the system at the diggi-2 server, run ```docker-compose up```. This, however, whould not be necessary because the Github runner will run it whenever changes are pushed to the master branch. When a new deployment is done, run ```docker ps``` to check if any containers try to restart. If one or more tries to restart, something went wrong. 
+* Directory server
 
-# Local development
-These are the steps needed to create a local development database on your own machine. The database will be used
-by any number of nodes. This allows you to develop and run Lohpi with minimal overhead. Please 
-You need to connect to VPN if you are outside of the university domain. 
+```yaml
+# HTTP server port
+httpport:
 
-1. Create a local directory to mount the postgres volume.
-```$ mkdir postgres-data```
+# gRPC server port
+grpcport: 
 
-2. Start a PostgreSQL DBMS instance running in Docker
-```$ docker run -d --name lohpi-postgres-dev -e POSTGRES_PASSWORD=password! -v postgres-data:/var/lib/postgresql/data -p 5432:5432 postgres```
+# String identifier
+name:
 
-3. Run docker ps to see that it runs. Note the container ID to tear it down later using ```docker stop <id>```.
+# Hostname used in FQDN. Use "127.0.1.1" if you want to run it locally.
+hostname:
 
-4. Copy dev-initialize.sql into the Docker image:
-```$ docker cp setup/dev-initialize.sql lohpi-postgres-dev:/dev-initialize.sql```
+#  Lohpi CA address
+lohpicaaddress:
 
-5. Enter the shell:
-```$ docker exec -it lohpi-postgres-dev bash```
+# Azure key vault
+azurekeyvaultname:
+azurekeyvaultsecret:
+azureclientsecret:
+azuretenantid:
+azureclientid:
+azurekeyvaultbaseurl:
 
-6. Setup the development database:
-```$ psql -h localhost -U postgres -f dev-initialize.sql```
+# Ifrit's TCP and UDP ports
+ifrittcpport:
+ifritudpport:
 
-7. When you need to login to the database using psql, run 
-```$ psql -h localhost -U lohpi_dev_user -d dataset_policy_db```. Now you can operate directly on the DBMS using the psql shell, if needed. 
+# Crypto unit directories
+lohpicryptounitworkingdirectory:
+ifritcryptounitworkingdirectory:
 
-8. Tear down the database by running ```docker stop <id>``` as explained above.
+# Database connection pool size
+dbconnpoolsize:
+```
 
-#### Docker-compose 
-You can deploy the system locally on your system using ```docker-compose -f docker-compose.dev.yml build``` and ```docker-compose -f docker-compose.dev.yml up```. This will build the CA, directory server, policy store and one storage node. If you want muliple nodes, you can build additional images by running ```docker build -f cmd/dataverse/node/Dockerfile -t some_tag``` and then ```docker run --network=host -t some_tag```. Remember to supply a unique value to the ```-name``` flag in the node executable.
+* Policy store
 
-#### Go executables
-You can compile the programs separately by running ```go build``` in the ```cmd``` subdirectories. Each subdirectory contains an application that implements the handlers whenever client requests arrive. 
+```yaml
+# HTTP server port
+httpport:
 
-## Lohpi roadmap
-To be completed
-psql "host=lohpi-demo.postgres.database.azure.com port=5432 dbname=postgres user=lohpiadmin@lohpi-demo password=wiGeeT3s sslmode=require"
+# gRPC server port
+grpcport: 
+
+# String identifier
+name:
+
+# Hostname used in FQDN
+hostname:
+
+#  Lohpi CA address
+lohpicaaddress:
+
+# Azure key vault
+azurekeyvaultname:
+azurekeyvaultsecret:
+azureclientsecret:
+azuretenantid:
+azureclientid:
+azurekeyvaultbaseurl:
+
+# Ifrit's TCP and UDP ports
+ifrittcpport:
+ifritudpport:
+
+# Crypto unit directories
+lohpicryptounitworkingdirectory:
+ifritcryptounitworkingdirectory:
+
+# Gossip interval
+gossipinterval:
+
+# Database connection pool size
+dbconnpoolsize:
+
+# Number of direct recipients. Sigma.
+numdirectrecipients:
+```
+
+* Storage node
+
+```yaml
+# Known addresses for joining the network
+lohpicaaddress:
+directoryserveraddress: 
+policystoreaddress: 
+
+# Hostname used in FQDN. Use "127.0.1.1" if you want to run it locally.
+hostname: 
+port: 
+
+# Unique identifier.
+name: 
+
+# Azure key vault
+azurekeyvaultname: 
+azurekeyvaultsecret: 
+azureclientsecret: 
+azuretenantid: 
+azureclientid: 
+azurekeyvaultbaseurl: 
+
+# Ifrit's TCP and UDP ports
+ifrittcpport: 
+ifritudpport: 
+
+# Crypto unit directories
+lohpicryptounitworkingdirectory: 
+ifritcryptounitworkingdirectory: 
+
+# Database connection pool size
+dbconnpoolsize:
+
+# Interval between each round of policy reconciliation, measured in seconds
+setreconciliationinterval: 
+```
+
+To deploy multiple nodes, the ```name``` field has to be unique to the network.
+
+## Local development
+
+To create a local development environment, run ```setup_local_development.sh``` from the project root directory. This will create a PostgreSQL database along with the nescessary schemas and tables.
+
+To run the components, supply a configuration file in the subdirectories of ```./cmd```. Use ```dev```,```eval``` or ```demo``` schemas.
+
+## Azure Container Registery
+
+The container registery being used is located at ```lohpi.azurecr.io```. All YML deployment schemas consumed by ```az container create``` use that location to deploy containers. Push images to that registry. The deployment schemas are located in ```deployment/schemas```.
+
+## Azure Container Instance deployments
+
+To deploy Azure Container instances, use ```az container create``` and supply a ```.yml``` file as argument to the ```--file``` option.
+
+## Lohpi directory server endpoints
+
+Returns a JSON object with available datasets.
+
+* **URL**\
+dataset/identifiers
+
+* **Method:**\
+  `GET`
+
+* **Success responses:**\
+  **Code:** 200\
+  **Content:**
+  
+  ```{
+      "Identifiers" : [
+        "dataset1",
+        "dataset2",
+        ...
+      ]
+    }
+  ```
+
+* **Error responses:**\
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+* **Sample Call:**\
+  ```curl 127.0.1.1:8080/dataset/identifiers```
+
+---
+
+Returns the metadata for the specified dataset.
+
+* **URL**\
+  dataset/metadata/:id
+
+* **Method:**\
+  `GET`
+
+* **URL Parameters required:**\
+   Dataset identifier `id=[string]`
+
+* **Success responses:**\
+  **Code:** 200 OK\
+  **Content:**
+
+  ```{
+      metadata: {
+        ...
+    }
+  ```
+
+* **Error responses:**\
+  **Code:** 404 Not Found\
+  **Content:** Metadata with identifier ```id``` could not be found.
+
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+  **Code:** 504 Not Implemented\
+  **Content**: Metadata download handler is not implemented at the node that indexes the dataset.
+
+* **Sample call:**\
+  ```curl 127.0.1.1:8080/dataset/metadata/foo_dataset```
+
+---
+
+Returns the dataset, given the identifier.
+
+* **URL**\
+dataset/data/:id
+
+* **Method**
+  `GET`
+
+* **URL parameters required:**\
+  Dataset identifier `id=[string]`
+
+* **Success response:**\
+  **Code:** 200 OK\
+  **Content:** Compressed archive
+  
+* **Error responses:**\
+  **Code:** 404 Not Found\
+  **Content:** Dataset with identifier ```id``` could not be found.
+
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+  **Code:** 504 Not Implemented\
+  **Content:** Dataset download handler is not implemented at the node that indexes the dataset.
+
+* **Sample call:**\
+  ```curl 127.0.1.1:8080/dataset/data/foo_dataset```
+
+---
+
+Verifies wether or not the client is compliant with the dataset's current policy
+
+* **URL**\
+  dataset/comply/:id
+
+* **Method:**\
+  `GET`
+
+* **URL Parameters required:**\
+   Dataset identifier `id=[string]`
+
+* **Success responses:**\
+  **Code:** 200 OK\
+  **Content:**
+
+  ```
+  {
+      complies: true/false
+  }
+  ```
+
+* **Error responses:**\
+  **Code:** 404 Not Found\
+  **Content:** The dataset with identifier ```id``` could not be found.
+
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+* **Sample call:**\
+  ```curl 127.0.1.1:8080/dataset/comply/foo_dataset```
+
+---
+
+Checks the dataset back into Lohpi.
+
+* **URL**\
+  dataset/check_in/:id
+
+* **Method:**\
+  `GET`
+
+* **URL Parameters required:**\
+   Dataset identifier `id=[string]`
+
+* **Success responses:**\
+  **Code:** 200 OK\
+  **Content:** Succsessfully checked in dataset ```id```.
+
+* **Error responses:**\
+  **Code:** 404 Not Found\
+  **Content:** The dataset with identifier ```id``` is not checked out by the client.
+
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+* **Sample call:**\
+  ```curl 127.0.1.1:8080/dataset/comply/foo_dataset```
+
+---
+
+Sets a new project description for a dataset.
+
+* **URL**\
+  dataset/set_project_description/:id
+
+* **Method** `POST`
+
+* **URL Parameters required:**\
+    Dataset identifier `id=[string]`
+
+* **Success responses:**
+  **Code:** 200 OK\
+  **Content:** Succsessfully updated project description for dataset ```id```.
+  
+* **Error responses:**
+  **Code:** 404 Not Found\
+  **Content:** Dataset with identifier ```id``` could not be found.
+
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+* **Sample call:**\
+  ```curl 127.0.1.1:8080/dataset/set_project_description/foo_dataset```
+
+---
+
+Gets the project description for a dataset.
+
+* **URL**\
+  dataset/get_project_description/:id
+
+* **Method** `GET`
+
+* **URL Parameters required:**\
+   Dataset identifier `id=[string]`
+
+* **Success Response:**
+  * **Code:** 200 OK\
+  * **Content:**
+
+  ```{
+      project_description: {
+        ...
+    }
+  ```
+  
+* **Error Response:**
+  **Code:** 404 Not Found\
+  **Content:** Dataset with identifier ```id``` could not be found.
+
+  **Code:** 500 Internal Server Error\
+  **Content:** Internal server error occured while processing the request.
+
+* **Sample Call:**\
+  ```curl 127.0.1.1:8080/dataset/Get_project_description/foo_dataset```
+
+## Lohpi policy store endpoints

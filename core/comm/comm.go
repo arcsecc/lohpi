@@ -1,25 +1,24 @@
 package comm
 
 import (
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net/http"
+	"golang.org/x/crypto/acme/autocert"
+
+	"log"
 )
 
 var (
-	errNilCaCert = errors.New("Given CA certificate was nil")
 	errNilCert   = errors.New("Given certificate was nil")
 	errNilPriv   = errors.New("Given private key was nil")
 )
 
-func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) (*tls.Config, error) {
+func ServerConfig(c, caCert *x509.Certificate, key crypto.PrivateKey) (*tls.Config, error) {
 	if c == nil {
 		return nil, errNilCert
-	}
-
-	if caCert == nil {
-		return nil, errNilCaCert
 	}
 
 	if key == nil {
@@ -47,7 +46,19 @@ func ServerConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) (*tls.Conf
 	return conf, nil
 }
 
-func ClientConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Config {
+func ServerConfigWithACME(hostname string) (*tls.Config, error) {
+	log.Println("Hostname:", hostname)
+	manager := autocert.Manager{
+		Prompt: autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(hostname),
+	}
+
+	go http.ListenAndServe(":http", manager.HTTPHandler(nil))
+
+	return manager.TLSConfig(), nil
+}
+
+func ClientConfig(c, caCert *x509.Certificate, key crypto.PrivateKey) *tls.Config {
 	tlsCert := tls.Certificate{
 		Certificate: [][]byte{c.Raw},
 		PrivateKey:  key,
@@ -60,11 +71,11 @@ func ClientConfig(c, caCert *x509.Certificate, key *ecdsa.PrivateKey) *tls.Confi
 	if caCert != nil {
 		pool := x509.NewCertPool()
 		pool.AddCert(caCert)
-
 		conf.RootCAs = pool
 	} else {
-		panic(errors.New("caCert is nil"))
+		conf.InsecureSkipVerify = true
 	}
 
 	return conf
 }
+

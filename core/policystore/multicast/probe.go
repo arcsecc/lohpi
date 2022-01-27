@@ -1,17 +1,17 @@
 package multicast
 
 import (
-	"bytes"
+	_ "bytes"
 	"errors"
-	"github.com/arcsecc/lohpi/core/message"
+	_ "github.com/arcsecc/lohpi/core/message"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	"github.com/golang/protobuf/proto"
+	_ "github.com/golang/protobuf/proto"
 	"github.com/joonnna/ifrit"
-	"log"
-	"math"
-	"math/rand"
+	_ "log"
+	_ "math"
+	_ "math/rand"
 	"sync"
-	"time"
+	_ "time"
 )
 
 var (
@@ -70,6 +70,7 @@ type probeManager struct {
 	memManager *membershipManager
 }
 
+/*
 // Creates a new probeManager given the Ifrit client.
 func newProbeManager(ifritClient *ifrit.Client) *probeManager {
 	return &probeManager{
@@ -212,7 +213,7 @@ func (p *probeManager) probeNetwork(mcConfig *MulticastConfig, mode MessageMode)
 		MulticastInterval:         r.multicastInterval,
 	}
 
-	return cc, nil*/
+	return cc, nil*
 	return nil, nil
 }
 
@@ -336,17 +337,17 @@ func (p *probeManager) probeAcknowledger() {
 			currentRound.acktableLock.Unlock()
 
 			// Check if all acks have arrived. Signal if all have arrived
-			/*n := config.numMembers
-			a := config.AcceptanceLevel*/
+			/n := config.numMembers
+			a := config.AcceptanceLevel*
 
-			/*if len(currentRound.table) >= nAcceptanceNodes(n, a) {
+			*if len(currentRound.table) >= nAcceptanceNodes(n, a) {
 				p.allAcksChan <-true
-			}*/
+			}*
 		default:
 			continue
 			/*case <-p.stopAck:
 			log.Println("Stopping prober...")
-			return*/
+			return*
 		}
 	}
 }
@@ -387,7 +388,7 @@ func (p *probeManager) decreaseProbeSessionConfiguration() {
 	/*r := p.getCurrentRound()
 	ms := float32(r.multicastInterval.Milliseconds()) * 0.75
 	newDuration := time.Duration(time.Duration(ms) * time.Millisecond)
-	r.multicastInterval = newDuration*/
+	r.multicastInterval = newDuration*
 }
 
 func (p *probeManager) probeRoundRecipients(mode MessageMode, directRecipients int) ([]string, error) {
@@ -471,3 +472,4 @@ func nowIsBeforeLimit(limit time.Time) bool {
 func nowIsAfterLimit(limit time.Time) bool {
 	return time.Now().Unix() > limit.Unix()
 }
+*/

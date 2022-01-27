@@ -3,144 +3,163 @@ package datasetmanager
 import (
 	"context"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	"errors"
-	//"github.com/golang/protobuf/proto"
-	"fmt"
 	"github.com/jackc/pgx/v4/pgxpool"
 	log "github.com/sirupsen/logrus"
 )
 
-type DatasetCheckoutServiceUnitConfig struct {
-	SQLConnectionString string
-}
-
 type DatasetCheckoutServiceUnit struct {
-	config *DatasetCheckoutServiceUnitConfig
-	datasetCheckoutSchema string
-	datsetCheckoutTable string
-	pool *pgxpool.Pool
+	datasetCheckoutSchema      string
+	datsetCheckoutTable        string
+	datasetCheckoutPolicyTable string
+	pool                       *pgxpool.Pool
 }
-
-var (
-	ErrNilDatasetCheckoutConfig = errors.New("No configuration for dataset checkout manager")
-	ErrDatasetCheckoutFailure = errors.New("Dataset checkout failed")
-	ErrNoClient = errors.New("Client is nil")
-)
 
 var checkoutLogFields = log.Fields{
-	"package": "datasetmanager",
+	"package":     "datasetmanager",
 	"description": "dataset checkout manager",
 }
 
-func init() { 
+func init() {
 	log.SetReportCaller(true)
 }
 
 // We don't use in-memory maps because of the hassle of indexing it
-func NewDatasetCheckoutServiceUnit(id string, config *DatasetCheckoutServiceUnitConfig) (*DatasetCheckoutServiceUnit, error) {
-	if config == nil {
-		return nil, ErrNilDatasetCheckoutConfig
-	}
-
-	if config.SQLConnectionString == "" {
-		return nil, errNoConnectionString
-	}
-
+func NewDatasetCheckoutServiceUnit(id string, pool *pgxpool.Pool) (*DatasetCheckoutServiceUnit, error) {
 	if id == "" {
-		return nil, errNoId
+		log.WithFields(datasetLookupLogFields).Error(ErrEmptyInstanceIdentifier.Error())
+		return nil, ErrEmptyInstanceIdentifier
 	}
 
-	pool, err := pgxpool.Connect(context.Background(), config.SQLConnectionString)
-	if err != nil {
-		return nil, err
+	if pool == nil {
+		log.WithFields(datasetLookupLogFields).Error(ErrNilConnectionPool.Error())
+		return nil, ErrNilConnectionPool
 	}
 
 	d := &DatasetCheckoutServiceUnit{
-		config: config,
-		datasetCheckoutSchema: id + "_schema",
-		datsetCheckoutTable: id + "_dataset_checkout_table",
-		pool: pool,
+		datasetCheckoutSchema:      id + "_schema",
+		datsetCheckoutTable:        id + "_dataset_checkout_table",
+		datasetCheckoutPolicyTable: id + "_dataset_checkout_policy_table",
+		pool:                       pool,
 	}
-	
+
 	return d, nil
 }
 
-func (d *DatasetCheckoutServiceUnit) CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error {
-	if datasetId == "" {
-		return errNoDatasetId
-	}
-
+func (d *DatasetCheckoutServiceUnit) CheckoutDataset(ctx context.Context, datasetId string, checkout *pb.DatasetCheckout, systemPolicyVersion uint64, policy bool) error {
 	if checkout == nil {
-		return errNilCheckout
+		return ErrNoDatasetCheckout
 	}
 
-	if err := d.dbCheckoutDataset(datasetId, checkout); err != nil {
-		log.WithFields(checkoutLogFields).Error(err.Error())
-		return ErrDatasetCheckoutFailure
+	if datasetId == "" {
+		return ErrEmptyDatasetIdentifier
+	}
+
+	if err := d.dbCheckoutDataset(ctx, datasetId, checkout, systemPolicyVersion, policy); err != nil {
+		return ErrDatasetCheckout
 	}
 
 	return nil
 }
 
-func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOutByClient(datasetId string, client *pb.Client) bool {
+func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOutByClient(ctx context.Context, datasetId string, client *pb.Client) (bool, error) {
 	if datasetId == "" {
-		log.WithFields(checkoutLogFields).Error(errNoDatasetId.Error())
-		return false
+		return false, ErrEmptyDatasetIdentifier
 	}
-	
+
 	if client == nil {
-		log.WithFields(checkoutLogFields).Error(ErrNoClient.Error())
-		return false
+		return false, ErrNilDatasetCheckoutClient
 	}
 
-	exists, err := d.dbDatasetIsCheckedOutByClient(datasetId, client)
+	exists, err := d.dbDatasetIsCheckedOutByClient(ctx, datasetId, client)
 	if err != nil {
 		log.WithFields(checkoutLogFields).Error(err.Error())
+		return false, ErrDatasetIsCheckedOutByClient
 	}
 
-	return exists
+	return exists, nil
 }
 
-func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOut(datasetId string) bool {
+func (d *DatasetCheckoutServiceUnit) DatasetIsCheckedOut(ctx context.Context, datasetId string) (bool, error) {
 	if datasetId == "" {
-		log.WithFields(checkoutLogFields).Error(errNoDatasetId.Error())
-		return false
+		return false, ErrEmptyDatasetIdentifier
 	}
 
-	exists, err := d.dbDatasetIsCheckedOut(datasetId)
+	exists, err := d.dbDatasetIsCheckedOut(ctx, datasetId)
 	if err != nil {
 		log.WithFields(checkoutLogFields).Error(err.Error())
+		return false, ErrDatasetIsCheckedOut
 	}
 
-	return exists
+	return exists, nil
 }
 
-func (d *DatasetCheckoutServiceUnit) DatasetCheckouts(datasetId string) ([]*pb.DatasetCheckout, error) {
+func (d *DatasetCheckoutServiceUnit) DatasetCheckouts(ctx context.Context, datasetId string, cursor int, limit int) (*pb.DatasetCheckouts, error) {
 	if datasetId == "" {
-		err := fmt.Errorf("Dataset identifier must not be empty")
-		log.Error(err.Error())
-		return nil, err
+		return nil, ErrEmptyDatasetIdentifier
 	}
 
-	dsChan, errChan := d.dbSelectDatasetCheckouts(datasetId)
-	dsCheckouts := make([]*pb.DatasetCheckout, 0)
-
-	for {
-		select {
-		case checkout, ok := <-dsChan:
-			if ok {
-				dsCheckouts = append(dsCheckouts, checkout)
-			} else {
-				break
-			}
-		case err, ok := <-errChan:
-			if ok {
-				log.Error(err.Error())
-			} else {
-				break
-			}
-		}
+	checkouts, err := d.dbSelectDatasetCheckouts(ctx, datasetId, cursor, limit)
+	if err != nil {
+		log.WithFields(checkoutLogFields).Error(err.Error())
+		return nil, ErrDatasetCheckouts
 	}
 
-	return dsCheckouts, nil
+	return checkouts, nil
+}
+
+func (d *DatasetCheckoutServiceUnit) SetDatasetSystemPolicy(ctx context.Context, datasetId string, version uint64, policy bool) error {
+	if datasetId == "" {
+		return ErrEmptyDatasetIdentifier
+	}
+
+	if err := d.dbSetDatasetSystemPolicy(ctx, datasetId, version, policy); err != nil {
+		log.WithFields(checkoutLogFields).Error(err.Error())
+		return ErrSetDatasetCheckoutAccess
+	}
+
+	return nil
+}
+
+func (d *DatasetCheckoutServiceUnit) GetDatasetSystemPolicy(ctx context.Context, datasetId string) (uint64, bool, error) {
+	if datasetId == "" {
+		return 0, false, ErrEmptyDatasetIdentifier
+	}
+
+	version, policy, err := d.dbGetDatasetSystemPolicy(ctx, datasetId)
+	if err != nil {
+		log.WithFields(checkoutLogFields).Error(err.Error())
+		return 0, false, ErrGetDatasetCheckoutAccess
+	}
+
+	return version, policy, nil
+}
+
+func (d *DatasetCheckoutServiceUnit) CheckinDataset(ctx context.Context, datasetId string, client *pb.Client) error {
+	if datasetId == "" {
+		return ErrEmptyDatasetIdentifier
+	}
+
+	if client == nil {
+		return ErrNilDatasetCheckoutClient
+	}
+
+	if err := d.dbCheckinDataset(ctx, datasetId, client); err != nil {
+		return ErrDatasetCheckin
+	}
+
+	return nil
+}
+
+func (d *DatasetCheckoutServiceUnit) NumberOfDatasetCheckouts(ctx context.Context, datasetId string) (int, error) {
+	if datasetId == "" {
+		return 0, ErrEmptyDatasetIdentifier
+	}
+
+	n, err := d.dbNumberOfDatasetCheckouts(ctx, datasetId)
+	if err != nil {
+		log.WithFields(datasetLookupLogFields).Error(err.Error())
+		return 0, ErrNumDatasetCheckouts
+	}
+
+	return n, nil
 }

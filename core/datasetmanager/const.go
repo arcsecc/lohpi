@@ -2,32 +2,53 @@ package datasetmanager
 
 import (
 	"errors"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
-	errNilCheckout          = errors.New("Dataset checkout is nil")
-	errNilPolicy            = errors.New("Dataset policy is nil")
-	errNilConfig            = errors.New("Configuration is nil")
-	errNoPolicyFound        = errors.New("No such policy exists")
-	errNoIfritClient        = errors.New("Ifrit client is nil")
-	errNoPolicyStoreAddress = errors.New("Policy store address is empty")
-	errNoDatasetMap         = errors.New("Dataset map is nil")
-	errNilDataset 			= errors.New("Dataset is nil")
-	errNoDatasetId   		= errors.New("Dataset identifiers is empty")
-	errNoId 				= errors.New("Id must be set")
-	errNilNode 				= errors.New("Node is nil")
-	errNoNodeName 			= errors.New("Node name is empty")
-	ErrNoIdentifiers 		= errors.New("Dataset identifiers is nil")
-)
+	// Miscellaneous errors used by the package.
+	ErrNilConfig               = errors.New("Configuration is nil")
+	ErrRemoveDataset           = errors.New("Failed to remove dataset")
+	ErrEmptyInstanceIdentifier = errors.New("No instance ID was provided")
+	ErrNilConnectionPool       = errors.New("Connection pool was nil")
+	ErrEmptyDatasetIdentifier  = errors.New("Dataset identifier was not provided")
+	ErrNilNode                 = errors.New("Protobuf node was nil")
+	ErrNilNodeIdentifier       = errors.New("Node identifier was not provided")
 
-var (
-	ErrRemoveDataset 	= errors.New("Failed to remove dataset")
-	ErrSetDatasetPolicy = errors.New("Failed to set dataset policy")
-	ErrInsertDataset    = errors.New("Failed to insert dataset")
-	ErrNoRedisPong = errors.New("Redis' ping response was wrong")
-	ErrInsertPolicy = errors.New("Failed to insert policy")
-	ErrInsertDatasetIdentifiers = errors.New("Inserting dataset identifiers failed")
-	ErrResolveDatasetIdentifiers = errors.New("Resolving dataset identifiers failed") 
+	// Error types used by the dataset checkout manager
+	ErrNoDataset                   = errors.New("Dataset was not provided")
+	ErrDatasetCheckout             = errors.New("Dataset checkout failed")
+	ErrDatasetCheckin              = errors.New("Dataset checkin failed")
+	ErrDatasetIsCheckedOutByClient = errors.New("Cannot check if dataset is checked out by client")
+	ErrDatasetIsCheckedOut         = errors.New("Dataset checkout client is nil")
+	ErrNilDatasetCheckoutClient    = errors.New("Dataset checkout client is nil")
+	ErrDatasetCheckouts            = errors.New("Could not get dataset checkouts")
+	ErrSetDatasetCheckoutAccess    = errors.New("Could not set dataset availability access")
+	ErrGetDatasetCheckoutAccess    = errors.New("Could not get dataset availability access")
+	ErrNumDatasetCheckouts         = errors.New("Could not get dataset checkouts")
+
+	// Error types used by the dataset lookup client
+
+	// Error types used by the dataset indexer
+	ErrGetDataset    = errors.New("Could not get dataset")
+	ErrGetDatasets   = errors.New("Could not get datasets")
+	ErrDatasetExists = errors.New("Failed to lookup dataset in index")
+	ErrCountDatasets = errors.New("Could not count datasets")
+
+	ErrDatasetNodeExists         = errors.New("Could not find dataset node")
+	ErrEmptyNodeIdentifier       = errors.New("No node identifier was provided")
+	ErrSetDatasetPolicy          = errors.New("Failed to set dataset policy")
+	ErrLookupNodeDatasets        = errors.New("Could not lookup dataset identifiers at the provided node")
+	ErrLookupDatasetIdentifiers  = errors.New("Could not lookup dataset identifiers")
+	ErrLookupDatasetNode         = errors.New("Could not lookup dataset node")
+	ErrInsertDataset             = errors.New("Failed to insert dataset")
+	ErrInsertPolicy              = errors.New("Failed to insert policy")
+	ErrInsertDatasetIdentifiers  = errors.New("Inserting dataset identifiers failed")
+	ErrResolveDatasetIdentifiers = errors.New("Resolving dataset identifiers failed")
+	ErrNoPolicy                  = errors.New("No policy was specified")
+	ErrGetDatasetPolicy          = errors.New("Dataset policy could not be found")
+	ErrDatasetExistsAtNode       = errors.New("Could not check if the given dataset exists at the given node")
+	ErrNoDatasetCheckout         = errors.New("Dataset checkout is nil")
 )
 
 // policy_table attributes
@@ -36,7 +57,7 @@ var (
 	allowed    = "allowed"
 )
 
-// redis attributes
-var (
-	datasetList = "dsList" // must NEVER equal to a dataset. Assert for this :)
-)
+var dbLogFields = log.Fields{
+	"package": "core/datasetmanager",
+	"action":  "database client",
+}

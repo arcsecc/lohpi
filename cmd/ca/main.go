@@ -1,18 +1,18 @@
 package main
 
 import (
-	"fmt"
-	"strconv"
 	"flag"
+	"fmt"
+	lohpi_ca "github.com/arcsecc/lohpi/cauth"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"syscall"
-	lohpi_ca "github.com/arcsecc/lohpi/cauth"
 
-	log "github.com/sirupsen/logrus"
-	ifrit_ca "github.com/joonnna/ifrit/cauth"
 	"github.com/jinzhu/configor"
+	ifrit_ca "github.com/joonnna/ifrit/cauth"
+	log "github.com/sirupsen/logrus"
 )
 
 var DefaultPermission = os.FileMode(0750)
@@ -24,19 +24,19 @@ var IfritCaConfig = struct {
 	Host         string `default:"127.0.1.1"`
 	Port         int    `default:"8300"`
 	Path         string `default:"./ifrit-cad"`
-	NumRings     uint32 `default:"30"`
+	NumRings     uint32 `default:"16"`
 	NumBootNodes uint32 `default:"30"`
 	LogFile      string `default:""`
 }{}
 
 // Config contains all configurable parameters for the Lohpi CA daemon.
 var LohpiCaConfig = struct {
-	Name         string `default:"Lohpi Certificate Authority"`
-	Version      string `default:"1.0.0"`
-	Host         string `default:"127.0.1.1"`
-	Port         int    `default:"8301"`
-	Path         string `default:"./lohpi-cad"`
-	LogFile      string `default:"ca.log"`
+	Name    string `default:"Lohpi Certificate Authority"`
+	Version string `default:"1.0.0"`
+	Host    string `default:"127.0.1.1"`
+	Port    int    `default:"8301"`
+	Path    string `default:"./lohpi-cad"`
+	LogFile string `default:"ca.log"`
 }{}
 
 func main() {
@@ -114,7 +114,7 @@ func main() {
 	saveIfritState(ifritCa)
 	defer saveIfritState(ifritCa)
 	go ifritCa.Start(IfritCaConfig.Host, strconv.Itoa(IfritCaConfig.Port))
-	
+
 	saveLohpiState(lohpiCa)
 	defer saveLohpiState(lohpiCa)
 	go lohpiCa.Start(LohpiCaConfig.Port)

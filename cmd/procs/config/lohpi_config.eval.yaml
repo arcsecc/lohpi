@@ -16,3 +16,5 @@ ifrittcpport: 10000
 ifritudpport: 10001
 lohpicryptounitworkingdirectory: crypto/lohpi
 ifritcryptounitworkingdirectory: crypto/ifrit
+dbconnpoolsize: 7
+setreconciliationinterval: 360

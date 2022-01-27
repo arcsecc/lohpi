@@ -2,32 +2,40 @@ package directoryserver
 
 import (
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
-	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/arcsecc/lohpi/core/directoryserver/sessionservice"
-	"github.com/arcsecc/lohpi/core/message"
+	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/netutil"
+	"github.com/arcsecc/lohpi/core/status"
 	pb "github.com/arcsecc/lohpi/protobuf"
-	"github.com/golang/protobuf/proto"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/joonnna/ifrit"
 	"github.com/lestrrat-go/jwx/jwk"
 	log "github.com/sirupsen/logrus"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"net"
 	"net/http"
 	"strconv"
 	"sync"
-	"time"
+)
+
+var logFields = log.Fields{
+	"package":     "core/directoryserver",
+	"description": "directory server",
+}
+
+var (
+	ErrNoDirectoryServerConfig = errors.New("Directory server configuration is nil")
+	errGossipMessageBody       = errors.New("Gossip message body is nil")
 )
 
 type Config struct {
-	// Human-readable string of the directory server.
+	// String identifier of the directory server.
 	Name string
 
 	// HTTP port used by the server.
@@ -45,12 +53,10 @@ type Config struct {
 	IfritCryptoUnitWorkingDirectory string
 	IfritTCPPort                    int
 	IfritUDPPort                    int
-
-	DatasetIdentifiersSyncInterval time.Duration
 }
 
 type DirectoryServerCore struct {
-	exitChan chan bool
+	exitChan  chan bool
 	exitFlag  bool
 	exitMutex sync.RWMutex
 
@@ -61,10 +67,6 @@ type DirectoryServerCore struct {
 	// Underlying Ifrit client
 	ifritClient *ifrit.Client
 
-	// In-memory cache structures
-	nodeMapLock sync.RWMutex
-	nodeMap     map[string]*pb.Node
-
 	// HTTP-related stuff. Used by the demonstrator using cURL
 	httpListener net.Listener
 	httpServer   *http.Server
@@ -72,33 +74,25 @@ type DirectoryServerCore struct {
 	// gRPC service
 	listener     net.Listener
 	serverConfig *tls.Config
-	grpcs        *gRPCServer
-
-	// Datasets that have been checked out
-	// TODO move me to memcache?
-	clientCheckoutMap     map[string][]string //datase id -> list of client who have checked out the data
-	clientCheckoutMapLock sync.RWMutex
-
-	invalidatedDatasets     map[string]struct{}
-	invalidatedDatasetsLock sync.RWMutex
+	grpcServer   *gRPCServer
+	pb.UnimplementedDirectoryServerServer
 
 	// directory server database
-	datasetDB  *sql.DB
-	checkoutDB *sql.DB
+	pool *pgxpool.Pool
 
 	// Fetch the JWK
 	pubKeyCache *jwk.AutoRefresh
-
-	pb.UnimplementedDirectoryServerServer
 
 	dsLookupService datasetLookupService
 	cm              certManager
 	memManager      membershipManager
 	checkoutManager datasetCheckoutManager
-	gossipObs       gossipObserver
-	setSync			setSyncer
+	policyLog       policyLogger
 
-	sessionService *sessionservice.SessionService
+	// Dataset description manager
+	datasetDescriptionManager *datasetDescriptionManagerUnit
+
+	useACME bool
 }
 
 var (
@@ -107,114 +101,120 @@ var (
 	ErrAddNetworkNode      = errors.New("Adding network node failed")
 )
 
-type gossipObserver interface {
-	InsertObservedGossip(g *pb.GossipMessage) error
-	GossipIsObserved(g *pb.GossipMessage) bool
+type policyLogger interface {
+	InsertObservedGossip(ctx context.Context, g *pb.PolicyGossipUpdate) error
+	InsertAppliedPolicy(ctx context.Context, p *pb.Policy) error
 }
 
 type datasetLookupService interface {
-	DatasetNodeExists(datasetId string) bool
-	RemoveDatasetLookupEntry(datasetId string) error
-	InsertDatasetLookupEntry(datasetId string, nodeName string) error
-	DatasetLookupNode(datasetId string) *pb.Node
-	DatasetIdentifiers() []string
-	DatasetIdentifiersAtNode(nodeName string) []string
-	ResolveDatasetIdentifiers(newIdentifiers []string, staleIdentifiers []string, node *pb.Node) error
+	DatasetNodeExists(ctx context.Context, datasetId string) (bool, error)
+	RemoveDatasetLookupEntry(ctx context.Context, datasetId string) error
+	InsertDatasetLookupEntry(ctx context.Context, datasetId string, nodeName string) error
+	DatasetLookupNode(ctx context.Context, datasetId string) (*pb.Node, error)
+	DatasetIdentifiers(ctx context.Context, cursor int, limit int) ([]string, error)
+	DatasetIdentifiersAtNode(ctx context.Context, nodeName string) ([]string, error)
+	NumberOfDatasets(ctx context.Context) (int64, error)
 }
 
 type membershipManager interface {
-	NetworkNodes() map[string]*pb.Node
-	NetworkNode(nodeId string) *pb.Node
-	AddNetworkNode(nodeId string, node *pb.Node) error
-	NetworkNodeExists(id string) bool
-	RemoveNetworkNode(id string) error
+	NetworkNodes(ctx context.Context, cursor int, limit int) (*pb.Nodes, error)
+	NetworkNode(ctx context.Context, nodeId string) (*pb.Node, error)
+	AddNetworkNode(ctx context.Context, nodeId string, node *pb.Node) error
+	NetworkNodeExists(ctx context.Context, id string) (bool, error)
+	RemoveNetworkNode(ctx context.Context, id string) error
+	NumNetworkMembers(ctx context.Context) (int, error)
 }
 
 type datasetCheckoutManager interface {
-	CheckoutDataset(datasetId string, checkout *pb.DatasetCheckout) error
-	//CheckinDataset(datasetId string, client *pb.Client) error
-	DatasetIsCheckedOutByClient(datasetId string, client *pb.Client) bool
-	DatasetIsCheckedOut(datasetId string) bool
-	DatasetCheckouts(datasetId string) ([]*pb.DatasetCheckout, error)
+	CheckoutDataset(ctx context.Context, datasetId string, checkout *pb.DatasetCheckout, systemPolicyVersion uint64, policy bool) error
+	DatasetIsCheckedOutByClient(ctx context.Context, datasetId string, client *pb.Client) (bool, error)
+	DatasetIsCheckedOut(ctx context.Context, datasetId string) (bool, error)
+	DatasetCheckouts(ctx context.Context, datasetId string, cursor int, limit int) (*pb.DatasetCheckouts, error)
+	CheckinDataset(ctx context.Context, datasetId string, client *pb.Client) error
+	SetDatasetSystemPolicy(ctx context.Context, datasetId string, verison uint64, policy bool) error
+	GetDatasetSystemPolicy(ctx context.Context, datasetId string) (uint64, bool, error)
+	NumberOfDatasetCheckouts(ctx context.Context, datasetId string) (int, error)
 }
 
 type certManager interface {
 	Certificate() *x509.Certificate
 	CaCertificate() *x509.Certificate
-	PrivateKey() *ecdsa.PrivateKey
-	PublicKey() *ecdsa.PublicKey
-}
-
-type setSyncer interface {
-	RegisterIfritClient(client *ifrit.Client) 
-	RequestDatasetIdentifiersSync(ctx context.Context, currentIdentifiers []string, remoteAddr string) ([]string, []string, error)	//ResolveDatasets(ctx context.Context, currentDatasets map[string]*pb.Dataset, incomingDatasets map[string]*pb.Dataset) (map[string]*pb.Dataset, error)
+	PrivateKey() crypto.PrivateKey
+	PublicKey() crypto.PublicKey
 }
 
 // Returns a new DirectoryServer using the given configuration. Returns a non-nil error, if any.
-func NewDirectoryServerCore(cm certManager, gossipObs gossipObserver, dsLookupService datasetLookupService, memManager membershipManager, checkoutManager datasetCheckoutManager, setSync setSyncer, config *Config, new bool) (*DirectoryServerCore, error) {
+func NewDirectoryServerCore(cm certManager, policyLog policyLogger, dsLookupService datasetLookupService, memManager membershipManager, checkoutManager datasetCheckoutManager, config *Config, pool *pgxpool.Pool, new bool, useACME bool) (*DirectoryServerCore, error) {
 	if config == nil {
-		return nil, errors.New("Configuration for directory server is nil")
+		log.WithFields(logFields).Error(ErrNoDirectoryServerConfig.Error())
+		return nil, ErrNoDirectoryServerConfig
 	}
 
 	ifritClient, err := ifrit.NewClient(&ifrit.Config{
-		New: 			new,
+		New:            new,
 		TCPPort:        config.IfritTCPPort,
 		UDPPort:        config.IfritUDPPort,
 		Hostname:       config.Hostname,
 		CryptoUnitPath: config.IfritCryptoUnitWorkingDirectory})
 	if err != nil {
-		panic(err)
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
 	listener, err := netutil.ListenOnPort(config.GRPCPort)
 	if err != nil {
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
-	s, err := newDirectoryGRPCServer(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey(), listener)
+	var serverConfig *tls.Config
+
+	// Server configuration. If ACME is true, use Let's Encrypt
+	if useACME {
+		serverConfig, err = comm.ServerConfigWithACME(config.Hostname)
+		if err != nil {
+			return nil, err
+		}	
+	} else {
+		serverConfig, err = comm.ServerConfig(cm.Certificate(), cm.CaCertificate(), cm.PrivateKey())
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	grpcServer, err := newDirectoryGRPCServer(serverConfig, listener)
 	if err != nil {
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
-	sessionService, err := sessionservice.NewSessionService()
+	datasetDescriptionManager, err := newDatasetDescriptionManagerUnit(config.Name, pool)
 	if err != nil {
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
 	ds := &DirectoryServerCore{
-		config:      config,
-		configLock:  sync.RWMutex{},
+		config: config,
+		configLock: sync.RWMutex{},
 		ifritClient: ifritClient,
-
-		// gRPC server
-		grpcs: s,
-
-		clientCheckoutMap:   make(map[string][]string, 0),
-		invalidatedDatasets: make(map[string]struct{}),
-
+		grpcServer: grpcServer,
+		serverConfig: serverConfig,
 		dsLookupService: dsLookupService,
-		cm:              cm,
-		memManager:      memManager,
+		cm: cm,
+		memManager: memManager,
 		checkoutManager: checkoutManager,
-		sessionService:  sessionService,
-		gossipObs:       gossipObs,
-		setSync: setSync,
-
-		exitChan:				  make(chan bool, 1),
-		exitFlag: 				  false,
+		policyLog: policyLog,
+		exitChan: make(chan bool, 1),
+		exitFlag: false,
+		pool: pool,
+		datasetDescriptionManager: datasetDescriptionManager,
+		useACME: useACME,
 	}
 
-	ds.grpcs.Register(ds)
+	ds.grpcServer.Register(ds)
 	ds.ifritClient.RegisterMsgHandler(ds.messageHandler)
 	ifritClient.RegisterGossipHandler(ds.gossipMessageHandler)
-	ds.setSync.RegisterIfritClient(ifritClient)
-	//ifritClient.RegisterResponseHandler(self.GossipResponseHandler)
-
-	// Initialize the PostgreSQL directory server database
-	if err := ds.initializeDirectorydb(config.SQLConnectionString); err != nil {
-		return nil, err
-	}
 
 	return ds, nil
 }
@@ -222,39 +222,18 @@ func NewDirectoryServerCore(cm certManager, gossipObs gossipObserver, dsLookupSe
 // Starts the directory server. This includes starting the HTTP server, Ifrit client and gRPC server.
 // In addition, it will try and restore the state it had before it crashed.
 func (d *DirectoryServerCore) Start() {
-	log.Infoln("Directory server running gRPC server at", d.grpcs.Addr(), "and Ifrit client at", d.ifritClient.Addr())
+	log.Infoln("Directory server running gRPC server at", d.grpcServer.Addr(), "and Ifrit client at", d.ifritClient.Addr())
+	
+	// Ifrit client
 	go d.ifritClient.Start()
+	
+	// gRPC server
+	go d.grpcServer.Start()
+
 	go d.startHttpServer(":" + strconv.Itoa(d.config.HTTPPort))
-	go d.grpcs.Start()
-	go d.startStateSynchronizer()
-	//go d.sessionService.Start()
 
 	<-d.exitChan
 	d.Stop()
-}
-
-func (d *DirectoryServerCore) startStateSynchronizer() {
-	for {
-		for _, node := range d.memManager.NetworkNodes() {
-			select {
-			case <-d.exitChan:
-				log.Println("Exiting state synchronization")
-				return 
-			case <-time.After(5 * time.Second):
-				ids := d.dsLookupService.DatasetIdentifiersAtNode(node.GetName())
-				newIdentifiers, staleIdentifiers, err := d.setSync.RequestDatasetIdentifiersSync(context.Background(), ids, node.GetIfritAddress())				
-				if err != nil {
-					log.Errorln(err.Error())
-					continue	
-				}
-
-				if err := d.dsLookupService.ResolveDatasetIdentifiers(newIdentifiers, staleIdentifiers, node); err != nil {
-					log.Errorln(err.Error())
-					continue
-				}
-			}
-		}
-	}
 }
 
 // Create a node that performs a handshake with
@@ -264,9 +243,8 @@ func (d *DirectoryServerCore) Stop() {
 	}
 
 	d.ifritClient.Stop()
-	d.grpcs.Stop()
+	d.grpcServer.Stop()
 	d.shutdownHttpServer()
-	d.sessionService.Stop()
 }
 
 // PIVATE METHODS BELOW THIS LINE
@@ -274,44 +252,28 @@ func (d *DirectoryServerCore) Stop() {
 func (d *DirectoryServerCore) messageHandler(data []byte) ([]byte, error) {
 	msg := &pb.Message{}
 	if err := proto.Unmarshal(data, msg); err != nil {
-		log.Errorln(err)
-		return nil, fmt.Errorf("")
+		log.WithFields(logFields).Error(err.Error())
+		return nil, err
 	}
 
 	if err := d.verifyMessageSignature(msg); err != nil {
-		log.Errorln(err)
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
-	switch msgType := msg.Type; msgType {
-	case message.MSG_TYPE_ADD_DATASET_IDENTIFIER:
-		if err := d.dsLookupService.InsertDatasetLookupEntry(msg.GetStringValue(), msg.GetSender().GetName()); err != nil {
-			log.Errorln(err.Error())
-			return nil, ErrDatasetLookupInsert
-		}
-
-	default:
-		err := fmt.Errorf("Unexpected message type '%s'", msg.GetType())
-		log.Errorln(err.Error())
-		return nil, ErrUnknownMessageType
-	}
-
-	resp, err := proto.Marshal(&pb.Message{Type: message.MSG_TYPE_OK})
-	if err != nil {
-		log.Errorln(err)
-		return nil, err
-	}
-
-	return resp, nil
+	return nil, nil
 }
 
 // Adds the given node to the network and returns the DirectoryServerCore's IP address
 func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb.HandshakeResponse, error) {
 	if node == nil {
-		return nil, status.Error(codes.InvalidArgument, "pb node is nil")
+		err := status.Errorf(status.Nil, "Node is nil")
+		log.WithFields(logFields).Error(err.Error())
+		return nil, err
 	}
 
-	if err := d.memManager.AddNetworkNode(node.GetName(), node); err != nil {
+	if err := d.memManager.AddNetworkNode(context.Background(), node.GetName(), node); err != nil {
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
@@ -321,6 +283,22 @@ func (d *DirectoryServerCore) Handshake(ctx context.Context, node *pb.Node) (*pb
 		//Ip: d.ifritClient.Addr(),
 		Id: []byte(d.ifritClient.Id()),
 	}, nil
+}
+
+func (d *DirectoryServerCore) IndexDataset(ctx context.Context, req *pb.DatasetIdentifierIndexRequest) (*emptypb.Empty, error) {
+	if req == nil {
+		err := status.Errorf(status.Nil, "Protobuf dataset identifier index request is nil")
+		log.WithFields(logFields).Error(err.Error())
+		return nil, err
+	}
+
+	log.WithFields(logFields).Info("Indexed dataset lookup with identifier '%s'", req.GetIdentifier())
+	if err := d.dsLookupService.InsertDatasetLookupEntry(ctx, req.GetIdentifier(), req.GetOrigin().GetName()); err != nil {
+		log.WithFields(logFields).Error(err.Error())
+		return nil, ErrDatasetLookupInsert
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 // Verifies the signature of the given message. Returns a non-nil error if the signature is not valid.
@@ -338,10 +316,11 @@ func (d *DirectoryServerCore) verifyMessageSignature(msg *pb.Message) error {
 	if err != nil {
 		return err
 	}
+	_ = data
 
-	if !d.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
+	/*	if !d.ifritClient.VerifySignature(r, s, data, string(msg.GetSender().GetId())) {
 		return errors.New("DirectoryServerCore could not securely verify the integrity of the message")
-	}
+	}*/
 
 	// Restore message
 	msg.Signature = &pb.MsgSignature{
@@ -361,127 +340,92 @@ func (d *DirectoryServerCore) pbNode() *pb.Node {
 	}
 }
 
-// TODO: handle ctx
-// Rollbacks the checkout of a dataset. This is useful if any errors occur somewhere in the pipeline.
-func (d *DirectoryServerCore) rollbackCheckout(nodeAddr, dataset string, ctx context.Context) error {
-	msg := &pb.Message{
-		Type:        message.MSG_TYPE_ROLLBACK_CHECKOUT,
-		Sender:      d.pbNode(),
-		StringValue: dataset,
-	}
-
-	data, err := proto.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	r, s, err := d.ifritClient.Sign(data)
-	if err != nil {
-		return err
-	}
-
-	msg.Signature = &pb.MsgSignature{R: r, S: s}
-	data, err = proto.Marshal(msg)
-	if err != nil {
-		return err
-	}
-
-	ch := d.ifritClient.SendTo(nodeAddr, data)
-	select {
-	case resp := <-ch:
-		respMsg := &pb.Message{}
-		if resp != nil {
-			if err := proto.Unmarshal(resp.Data, respMsg); err != nil {
-				return err
-			}
-
-			if err := d.verifyMessageSignature(respMsg); err != nil {
-				return err
-			}
-		}
-
-	case <-ctx.Done():
-		err := errors.New("Could not verify dataset checkout rollback")
-		return err
-	}
-
-	return nil
-}
-
 func (d *DirectoryServerCore) gossipMessageHandler(data []byte) ([]byte, error) {
-	msg := &pb.Message{}
-	if err := proto.Unmarshal(data, msg); err != nil {
-		log.Errorln(err.Error())
+	message := &pb.Message{}
+	if err := proto.Unmarshal(data, message); err != nil {
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
-	log.Infof("Directory server got gossip message\n")
+	log.WithFields(logFields).Infof("Node '%s' got gossip message", d.config.Name)
 
-	if err := d.verifyMessageSignature(msg); err != nil {
-		log.Warnln(err.Error())
-		//return nil, err
-	}
-
-	// Observe all gossip messages
-	if err := d.gossipObs.InsertObservedGossip(msg.GetGossipMessage()); err != nil {
-		log.Errorln(err.Error())
-	}
-
-	switch msgType := msg.Type; msgType {
-	case message.MSG_TYPE_PROBE:
-		//n.ifritClient.SetGossipContent(data)
-	case message.MSG_TYPE_POLICY_STORE_UPDATE:
-		return d.processPolicyBatch(msg)
-	default:
-		fmt.Printf("Unknown gossip message type: %s\n", msg.GetType())
-	}
-
-	return nil, nil
-}
-
-// TODO fix me!
-func (d *DirectoryServerCore) processPolicyBatch(msg *pb.Message) ([]byte, error) {
-	if msg == nil {
-		err := errors.New("Pb message is nil")
-		log.Errorln(err.Error())
+	if err := d.verifyMessageSignature(message); err != nil {
+		log.WithFields(logFields).Error(err.Error())
 		return nil, err
 	}
 
-	if msg.GetGossipMessage() == nil {
-		err := errors.New("Gossip message is nil")
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	// Dismiss message if we have seen it before
-	// TODO: check policy store id
-	//	id := msg.GetGossipMessage().GetGossipMessageID()
-
-	gspMsg := msg.GetGossipMessage()
-	if gspMsg.GetGossipMessageBody() == nil {
-		err := errors.New("Gossip message body is nil")
-		log.Errorln(err.Error())
-		return nil, err
-	}
-
-	for _, m := range gspMsg.GetGossipMessageBody() {
-		if err := d.applyPolicy(m.GetPolicy()); err != nil {
-			log.Errorln(err.Error())
+	// Determine actions based on message type.
+	// Should maybe find another way to
+	if content := message.GetContent(); content != nil {
+		m, err := content.UnmarshalNew()
+		if err != nil {
+			log.WithFields(logFields).Error(err.Error())
+			return nil, err
 		}
+
+		switch msg := m.(type) {
+		case *pb.PolicyGossipUpdate:
+			if err := d.policyLog.InsertObservedGossip(context.Background(), msg); err != nil {
+				log.WithFields(logFields).Error(err.Error())
+				return nil, err
+			}
+
+			if err := d.processPolicyBatch(context.Background(), msg); err != nil {
+				log.WithFields(logFields).Error(err.Error())
+				return nil, err
+			}
+		default:
+			log.WithFields(logFields).Error("Unknown message type:", msg)
+		}
+	} else {
+		log.WithFields(logFields).Error("content in message is nil")
 	}
 
 	return nil, nil
 }
 
-// Apply policy to checked out dataset
-func (d *DirectoryServerCore) applyPolicy(newPolicy *pb.Policy) error {
-	if newPolicy == nil {
-		return errors.New("Policy to be applied is nil")
+// Apply policies to checked-out datasets. Notify the session handler about the update
+// TODO: notify the client that checked out the dataset as well
+func (d *DirectoryServerCore) processPolicyBatch(ctx context.Context, g *pb.PolicyGossipUpdate) error {
+	if g.GetGossipMessageBody() == nil {
+		log.WithFields(logFields).Error(errGossipMessageBody.Error())
+		return errGossipMessageBody
 	}
 
-	datasetId := newPolicy.GetDatasetIdentifier()
-	if d.checkoutManager.DatasetIsCheckedOut(datasetId) {
-		//d.clientSessionHandler.PublishPolicy(newPolicy)
+	for _, m := range g.GetGossipMessageBody() {
+		if newPolicy := m.GetPolicy(); newPolicy != nil {
+			if datasetId := newPolicy.GetDatasetIdentifier(); datasetId != "" {
+				isCheckedOut, err := d.checkoutManager.DatasetIsCheckedOut(ctx, datasetId)
+				if err != nil {
+					log.WithFields(logFields).Error(err.Error())
+					continue
+				}
+
+				// If the dataset is checked out, check the version number to avoid inconsistent policy application.
+				// Apply the policy to all checkouts
+				if isCheckedOut {
+					currentVersion, _, err := d.checkoutManager.GetDatasetSystemPolicy(ctx, datasetId)
+					if err != nil {
+						log.WithFields(logFields).Error(err.Error())
+						continue
+					}
+
+					if newPolicy.GetVersion() > currentVersion {
+						if err := d.checkoutManager.SetDatasetSystemPolicy(ctx, datasetId, newPolicy.GetVersion(), newPolicy.GetContent()); err != nil {
+							log.WithFields(logFields).Error(err.Error())
+							continue
+						}
+						log.WithFields(logFields).Infof("Successfully updated dataset policy with identifier '%s'", datasetId)
+					} else {
+						log.WithFields(logFields).Infof("Got an outdated policy for dataset '%s'. Current version is %d, got %d", datasetId, currentVersion, newPolicy.GetVersion())
+					}
+				}
+			} else {
+				log.WithFields(logFields).Error("Dataset identifier must not be an empty string")
+			}
+		} else {
+			log.WithFields(logFields).Error("Policy entry in gossip message body was nil")
+		}
 	}
 
 	return nil

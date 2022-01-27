@@ -1,6 +1,6 @@
 hostname: "127.0.0.1"
-directoryserveraddr: 127.0.1.1:8081
-policystoreaddr: 127.0.1.1:8084
+directoryserveraddr: 127.0.1.1:8080
+policystoreaddr: 127.0.1.1:8081
 lohpicaaddr: 127.0.1.1:8301
 remoteport: "8085"
 httpport: 8090
@@ -16,3 +16,5 @@ ifrittcpport: 10000
 ifritudpport: 10001
 lohpicryptounitworkingdirectory: crypto/lohpi
 ifritcryptounitworkingdirectory: crypto/ifrit
+dbconnpoolsize: 7
+setreconciliationinterval: 3

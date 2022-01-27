@@ -2,14 +2,11 @@ package lohpi
 
 import (
 	"errors"
-	"fmt"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/policyobserver"
 	"github.com/arcsecc/lohpi/core/membershipmanager"
 	"github.com/arcsecc/lohpi/core/policystore"
-	"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/arcsecc/lohpi/core/comm"
-	"crypto/x509/pkix"
 	//log "github.com/sirupsen/logrus"
 	"time"
 )
@@ -70,6 +67,9 @@ type PolicyStoreConfig struct {
 
 	// Ifrit's X.509 certificate path. An error is returned if the string is empty.
 	IfritCertPath string
+
+	// Database connection pool size
+	DBConnPoolSize int
 }
 
 type PolicyStore struct {
@@ -77,7 +77,7 @@ type PolicyStore struct {
 	config *policystore.Config
 }
 
-func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
+func NewPolicyStore(config *PolicyStoreConfig, new bool, useCA bool, useACME bool) (*PolicyStore, error) {
 	if config == nil {
 		return nil, errors.New("Policy store configuration is nil")
 	}
@@ -153,91 +153,50 @@ func NewPolicyStore(config *PolicyStoreConfig, new bool) (*PolicyStore, error) {
 		},
 	}
 
-	// Crypto manager
 	var cu *comm.CryptoUnit
 	var err error
 
-	if new {
+	if !useACME {
 		// Create a new crypto unit 
 		cryptoUnitConfig := &comm.CryptoUnitConfig{
-			Identity: pkix.Name{
-				Country: []string{"NO"},
-				CommonName: config.Name,
-				Locality: []string{
-					fmt.Sprintf("%s:%d", config.Hostname, config.HTTPPort), 
-					fmt.Sprintf("%s:%d", config.Hostname, config.GRPCPort),
-				},
-			},
 			CaAddr: config.CaAddress,
 			Hostnames: []string{config.Hostname},
 		}
-		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
+		cu, err = comm.NewCu(cryptoUnitConfig, useCA)
 		if err != nil {
 			return nil, err
 		}
+	}
 
-		if err := cu.SaveState(); err != nil {
-			return nil, err
-		}	
-	} else {
-		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
-		if err != nil {
-			return nil, err
-		}
+	pool, err := dbPool(config.SQLConnectionString, int32(config.DBConnPoolSize))
+	if err != nil {
+		return nil, err
 	}
 
 	// Dataset manager
-	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService(config.Name, datasetLookupServiceConfig)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
 	// Membership manager
-	memManagerConfig := &membershipmanager.MembershipManagerUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-		UseDB: true,
-	}
-	memManager, err := membershipmanager.NewMembershipManager(config.Name, memManagerConfig)
+	memManager, err := membershipmanager.NewMembershipManager(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
 	// Dataset manager service
-	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, datasetIndexerUnitConfig)
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 	
-	// Policy synchronization service
-	stateSync, err := setsync.NewSetSyncUnit()
+	policyObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := stateSync.InitializeReconciliationDatabaseConnection(config.SQLConnectionString); err != nil {
-		return nil, err
-	}
-
-	if err := stateSync.InitializePolicyReconciliationTable(config.Name); err != nil {
-		return nil, err
-	}
-
-	// Policy observer 
-	policyObserverConfig := &policyobserver.PolicyObserverUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	policyObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, policyObserverConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, stateSync, memManager, dsManager, p.config, policyObserver, new)
+	psCore, err := policystore.NewPolicyStoreCore(cu, datasetLookupService, memManager, dsManager, p.config, policyObserver, pool, new)
 	if err != nil {
 		return nil, err
 	}

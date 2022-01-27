@@ -1,58 +1,53 @@
 syntax = "proto3";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/any.proto";
+import "google/protobuf/empty.proto";
 package proto;
+option go_package = "./protobuf";
 
 service DirectoryServer {
     rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc IndexDataset (DatasetIdentifierIndexRequest) returns (google.protobuf.Empty) {}
     //rpc IgnoreIP (Node) returns (Node) {}
 }
 
 service PolicyStore {
     rpc Handshake (Node) returns (HandshakeResponse) {}
+    rpc IndexDataset (DatasetIndexRequest) returns (Policy) {}
+    rpc ReconcilePolicies (PolicyReconcileRequest) returns (PolicyReconcileResponse) {}
 }
 
 message Client {
     string name = 1;
     string ID = 2; // microsoft id
     string emailAddress = 3;
-    string macAddress = 4;
-    string IpAddress = 5;
-    string DNSName = 6;
+    string IpAddress = 4;
 }
 
 // Used in direct messaging
 message Message {
-    string Type = 1;        // What kind of message is it?
-    Node sender = 2;        //
-    Policy policy = 3;      //
-    MsgSignature signature = 5; // Integrity check based on ECDSA
-    GossipMessage gossipMessage = 6;
-    Probe probe = 7;
-    DatasetRequest datasetRequest = 8;
-    DatasetResponse datasetResponse = 9;
-    PolicyRequest policyRequest = 10;
-    
-    DatasetSyncronization datasetSyncronization = 11;
-    DatasetIdentifiersResponse datasetIdentifiersResponse = 13;
-    DatasetSyncronizationDelta datasetSyncronizationDelta = 14;
-
-    // Other fields
-    string stringValue = 15;
-    repeated string stringSlice = 16; 
-    bytes Bytes = 17;
-    repeated bytes BytesSlice = 18;
-    bool boolValue = 19;
+    google.protobuf.Any content = 1;
+    MsgSignature signature = 2;
 }
 
 message Response {
-    MsgSignature signature = 1;// Integrity check based on ECDSA
-    string stringValue = 2;
-    repeated string stringSlice = 3;  // Arbitrary use
-    bytes bytesValue = 4;
-    repeated bytes bytesSlice = 5;
+    google.protobuf.Any content = 1;
+    int32 statusCode = 2;
+    MsgSignature signature = 3;
 }
 
-// Here, node is Lohpi storage nodes, policy store and mux (and compliance engine?)
+message DatasetIdentifiers {
+    repeated DatasetIdentifier identifiers = 1;
+}
+
+message DatasetIdentifier {
+    string id = 1;
+}
+
+message Acknowledgment {
+    string message = 1; // Retarded linter :o
+}
+
 message Node {
     string name = 1;            // String identifier
     string ifritAddress = 2;    // Ifrit IP address
@@ -60,33 +55,33 @@ message Node {
     string httpsAddress = 4;     // IP address
     int32 port = 5; // Port
     google.protobuf.Timestamp bootTime = 6; // Join time
+    string geoZone = 7; // Geographic zone
 }
 
-message DatasetRequest {
-    string identifier = 1;          // String identifier
-    bytes clientToken = 2;    // access attribute from client
-    MsgSignature signature = 3;
+message Nodes {
+    repeated Node nodes = 1;
 }
 
 message Dataset {
     string identifier = 1; // String identifier
     Policy policy = 2;
-    bool allowMultipleCheckouts = 3;
+    IndexOption indexOption = 3;
+}
+
+message IndexOption {
+    bool allowMultipleCheckouts = 1;
 }
 
 message DatasetCheckout {
     string datasetIdentifier = 1;
     google.protobuf.Timestamp DateCheckout = 2;
     Client client = 3;
-    uint64 policyVersion = 4; // Version number set by policy store when a new policy is set.
+    uint64 clientPolicyVersion = 4; // Version number set by policy store when a new policy is set.
+    google.protobuf.Timestamp DateLatestVerification = 5;
 }
 
-message DatasetResponse {
-    string Type = 1;        // zip/gzip/binary...
-    string URL = 2;
-    bool isAllowed = 3;
-    string errorMessage = 4;
-    MsgSignature signature = 5;
+message DatasetCheckouts {
+    repeated DatasetCheckout datasetCheckouts = 1;
 }
 
 message ClientState {
@@ -94,28 +89,33 @@ message ClientState {
     google.protobuf.Timestamp LastComplyCheck = 2;
 }
 
-message PolicyRequest {
+message DatasetIndexRequest {
     string identifier = 1;
+    IndexOption indexOption = 2;
+    Node origin = 3;
 }
 
-message MetadataRequest {
-    string identifier = 1;          // String identifier
-    bytes clientToken = 2;    // access attribute from client
-    MsgSignature signature = 3;
-}
-
-message MetadataResponse {
-    string URL = 1;
-    MsgSignature signature = 2;
+message DatasetIdentifierIndexRequest {
+    string identifier = 1;
+    Node origin = 2;
 }
 
 message Policy {
-    string datasetIdentifier = 2;
-    bool content = 3; // Acutal policy content
-    uint64 version = 4; // Version number set by policy store when a new policy is set.
-    google.protobuf.Timestamp DateCreated = 5; // Local time when the policy was created
-    google.protobuf.Timestamp DateUpdated = 6; // Local time when the policy was updated, if it exists
-    google.protobuf.Timestamp DateApplied = 7; // Local time when the policy was applied to a dataset at a node
+    string datasetIdentifier = 1;
+    bool content = 2; // Acutal policy content
+    uint64 version = 3; // Version number set by policy store when a new policy is set.
+    google.protobuf.Timestamp DateCreated = 4; // Local time when the policy was created
+    google.protobuf.Timestamp DateUpdated = 5; // Local time when the policy was updated, if it exists
+    google.protobuf.Timestamp DateApplied = 6; // Local time when the policy was applied to a dataset at a node
+}
+
+message PolicyReconcileRequest {
+    repeated Policy policies = 1;
+    Node origin = 2;
+}
+
+message PolicyReconcileResponse {
+    repeated Policy policyDeltas = 1;
 }
 
 message MsgSignature {
@@ -128,13 +128,11 @@ message HandshakeResponse {
     bytes id = 2;   // From fireflies
 }
 
-message GossipMessage {
-    string Sender = 1;              // Who sent it?
-    string MessageType = 2;         // Gossip or probing?
-    google.protobuf.Timestamp DateSent = 3; // Time at policy store, to keep track of messages     
-    MsgSignature signature = 4;
-    repeated GossipMessageBody gossipMessageBody = 5; //!
-    GossipMessageID gossipMessageID = 6; //!
+message PolicyGossipUpdate {
+    string Sender = 1; 
+    google.protobuf.Timestamp DateSent = 2; // Time at policy store, to keep track of messages     
+    repeated GossipMessageBody gossipMessageBody = 3;
+    GossipMessageID gossipMessageID = 4;
 }
 
 message GossipMessageID {
@@ -144,7 +142,6 @@ message GossipMessageID {
 
 message GossipMessageBody {
     Policy policy = 1;
-    // probe!
 }
 
 message Probe {
@@ -158,22 +155,3 @@ message MembershipState {
     google.protobuf.Timestamp joinTime = 1;
     // session id1
 }
-
-// DEFINITIONS BELOW THIS LINE: MOVE TO ANOTHER PACKAGE/FILE
-
-// Send from the node to LDS/PS
-message DatasetIdentifiersResponse {
-    repeated string newIdentifiers = 1;
-    repeated string staleIdentifiers = 2;
-}
-
-// Request by node to PS. Includes policies as well
-message DatasetSyncronizationDelta {
-    bytes sessionID = 1;
-    repeated Dataset datasets = 2;
-}
-
-message DatasetSyncronization {
-    bytes sessionID = 1;
-    repeated Dataset datasets = 2;
-}   

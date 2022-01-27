@@ -1,9 +1,7 @@
 package lohpi
 
 import (
-	"crypto/x509/pkix"
 	"errors"
-	"fmt"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/directoryserver"
@@ -24,7 +22,7 @@ type DirectoryServerConfig struct {
 	SQLConnectionString string
 
 	// Hostname of the node. Default value is "127.0.1.1".
-	HostName string
+	Hostnames []string
 
 	// Output directory of gossip observation unit. Default value is the current working directory.
 	PolicyObserverWorkingDirectory string
@@ -60,7 +58,7 @@ type DirectoryServer struct {
 }
 
 // Returns a new DirectoryServer using the given directory server options. Returns a non-nil error, if any.
-func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServer, error) {
+func NewDirectoryServer(config *DirectoryServerConfig, new bool, useCA bool, useACME bool) (*DirectoryServer, error) {
 	if config == nil {
 		return nil, errors.New("Directory server configuration is nil")
 	}
@@ -73,8 +71,12 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 		config.CaAddress = "127.0.1.1:8301"
 	}
 
-	if config.HostName == "" {
-		config.HostName = "127.0.1.1"
+	if config.Hostnames == nil {
+		return nil, errors.New("Hostnames list is nil")
+	}
+
+	if len(config.Hostnames) == 0 {
+		return nil, errors.New("Hostnames list is empty")
 	}
 
 	if config.HTTPPort == 0 {
@@ -111,40 +113,26 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 			HTTPPort: config.HTTPPort,
 			GRPCPort: config.GRPCPort,
 			SQLConnectionString: config.SQLConnectionString,
-			Hostname: config.HostName,
-			IfritCryptoUnitWorkingDirectory: .IfritCryptoUnitWorkingDirectory,
+			Hostname: config.Hostnames[0],
+			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
 			IfritTCPPort: config.IfritTCPPort,
 			IfritUDPPort: config.IfritUDPPort,
 		},
 	}
 
-	// Crypto manager
 	var cu *comm.CryptoUnit
-	var err error
+	var err error 
 
-	if new {
+	// NOTE: when using autocert, the certManager interface is basically useless... 
+	// please refine the logic behind this
+	if !useACME {
 		// Create a new crypto unit
 		cryptoUnitConfig := &comm.CryptoUnitConfig{
-			Identity: pkix.Name{
-				CommonName: ds.conf.Name,
-				Locality: []string{
-					fmt.Sprintf("%s:%d", config.HostName, config.HTTPPort),
-					fmt.Sprintf("%s:%d", config.HostName, config.GRPCPort),
-				},
-			},
-			CaAddr:    config.CaAddress,
-			Hostnames: []string{config.HostName},
-		}
-		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
-		if err != nil {
-			return nil, err
+			CaAddr: config.CaAddress,
+			Hostnames: config.Hostnames,
 		}
 
-		if err := cu.SaveState(); err != nil {
-			return nil, err
-		}
-	} else {
-		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
+		cu, err = comm.NewCu(cryptoUnitConfig, useCA)
 		if err != nil {
 			return nil, err
 		}
@@ -156,8 +144,7 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	}
 
 	// Dataset manager
-	datasetLookupServiceConfig := &datasetmanager.DatasetLookupServiceConfig{}
-	datasetLookupService, err := datasetmanager.NewDatasetLookupService(config.Name, datasetLookupServiceConfig, pool)
+	datasetLookupService, err := datasetmanager.NewDatasetLookupService(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
@@ -175,12 +162,12 @@ func NewDirectoryServer(config *DirectoryServerConfig, new bool) (*DirectoryServ
 	}
 
 	// Policy observer
-	gossipObs, err := policyobserver.NewPolicyObserverUnit(config.Name, pool)
+	gossipObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
-	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObs, datasetLookupService, memManager, dsCheckoutManager, ds.conf, pool, new)
+	dsCore, err := directoryserver.NewDirectoryServerCore(cu, gossipObserver, datasetLookupService, memManager, dsCheckoutManager, ds.conf, pool, new, useACME)
 	if err != nil {
 		return nil, err
 	}

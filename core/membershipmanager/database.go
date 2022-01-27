@@ -1,33 +1,33 @@
 package membershipmanager
 
 import (
-	"errors"
 	"context"
-	pb "github.com/arcsecc/lohpi/protobuf"
-	"time"
+	"errors"
 	"fmt"
+	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/jackc/pgx/v4"
-	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/sirupsen/logrus"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
+	"time"
 )
 
 var (
-	errNoNodeId = errors.New("Node's name is not set")
-	errNilNode = errors.New("Node is nil")
+	errNoNodeId      = errors.New("Node's name is not set")
+	errNilNode       = errors.New("Node is nil")
 	errNoRegexString = errors.New("Regex string is empty")
 )
 
 var dbLogFields = logrus.Fields{
 	"package": "membershipmanager",
-	"action": "database client",
+	"action":  "database client",
 }
 
 var regexStringLogFields = logrus.Fields{
 	"package": "membershipmanager",
-	"action": "parsing regular expressions",
+	"action":  "parsing regular expressions",
 }
 
-func (m *MembershipManagerUnit) dbInsertNetworkNode(nodeId string, node *pb.Node) error {
+func (m *MembershipManagerUnit) dbInsertNetworkNode(ctx context.Context, nodeId string, node *pb.Node) error {
 	if nodeId == "" {
 		return errNoNodeId
 	}
@@ -39,7 +39,7 @@ func (m *MembershipManagerUnit) dbInsertNetworkNode(nodeId string, node *pb.Node
 	boottime := node.GetBootTime().AsTime().Format(time.RFC1123Z)
 
 	q := `INSERT INTO ` + m.storageNodeSchema + `.` + m.storageNodeTable + `
-	(node_name, ip_address, public_id, https_address, port, boottime) VALUES ($1, $2, $3, $4, $5, $6)
+	(node_name, ip_address, public_id, https_address, port, boottime, geozone) VALUES ($1, $2, $3, $4, $5, $6, $7)
 	ON CONFLICT (node_name) DO UPDATE
 	SET
 		node_name = $1, 
@@ -47,15 +47,17 @@ func (m *MembershipManagerUnit) dbInsertNetworkNode(nodeId string, node *pb.Node
 		public_id = $3, 
 		https_address = $4, 
 		port = $5, 
-		boottime = $6
+		boottime = $6,
+		geozone = $7
 	WHERE ` + m.storageNodeSchema + `.` + m.storageNodeTable + `.node_name = $1;`
-	_, err := m.pool.Exec(context.Background(), q, 
+	_, err := m.pool.Exec(context.Background(), q,
 		nodeId,
-		node.GetIfritAddress(), 
+		node.GetIfritAddress(),
 		node.GetId(),
-		node.GetHttpsAddress(), 
-		node.GetPort(), 
-		boottime)
+		node.GetHttpsAddress(),
+		node.GetPort(),
+		boottime,
+		node.GetGeoZone())
 	if err != nil {
 		log.WithFields(dbLogFields).Error(err.Error())
 		return err
@@ -66,7 +68,7 @@ func (m *MembershipManagerUnit) dbInsertNetworkNode(nodeId string, node *pb.Node
 	return nil
 }
 
-func (m *MembershipManagerUnit) dbDeleteNetworkNode(nodeId string) error {
+func (m *MembershipManagerUnit) dbDeleteNetworkNode(ctx context.Context, nodeId string) error {
 	if nodeId == "" {
 		return fmt.Errorf("Node id is empty")
 	}
@@ -81,7 +83,7 @@ func (m *MembershipManagerUnit) dbDeleteNetworkNode(nodeId string) error {
 	if commangTag.RowsAffected() != 1 {
 		err := fmt.Errorf("Could not delete node with id '%s'", nodeId)
 		log.WithFields(dbLogFields).Error(err)
-		return err		
+		return err
 	}
 
 	log.WithFields(dbLogFields).Infof("Succsessfully deleted node with id '%s'\n'", nodeId)
@@ -89,25 +91,25 @@ func (m *MembershipManagerUnit) dbDeleteNetworkNode(nodeId string) error {
 	return nil
 }
 
-func (m *MembershipManagerUnit) dbSelectAllNetworkNodes() (map[string]*pb.Node, error) {
-	rows, err := m.pool.Query(context.Background(), `SELECT * FROM ` + m.storageNodeSchema + `.` + m.storageNodeTable + `;`)
-    if err != nil {
+func (m *MembershipManagerUnit) dbSelectNetworkNodes(ctx context.Context, cursor int, limit int) (*pb.Nodes, error) {
+	rows, err := m.pool.Query(context.Background(), `SELECT * FROM `+m.storageNodeSchema+`.`+m.storageNodeTable+`;`)
+	if err != nil {
 		log.WithFields(dbLogFields).Error(err.Error())
-        return nil, err
-    }
+		return nil, err
+	}
 
-    defer rows.Close()
-    
-	nodes := make(map[string]*pb.Node)
+	defer rows.Close()
 
-    for rows.Next() {
-        var nodeName, ipAddress, httpsAddress, boottime string
+	nodes := make([]*pb.Node, 0)
+
+	for rows.Next() {
+		var nodeName, ipAddress, httpsAddress, boottime, geoZone string
 		var id, port int32
 		var publicId []byte
-        if err := rows.Scan(&id, &nodeName, &ipAddress, &publicId, &httpsAddress, &port, &boottime); err != nil {
+		if err := rows.Scan(&id, &nodeName, &ipAddress, &publicId, &httpsAddress, &port, &boottime, &geoZone); err != nil {
 			log.WithFields(dbLogFields).Errorln(err.Error())
 			continue
-        }
+		}
 
 		bTime, err := time.Parse(time.RFC1123Z, boottime)
 		if err != nil {
@@ -116,41 +118,44 @@ func (m *MembershipManagerUnit) dbSelectAllNetworkNodes() (map[string]*pb.Node, 
 		}
 
 		node := &pb.Node{
-			Name: nodeName,
+			Name:         nodeName,
 			IfritAddress: ipAddress,
-			Id: []byte(publicId),
+			Id:           []byte(publicId),
 			HttpsAddress: httpsAddress,
-			Port: port,
-			BootTime: pbtime.New(bTime),
+			Port:         port,
+			BootTime:     pbtime.New(bTime),
+			GeoZone:      geoZone,
 		}
 
-		nodes[nodeName] = node
-    } 
+		nodes = append(nodes, node)
+	}
 
-	return nodes, nil
+	return &pb.Nodes{
+		Nodes: nodes,
+	}, nil
 }
 
-func (m *MembershipManagerUnit) dbSelectNetworkNode(nodeId string) (*pb.Node, error) {
+func (m *MembershipManagerUnit) dbSelectNetworkNode(ctx context.Context, nodeId string) (*pb.Node, error) {
 	if nodeId == "" {
 		return nil, fmt.Errorf("Node id is empty")
 	}
 
 	q := `SELECT * FROM ` + m.storageNodeSchema + `.` + m.storageNodeTable + ` WHERE node_name = $1;`
-	var nodeName, ipAddress, httpsAddress, boottime string
+	var nodeName, ipAddress, httpsAddress, boottime, geoZone string
 	var id, port int32
-	var publicId []byte	
-	err := m.pool.QueryRow(context.Background(), q, nodeId).Scan(&id, &nodeName, &ipAddress, &publicId, &httpsAddress, &port, &boottime)
+	var publicId []byte
+	err := m.pool.QueryRow(context.Background(), q, nodeId).Scan(&id, &nodeName, &ipAddress, &publicId, &httpsAddress, &port, &boottime, &geoZone)
 	switch err {
 	case pgx.ErrNoRows:
 		log.WithFields(dbLogFields).
-		WithField("database query", fmt.Sprintf("could not find '%s' in database", nodeId)).
-		Errorln(err.Error())
+			WithField("database query", fmt.Sprintf("could not find '%s' in database", nodeId)).
+			Warn(err.Error())
 		return nil, nil
 	case nil:
 	default:
 		return nil, err
 	}
-	
+
 	bTime, err := time.Parse(time.RFC1123Z, boottime)
 	if err != nil {
 		log.WithFields(dbLogFields).Errorln(err.Error())
@@ -160,16 +165,17 @@ func (m *MembershipManagerUnit) dbSelectNetworkNode(nodeId string) (*pb.Node, er
 	log.WithFields(dbLogFields).Infof("Succsessfully selected node with id '%s'\n'", nodeId)
 
 	return &pb.Node{
-		Name: nodeName,
+		Name:         nodeName,
 		IfritAddress: ipAddress,
-		Id: publicId,
+		Id:           publicId,
 		HttpsAddress: httpsAddress,
-		Port: port,
-		BootTime: pbtime.New(bTime),
+		Port:         port,
+		BootTime:     pbtime.New(bTime),
+		GeoZone:      geoZone,
 	}, nil
 }
 
-func (m *MembershipManagerUnit) dbNetworkNodeExists(nodeId string) (bool, error) {
+func (m *MembershipManagerUnit) dbNetworkNodeExists(ctx context.Context, nodeId string) (bool, error) {
 	if nodeId == "" {
 		return false, errNoNodeId
 	}
@@ -184,4 +190,17 @@ func (m *MembershipManagerUnit) dbNetworkNodeExists(nodeId string) (bool, error)
 		return false, err
 	}
 	return exists, nil
+}
+
+func (m *MembershipManagerUnit) dbNumNetworkMembers(ctx context.Context) (int, error) {
+	q := `SELECT count(id) from ` + m.storageNodeSchema + `.` + m.storageNodeTable + `;`
+
+	var result int
+	err := m.pool.QueryRow(ctx, q).Scan(&result)
+	if err != nil {
+		log.WithFields(dbLogFields).Error(err.Error())
+		return 0, err
+	}
+
+	return result, nil
 }

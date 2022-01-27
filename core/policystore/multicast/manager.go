@@ -1,17 +1,17 @@
 package multicast
 
 import (
-	"fmt"
-	"errors"
-	"context"
-	"github.com/arcsecc/lohpi/core/message"
-	pb "github.com/arcsecc/lohpi/protobuf"
-	pbtime "google.golang.org/protobuf/types/known/timestamppb"
-	"github.com/golang/protobuf/proto"
 	"container/list"
+	"context"
+	"errors"
+	"fmt"
+	pb "github.com/arcsecc/lohpi/protobuf"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/joonnna/ifrit"
 	log "github.com/sirupsen/logrus"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"sync"
 	//"strings"
 	"time"
@@ -25,17 +25,20 @@ const (
 
 	// Send direct messages to a random set of members
 	RandomMembers = 'B'
+
+	// Spread the selection of direct recipients across geographical regions
+	GeopgrahicallyDistributedMembers = 'C'
 )
 
 var (
-	errInvalidSigma = errors.New("Sigma must be greater than zero")
-	errInvalidTau   = errors.New("Invalid value for tau")
+	errInvalidSigma    = errors.New("Sigma must be greater than zero")
+	errInvalidTau      = errors.New("Invalid value for tau")
 	ErrNoSQLConnString = errors.New("PSQL connection string is empty")
-	ErrNoID = errors.New("Identifier was not supplied to multicast manager")
+	ErrNoID            = errors.New("Identifier was not supplied to multicast manager")
 )
 
 var logFields = log.Fields{
-	"package": "core/policy/multicast",
+	"package":     "core/policy/multicast",
 	"description": "message dissemination",
 }
 
@@ -53,7 +56,7 @@ type Config struct {
 	Mode MessageMode
 
 	// The members at the time the message passing is invoked
-	Members []string
+	Members *pb.Nodes
 }
 
 // Maintains all gossip-related events
@@ -62,7 +65,7 @@ type MulticastManager struct {
 	id string
 
 	// List of to-be-sent policies
-	policyList *list.List
+	policyList      *list.List
 	policyListMutex sync.RWMutex
 
 	// Timer that fires each time a multicast can be executed
@@ -83,12 +86,12 @@ type MulticastManager struct {
 	sequenceNumber int32
 
 	// Database-related fields
-	pool *pgxpool.Pool
-	schema string
+	pool                     *pgxpool.Pool
+	schema                   string
 	policyDisseminationTable string
 	directMessageLookupTable string
 
-	isMulticasting bool
+	isMulticasting      bool
 	isMulticastingMutex sync.RWMutex
 }
 
@@ -100,7 +103,7 @@ type memberFetch struct {
 
 // Returns a new MulticastManager, given the Ifrit node and the configuration. Sigma and tau are initial values
 // that may be changed after initiating probing sessions. The values will be adjusted if they are higher than they should be.
-func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, MulticastDirectRecipients int, connString string, id string) (*MulticastManager, error) {
+func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, MulticastDirectRecipients int, connString string, id string, pool *pgxpool.Pool) (*MulticastManager, error) {
 	if connString == "" {
 		return nil, ErrNoSQLConnString
 	}
@@ -109,22 +112,8 @@ func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, Mul
 		return nil, ErrNoID
 	}
 
-	poolConfig, err := pgxpool.ParseConfig(connString)
-	if err != nil {
-		log.WithFields(logFields).Error(err.Error())
-		return nil, err
-	}
-
-	poolConfig.MaxConnLifetime = time.Second * 10
-	poolConfig.MaxConnIdleTime = time.Second * 4
-	poolConfig.MaxConns = 100
-	poolConfig.HealthCheckPeriod = time.Second * 1
-	poolConfig.LazyConnect = false
-
-	pool, err := pgxpool.ConnectConfig(context.Background(), poolConfig)
-	if err != nil {
-		log.WithFields(logFields).Error(err.Error())
-		return nil, err
+	if pool == nil {
+		return nil, errors.New("Database connection pool is nil")
 	}
 
 	m := &MulticastManager{
@@ -139,7 +128,7 @@ func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, Mul
 
 		configLock: sync.RWMutex{},
 		memManager: newMembershipManager(ifritClient),
-		prbManager: newProbeManager(ifritClient),
+		//		prbManager: newProbeManager(ifritClient),
 		sequenceNumber: 0,
 		pool: pool,
 		schema: id + "_schema",
@@ -150,7 +139,7 @@ func NewMulticastManager(ifritClient *ifrit.Client, acceptanceLevel float64, Mul
 	log.WithFields(logFields).
 		Debugf("Created new multicast manager with the following configuration:\nMulticast recipients: %s\nAcceptance level: %d\nInitial sequence number: %d\n", MulticastDirectRecipients, acceptanceLevel, m.sequenceNumber)
 
-	m.prbManager.start()
+		//	m.prbManager.start()
 
 	return m, nil
 }
@@ -169,15 +158,13 @@ func (m *MulticastManager) SetMulticastConfiguration(config *MulticastConfig) {
 	m.config = config
 }
 
-
-
 // Sends a batch of messages, given the messaging mode. The call will block until
 // all messages have been dispatched. The caller is responsible to wait until probing is finished
 // to avoid inconsistency. See IsProbing() in this package.
-func (m *MulticastManager) Multicast(c *Config) error {
+func (m *MulticastManager) Multicast(ctx context.Context, c *Config) error {
 	m.setIsMulticasting(true)
 	defer m.setIsMulticasting(false)
-	return m.multicast(c)
+	return m.multicast(ctx, c)
 }
 
 // Registers the given message as a probe message
@@ -188,40 +175,54 @@ func (m *MulticastManager) RegisterProbeMessage(msg *pb.Message) {
 // Probes the network to adjust the parameters
 func (m *MulticastManager) ProbeNetwork(mode MessageMode) error {
 	// Fetch the current probing configuration
-	config := m.GetMulticastConfiguration()
+	//config := m.GetMulticastConfiguration()
 
 	// Fetch a new configuration from the probing session
-	newConfig, err := m.prbManager.probeNetwork(config, mode)
-	if err != nil {
-		log.WithFields(logFields).Error(err.Error())
-		return err
-	}
+	/*	newConfig, err := m.prbManager.probeNetwork(config, mode)
+		if err != nil {
+			log.WithFields(logFields).Error(err.Error())
+			return err
+		}
 
-	// Set a new configration gained from the probing session
-	if newConfig != nil {
-		m.SetMulticastConfiguration(newConfig)
-		log.Println("New config after probe:", m.GetMulticastConfiguration())
-	}
+		// Set a new configration gained from the probing session
+		if newConfig != nil {
+			m.SetMulticastConfiguration(newConfig)
+			log.Println("New config after probe:", m.GetMulticastConfiguration())
+		}*/
 
 	return nil
 }
 
 func (m *MulticastManager) StopProbing() {
-	m.prbManager.Stop()
+	//	m.prbManager.Stop()
 }
 
 // FINISH ME
 func (m *MulticastManager) Stop() {
 	log.Println("Stopping multicast manager")
-	m.prbManager.Stop()
+	//	m.prbManager.Stop()
 }
 
-func (m *MulticastManager) getMessageRecipients(members []string, mode MessageMode, directRecipients int) ([]string, error) {
+func (m *MulticastManager) getMessageRecipients(nodes *pb.Nodes, mode MessageMode, directRecipients int) ([]string, error) {
+	if nodes == nil {
+		return nil, errors.New("Protobuf nodes slice is nil")
+	}
+
+	if members := nodes.GetNodes(); members != nil {
+		if len(members) == 0 {
+			err := errors.New("No members in members list")
+			log.WithFields(logFields).Error(err)
+			return nil, err
+		}
+	}
+
 	switch mode {
 	case LruMembers:
-		return m.memManager.lruMembers(members, directRecipients)
+		return m.memManager.lruMembers(nodes, directRecipients)
 	case RandomMembers:
-		return m.memManager.randomMembers(members, directRecipients)
+		return m.memManager.randomMembers(nodes, directRecipients)
+	case GeopgrahicallyDistributedMembers:
+		return m.memManager.geographicallyDistributedMembers(nodes, directRecipients)
 	default:
 		log.WithFields(logFields).Errorf("Unsupported mode: %s", mode)
 		break
@@ -231,14 +232,14 @@ func (m *MulticastManager) getMessageRecipients(members []string, mode MessageMo
 }
 
 // FINISH ME
-func (m *MulticastManager) multicast(c *Config) error {
+func (m *MulticastManager) multicast(ctx context.Context, c *Config) error {
 	if c == nil {
 		return errors.New("Multicast configuration is nil")
 	}
 
 	// Empty channel. Nothing to do
 	if m.policyList.Len() == 0 {
-		log.WithFields(logFields).Info("Policy batch list is empty -- nothing to do")
+		log.WithFields(logFields).Info("Policy list is empty. No multicasting to do.")
 		return nil
 	}
 
@@ -248,40 +249,16 @@ func (m *MulticastManager) multicast(c *Config) error {
 		return err
 	}
 
-	gossipChunks := make([]*pb.GossipMessageBody, 0)
+	gspMessages := m.prepareGossipMessages()
 
-	m.policyListMutex.RLock()
-	defer m.policyListMutex.RUnlock()
-
-	// TODO: avoid sizes exceeding 4MB
-	for e := m.policyList.Front(); e != nil; e = e.Next() {
-		p := e.Value.(*pb.Policy)
-		gossipChunk := &pb.GossipMessageBody{
-			Policy: p,
-		}
-
-		gossipChunks = append(gossipChunks, gossipChunk)
-		if err := m.dbInsertDirectMessage([]byte(m.ifritClient.Id()), int(m.sequenceNumber), p.GetDatasetIdentifier(), p.GetVersion()); err != nil {
-			log.WithFields(logFields).Error(err.Error())
-		}
-
-		m.policyList.Remove(e)
+	anyMsg, err := anypb.New(gspMessages)
+	if err != nil {
+		log.WithFields(logFields).Error(err.Error())
+		return err
 	}
 
-	// TODO: store me somewhere persistently 
-	m.sequenceNumber += 1
 	msg := &pb.Message{
-		Type: message.MSG_TYPE_POLICY_STORE_UPDATE,
-		GossipMessage: &pb.GossipMessage{
-			Sender:				"Polciy store",
-			MessageType:		message.GOSSIP_MSG_TYPE_POLICY,
-			DateSent:			pbtime.Now(),
-			GossipMessageBody:  gossipChunks,
-			GossipMessageID: 	&pb.GossipMessageID{
-				PolicyStoreID: 		[]byte(m.ifritClient.Id()), // use another encoding than UTF-8?
-				SequenceNumber: 	m.sequenceNumber,
-			},
-		},
+		Content: anyMsg,
 	}
 
 	data, err := proto.Marshal(msg)
@@ -307,8 +284,6 @@ func (m *MulticastManager) multicast(c *Config) error {
 		return err
 	}
 
-	wg := sync.WaitGroup{}
-
 	currentConfig := m.GetMulticastConfiguration()
 	log.WithFields(logFields).
 		WithField("action", "multicast policy batch").
@@ -316,6 +291,8 @@ func (m *MulticastManager) multicast(c *Config) error {
 			members, currentConfig.AcceptanceLevel, m.sequenceNumber, len(data))
 
 	// Multicast messages in parallel
+	// TODO: wait for ack. Put failed messages into db backlog
+	wg := sync.WaitGroup{}
 	for _, mem := range members {
 		member := mem
 		wg.Add(1)
@@ -324,11 +301,18 @@ func (m *MulticastManager) multicast(c *Config) error {
 			log.WithFields(logFields).
 				WithField("action", "multicast policy batch").
 				Infof("Sending policy batch to remote recipient at address '%s'", member)
-			
+
 			m.ifritClient.SendTo(member, data)
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			now := time.Now()
-		
-			if err := m.dbInsertGossipBatch(member, msg.GetGossipMessage(), now, []byte(m.ifritClient.Id())); err != nil {
+
+			if err := m.dbInsertGossipBatch(ctx, member, gspMessages, now, []byte(m.ifritClient.Id())); err != nil {
 				log.WithFields(logFields).Error(err.Error())
 			}
 		}()
@@ -339,6 +323,52 @@ func (m *MulticastManager) multicast(c *Config) error {
 	return nil
 }
 
+func (m *MulticastManager) prepareGossipMessages() *pb.PolicyGossipUpdate {
+	gossipChunks := make([]*pb.GossipMessageBody, 0)
+
+	m.policyListMutex.RLock()
+	defer m.policyListMutex.RUnlock()
+
+	// TODO: avoid sizes exceeding 4MB
+	var next *list.Element
+	for e := m.policyList.Front(); e != nil; e = next {
+		var gossipChunk *pb.GossipMessageBody
+		var p *pb.Policy
+		if next = e.Next(); next != nil {
+			tmp := *e.Value.(*pb.Policy)
+			p = &tmp
+			gossipChunk = &pb.GossipMessageBody{
+				Policy: p,
+			}
+		} else {
+			tmp := *e.Value.(*pb.Policy)
+			p = &tmp
+			gossipChunk = &pb.GossipMessageBody{
+				Policy: p,
+			}
+		}
+
+		gossipChunks = append(gossipChunks, gossipChunk)
+		if err := m.dbInsertDirectMessage([]byte(m.ifritClient.Id()), int(m.sequenceNumber), p.GetDatasetIdentifier(), p.GetVersion()); err != nil {
+			log.WithFields(logFields).Error(err.Error())
+		}
+
+		m.policyList.Remove(e)
+	}
+
+	// TODO: store me somewhere persistently
+	m.sequenceNumber += 1
+	return &pb.PolicyGossipUpdate{
+		Sender: "Polciy store",
+		DateSent: timestamppb.Now(),
+		GossipMessageBody: gossipChunks,
+		GossipMessageID: &pb.GossipMessageID{
+			PolicyStoreID:  []byte(m.ifritClient.Id()),
+			SequenceNumber: m.sequenceNumber,
+		},
+	}
+}
+
 func (m *MulticastManager) InsertPolicy(p *pb.Policy) {
 	m.policyListMutex.Lock()
 	defer m.policyListMutex.Unlock()
@@ -347,17 +377,18 @@ func (m *MulticastManager) InsertPolicy(p *pb.Policy) {
 
 // FINISH ME
 func (m *MulticastManager) IsProbing() bool {
-	return m.prbManager.IsProbing()
+	//	return m.prbManager.IsProbing()
+	return false
 }
 
-func (m *MulticastManager) IsMulticasting() bool { 
+func (m *MulticastManager) IsMulticasting() bool {
 	m.isMulticastingMutex.RLock()
 	defer m.isMulticastingMutex.RUnlock()
 	return m.isMulticasting
 }
 
-func (m *MulticastManager) setIsMulticasting(b bool) { 
+func (m *MulticastManager) setIsMulticasting(b bool) {
 	m.isMulticastingMutex.Lock()
 	defer m.isMulticastingMutex.Unlock()
-	m.isMulticasting = b	
+	m.isMulticasting = b
 }

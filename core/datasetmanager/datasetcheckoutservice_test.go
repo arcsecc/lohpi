@@ -19,7 +19,7 @@ func (suite *DirectoryServerSuite) SetupTest() {
 	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
 		SQLConnectionString: config.SQLConnectionString,
 	}
-	
+
 	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("directory_server", dsCheckoutManagerConfig)
 	if err != nil {
 		return nil, err

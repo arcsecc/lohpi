@@ -23,23 +23,23 @@ import (
 )
 
 var config = struct {
-	Port                	int    `required:"true"`
-	Hostname         		string `default:"127.0.1.1"`
-	PolicyStoreAddr         string `default:"127.0.1.1:8084"`
-	DirectoryServerAddr     string `default:"127.0.1.1:8081"`
-	LohpiCaAddr             string `default:"127.0.1.1:8301"`
-	Name 					string `required:"true"`
-	AzureKeyVaultName       string `required:"true"`
-	AzureKeyVaultSecret     string `required:"true"`
-	AzureClientSecret       string `required:"true"`
-	AzureClientID           string `required:"true"`
-	AzureKeyVaultBaseURL    string `required:"true"`
-	AzureTenantID           string `required:"true"`
-	AzureStorageAccountName string `required:"true"`
-	AzureStorageAccountKey  string `required:"true"`
+	Port                            int    `required:"true"`
+	Hostname                        string `default:"127.0.1.1"`
+	PolicyStoreAddr                 string `default:"127.0.1.1:8084"`
+	DirectoryServerAddr             string `default:"127.0.1.1:8081"`
+	LohpiCaAddr                     string `default:"127.0.1.1:8301"`
+	Name                            string `required:"true"`
+	AzureKeyVaultName               string `required:"true"`
+	AzureKeyVaultSecret             string `required:"true"`
+	AzureClientSecret               string `required:"true"`
+	AzureClientID                   string `required:"true"`
+	AzureKeyVaultBaseURL            string `required:"true"`
+	AzureTenantID                   string `required:"true"`
+	AzureStorageAccountName         string `required:"true"`
+	AzureStorageAccountKey          string `required:"true"`
 	LohpiCryptoUnitWorkingDirectory string `required:"true"`
 	IfritCryptoUnitWorkingDirectory string `required:"true"`
-	GossipInterval int `required:"true"`
+	GossipInterval                  int    `required:"true"`
 }{}
 
 type StorageNode struct {
@@ -59,7 +59,7 @@ func main() {
 	args.Parse(os.Args[1:])
 
 	configor.New(&configor.Config{
-		Debug: true, 
+		Debug:     true,
 		ENVPrefix: "PS_NODE"}).Load(&config, configFile)
 
 	var sn *StorageNode
@@ -70,7 +70,7 @@ func main() {
 		log.Errorln(err.Error())
 		os.Exit(1)
 	}
-	
+
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -217,15 +217,15 @@ func getNodeConfiguration() (*lohpi.NodeConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &lohpi.NodeConfig{
-		Name:                config.Name,
-		Hostname: 		  	 config.Hostname,
-		CaAddress:           config.LohpiCaAddr,
-		SQLConnectionString: dbConn,
+		Name:                            config.Name,
+		Hostname:                        config.Hostname,
+		CaAddress:                       config.LohpiCaAddr,
+		SQLConnectionString:             dbConn,
 		LohpiCryptoUnitWorkingDirectory: config.LohpiCryptoUnitWorkingDirectory,
 		IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
-		Port: config.Port,
+		Port:                            config.Port,
 	}, nil
 }
 
@@ -255,7 +255,7 @@ func newAzureKeyVaultClient() (*lohpi.AzureKeyVaultClient, error) {
 
 func (sn *StorageNode) Start() {
 	go sn.node.Start()
-	
+
 	if err := sn.indexDataset(); err != nil {
 		panic(err)
 	}

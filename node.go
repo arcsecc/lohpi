@@ -1,17 +1,15 @@
 package lohpi
 
 import (
-	"crypto/x509/pkix"
+	"context"
 	"github.com/arcsecc/lohpi/core/comm"
 	"github.com/arcsecc/lohpi/core/datasetmanager"
 	"github.com/arcsecc/lohpi/core/policyobserver"
-	"fmt"
 	"github.com/arcsecc/lohpi/core/node"
-	"github.com/arcsecc/lohpi/core/setsync"
 	"github.com/pkg/errors"
-_	"github.com/spf13/viper"
 	log "github.com/sirupsen/logrus"
 	"net/http"
+	"time"
 )
 
 var (
@@ -57,10 +55,19 @@ type NodeConfig struct {
 
 	// Ifrit's UDP port. Default value is 6000.
 	IfritUDPPort int
+
+	// Geographic zone
+	GeoZone string
+
+	// Interval between issuing set reconciliation.
+	SetReconciliationInterval time.Duration
+
+	// Database connection pool size
+	DBConnPoolSize int
 }
 
 // TODO: consider using intefaces
-func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
+func NewNode(config *NodeConfig, createNew bool, useCA bool, useACME bool) (*Node, error) {
 	if config == nil {
 		return nil, errors.New("Node configuration is nil")
 	}
@@ -84,81 +91,50 @@ func NewNode(config *NodeConfig, createNew bool) (*Node, error) {
 	n := &Node{
 		conf: &node.Config{
 			Name: config.Name,
-			SQLConnectionString: config.SQLConnectionString,
 			Port: config.Port,
 			Hostname: config.Hostname,
 			IfritTCPPort: config.IfritTCPPort,
 			IfritUDPPort: config.IfritUDPPort,
 			IfritCryptoUnitWorkingDirectory: config.IfritCryptoUnitWorkingDirectory,
+			GeoZone: config.GeoZone,
+			SetReconciliationInterval: config.SetReconciliationInterval,
 		},
 	}
 
-	// Crypto manager
-	var cu *comm.CryptoUnit
-	var err error
+	// Create a new crypto unit 
+	cryptoUnitConfig := &comm.CryptoUnitConfig{
+		CaAddr: config.CaAddress,
+		Hostnames: []string{config.Hostname},
+	}
+	cu, err := comm.NewCu(cryptoUnitConfig, useCA)
+	if err != nil {
+		return nil, err
+	}
 
-	if createNew {
-		// Create a new crypto unit 
-		cryptoUnitConfig := &comm.CryptoUnitConfig{
-			Identity: pkix.Name{
-				Country: []string{"NO"},
-				CommonName: config.Name,
-				Locality: []string{
-					fmt.Sprintf("%s:%d", config.Hostname, config.Port), 
-				},
-			},
-			CaAddr: config.CaAddress,
-			Hostnames: []string{config.Hostname},
-		}
-		cu, err = comm.NewCu(config.LohpiCryptoUnitWorkingDirectory, cryptoUnitConfig)
-		if err != nil {
-			return nil, err
-		}
-
-		if err := cu.SaveState(); err != nil {
-			return nil, err
-		}	
-	} else {
-		cu, err = comm.LoadCu(config.LohpiCryptoUnitWorkingDirectory)
-		if err != nil {
-			return nil, err
-		}
+	pool, err := dbPool(config.SQLConnectionString, int32(config.DBConnPoolSize))
+	if err != nil {
+		return nil, err
 	}
 
 	// Policy observer 
-	policyObserverConfig := &policyobserver.PolicyObserverUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	policyObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, policyObserverConfig)
+	policyObserver, err := policyobserver.NewPolicyObserverUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
 	// Dataset manager service
-	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, datasetIndexerUnitConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	// Policy synchronization service
-	stateSync, err := setsync.NewSetSyncUnit()
+	dsManager, err := datasetmanager.NewDatasetIndexerUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
 	// Checkout manager
-	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
-		SQLConnectionString: config.SQLConnectionString,
-	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(config.Name, dsCheckoutManagerConfig)
+	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit(config.Name, pool)
 	if err != nil {
 		return nil, err
 	}
 
-	nCore, err := node.NewNodeCore(cu, policyObserver, dsManager, stateSync, dsCheckoutManager, n.conf, createNew)
+	nCore, err := node.NewNodeCore(cu, policyObserver, dsManager, dsCheckoutManager, n.conf, pool, createNew)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +151,7 @@ func (n *Node) StartDatasetSyncing(remoteAddr string) error {
 
 // IndexDataset registers a dataset, given with its unique identifier. The call is blocking;
 // it will return when policy requests to the policy store finish.
-func (n *Node) IndexDataset(datasetId string, indexOptions *DatasetIndexingOptions) error {
+func (n *Node) IndexDataset(ctx context.Context, datasetId string, indexOptions *DatasetIndexingOptions) error {
 	if datasetId == "" {
 		return errNoDatasetId
 	}
@@ -188,7 +164,7 @@ func (n *Node) IndexDataset(datasetId string, indexOptions *DatasetIndexingOptio
 		AllowMultipleCheckouts: indexOptions.AllowMultipleCheckouts,
 	}
 
-	return n.nodeCore.IndexDataset(datasetId, opts)
+	return n.nodeCore.IndexDataset(ctx, datasetId, opts)
 }
 
 // Registers a handler that processes the client request of datasets. The handler is only invoked if the same id
@@ -217,7 +193,7 @@ func (n *Node) RemoveDataset(id string) {
 
 // Shuts down the node
 func (n *Node) Stop() {
-	n.nodeCore.Shutdown()
+
 }
 
 func (n *Node) HandshakeNetwork(directoryServerAddress, policyStoreAddress string) error {

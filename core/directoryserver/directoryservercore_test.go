@@ -8,32 +8,30 @@ import (
 
 	"crypto/ecdsa"
 	"crypto/x509"
-	
 
+	"context"
 	"encoding/pem"
 	"github.com/joonnna/ifrit"
-	"context"
 	//"github.com/arcsecc/lohpi/core/datasetmanager"
 	//"github.com/arcsecc/lohpi/core/directoryserver"
 	"github.com/arcsecc/lohpi/core/node"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/golang/protobuf/proto"
 	log "github.com/sirupsen/logrus"
-	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	pbtime "google.golang.org/protobuf/types/known/timestamppb"
 	"os"
 	"testing"
-	
 	//"github.com/stretchr/testify/assert"
 )
 
 var (
-	IfritCaPort       = 8300
-	IfritCaConfigPath = "ifrit_ca_config"
-	LohpiCaPort       = 8301
-	LohpiCaConfigPath = "lohpi_ca_config"
-	CryptoDummyDir	  = "crypto_dummy_dir" 
+	IfritCaPort             = 8300
+	IfritCaConfigPath       = "ifrit_ca_config"
+	LohpiCaPort             = 8301
+	LohpiCaConfigPath       = "lohpi_ca_config"
+	CryptoDummyDir          = "crypto_dummy_dir"
 	DirectoryServerCoreName = "directory server test"
 )
 
@@ -58,7 +56,7 @@ func init() {
 // Run before each test
 func (suite *DirectoryServerSuite) SetupTest() {
 	dsConfig := &Config{
-		Name:                           DirectoryServerCoreName,
+		Name:                            DirectoryServerCoreName,
 		HTTPPort:                        8080,
 		GRPCPort:                        0, //????
 		SQLConnectionString:             "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=directory_server_db_test sslmode=disable",
@@ -74,17 +72,15 @@ func (suite *DirectoryServerSuite) SetupTest() {
 		log.Fatal(err)
 	}
 
-	gossipObsStub := &gossipObserverStub{}
-
-	ds, err := NewDirectoryServerCore(certStub, gossipObsStub, &dsLookupServiceStub{}, &membershipManagerStub{}, &datasetCheckoutManagerStub{}, dsConfig)
+	ds, err := NewDirectoryServerCore(certStub, &gossipObserverStub{}, &dsLookupServiceStub{}, &membershipManagerStub{}, &datasetCheckoutManagerStub{}, &setSyncerStub{}, dsConfig, true)
 	require.NoError(suite.T(), err, "Error from creating new directory server must be nil")
 	require.NotEmpty(suite.T(), ds)
 
 	// Dummy nodes, in terms of protobuf definitions
-/*	nodeA, err := nodeA()
-	if err != nil {
-		log.Fatal(err)
-	}*/
+	/*	nodeA, err := nodeA()
+		if err != nil {
+			log.Fatal(err)
+		}*/
 
 	suite.ds = ds
 
@@ -109,7 +105,7 @@ func (suite *DirectoryServerSuite) SetupTest() {
 		if err := os.RemoveAll(CryptoDummyDir); err != nil {
 			log.Errorln(err.Error())
 		}
-		
+
 		//nodeA.Shutdown()
 	})
 }
@@ -122,27 +118,27 @@ func (suite *DirectoryServerSuite) TestDirectoryServerMessageHandler() {
 	// Valid messages
 	messages := []*pb.Message{
 		&pb.Message{
-			Type:   message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
+			Type:        message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
 			StringValue: "test datset",
 			Sender: &pb.Node{
-				Name: "node a",
+				Name:         "node a",
 				IfritAddress: "127.0.0.1:8500",
-				Id: []byte("0909efe23rei23i"),
+				Id:           []byte("0909efe23rei23i"),
 				HttpsAddress: "127.0.1.1",
-				Port: 8000,
-				BootTime: pbtime.Now(),
+				Port:         8000,
+				BootTime:     pbtime.Now(),
 			},
 		},
 		&pb.Message{
-			Type:   message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS,
+			Type:        message.MSG_SYNCHRONIZE_DATASET_IDENTIFIERS,
 			StringSlice: []string{"a", "b", "c"},
 			Sender: &pb.Node{
-				Name: "node a",
+				Name:         "node a",
 				IfritAddress: "127.0.0.1:8500",
-				Id: []byte("0909efe23rei23i"),
+				Id:           []byte("0909efe23rei23i"),
 				HttpsAddress: "127.0.1.1",
-				Port: 8000,
-				BootTime: pbtime.Now(),
+				Port:         8000,
+				BootTime:     pbtime.Now(),
 			},
 		},
 	}
@@ -171,10 +167,10 @@ func (suite *DirectoryServerSuite) TestDirectoryServerMessageHandler() {
 	resp, err := suite.ds.messageHandler(data)
 	require.EqualError(suite.T(), err, ErrUnknownMessageType.Error(), "Expected error, got nil instead")
 	require.Empty(suite.T(), resp)
-	
+
 	// Try a nil node
 	m = &pb.Message{
-		Type: message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
+		Type:   message.MSG_TYPE_ADD_DATASET_IDENTIFIER,
 		Sender: nil,
 	}
 
@@ -189,18 +185,18 @@ func (suite *DirectoryServerSuite) TestDirectoryServerMessageHandler() {
 func (suite *DirectoryServerSuite) TestDirectoryServerHandshake() {
 	// Create a dummy node to handshake the directory server
 	node := &pb.Node{
-		Name: "node a",
+		Name:         "node a",
 		IfritAddress: "127.0.0.1:8500",
-		Id: []byte("0909efe23rei23i"),
+		Id:           []byte("0909efe23rei23i"),
 		HttpsAddress: "127.0.1.1",
-		Port: 8000,
-		BootTime: pbtime.Now(),
+		Port:         8000,
+		BootTime:     pbtime.Now(),
 	}
 
 	resp, err := suite.ds.Handshake(context.Background(), node)
 	require.NoError(suite.T(), err, "Error from creating new directory server must be nil")
 	require.Equal(suite.T(), resp.GetIp(), "127.0.1.1:0")
-	
+
 	// Nil node
 	resp, err = suite.ds.Handshake(context.Background(), nil)
 	require.Error(suite.T(), err, "Error should be non-nil")
@@ -208,12 +204,12 @@ func (suite *DirectoryServerSuite) TestDirectoryServerHandshake() {
 
 	// Node without name
 	node = &pb.Node{
-		Name: "",
+		Name:         "",
 		IfritAddress: "127.0.0.1:8500",
-		Id: []byte("0909efe23rei23i"),
+		Id:           []byte("0909efe23rei23i"),
 		HttpsAddress: "127.0.1.1",
-		Port: 8000,
-		BootTime: pbtime.Now(),
+		Port:         8000,
+		BootTime:     pbtime.Now(),
 	}
 
 	resp, err = suite.ds.Handshake(context.Background(), node)
@@ -363,6 +359,14 @@ func (ds *dsLookupServiceStub) DatasetIdentifiers() []string {
 	return nil
 }
 
+func (ds *dsLookupServiceStub) DatasetIdentifiersAtNode(nodeName string) []string {
+	return nil
+}
+
+func (ds *dsLookupServiceStub) ResolveDatasetIdentifiers(newIdentifiers []string, staleIdentifiers []string, node *pb.Node) error {
+	return nil
+}
+
 type membershipManagerStub struct {
 }
 
@@ -414,7 +418,6 @@ func (ds *datasetCheckoutManagerStub) DatasetCheckouts(datasetId string) ([]*pb.
 }
 
 type gossipObserverStub struct {
-
 }
 
 func (s *gossipObserverStub) InsertObservedGossip(g *pb.GossipMessage) error {
@@ -427,6 +430,17 @@ func (s *gossipObserverStub) GossipIsObserved(g *pb.GossipMessage) bool {
 
 func (s *gossipObserverStub) InsertAppliedGossipMessage(msg *pb.GossipMessage) error {
 	return nil
+}
+
+type setSyncerStub struct {
+}
+
+func (s *setSyncerStub) RegisterIfritClient(client *ifrit.Client) {
+
+}
+
+func (s *setSyncerStub) RequestDatasetIdentifiersSync(ctx context.Context, currentIdentifiers []string, remoteAddr string) ([]string, []string, error) {
+	return nil, nil, nil
 }
 
 func setupCA() error {
@@ -468,79 +482,78 @@ func setupCA() error {
 
 func nodeA() (*node.NodeCore, error) {
 	/*
-	sqlConnString := "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable"
+			sqlConnString := "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable"
 
-	nodeAConfig := &node.Config{
-		Name:                   "nodeA",
-		SQLConnectionString:    sqlConnString,
-		Port:                   0,
-		PolicySyncInterval:		time.Second * 100,
-		DatasetSyncInterval:    time.Second * 100,
-		DatasetIdentifiersSyncInterval: time.Second * 100,
-		CheckedOutDatasetPolicySyncInterval: time.Second * 100,
-		Hostname:				"127.0.1.1",
-		IfritTCPPort: 			0,
-		IfritUDPPort: 			0,
-	}
+			nodeAConfig := &node.Config{
+				Name:                   "nodeA",
+				SQLConnectionString:    sqlConnString,
+				Port:                   0,
+				PolicySyncInterval:		time.Second * 100,
+				DatasetSyncInterval:    time.Second * 100,
+				DatasetIdentifiersSyncInterval: time.Second * 100,
+				CheckedOutDatasetPolicySyncInterval: time.Second * 100,
+				Hostname:				"127.0.1.1",
+				IfritTCPPort: 			0,
+				IfritUDPPort: 			0,
+			}
 
-	// Crypto unit
-	cryptoUnitConfig := &comm.CryptoUnitConfig{
-		Identity: pkix.Name{
-			Country: []string{"NO"},
-			Locality: []string{
-				fmt.Sprintf("%s:%d", "127.0.1.1", 0), 
-			},
-		},
-		CaAddr: "127.0.1.1:8301",
-		Hostnames: []string{"127.0.1.1"},
-	}
+			// Crypto unit
+			cryptoUnitConfig := &comm.CryptoUnitConfig{
+				Identity: pkix.Name{
+					Country: []string{"NO"},
+					Locality: []string{
+						fmt.Sprintf("%s:%d", "127.0.1.1", 0),
+					},
+				},
+				CaAddr: "127.0.1.1:8301",
+				Hostnames: []string{"127.0.1.1"},
+			}
 
-	cu, err := comm.NewCu(CryptoDummyDir, cryptoUnitConfig)
-	if err != nil {
-		return nil, err
-	}
+			cu, err := comm.NewCu(CryptoDummyDir, cryptoUnitConfig)
+			if err != nil {
+				return nil, err
+			}
 
-	// Dataset manager service
-/*	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
-		SQLConnectionString: "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable",
-	}
-	dsManager, err := datasetmanager.NewDatasetIndexerUnit("node1", datasetIndexerUnitConfig)
-	if err != nil {
-		return nil, err
-	}
+			// Dataset manager service
+		/*	datasetIndexerUnitConfig := &datasetmanager.DatasetIndexerUnitConfig{
+				SQLConnectionString: "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable",
+			}
+			dsManager, err := datasetmanager.NewDatasetIndexerUnit("node1", datasetIndexerUnitConfig)
+			if err != nil {
+				return nil, err
+			}
 
-	// Checkout manager
-	dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
-		SQLConnectionString: "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable",
-	}
-	dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("node1", dsCheckoutManagerConfig)
-	if err != nil {
-		return nil, err
-	}
+			// Checkout manager
+			dsCheckoutManagerConfig := &datasetmanager.DatasetCheckoutServiceUnitConfig{
+				SQLConnectionString: "user=lohpi_dev_user password=password! host=localhost port=5432 dbname=node_db_test sslmode=disable",
+			}
+			dsCheckoutManager, err := datasetmanager.NewDatasetCheckoutServiceUnit("node1", dsCheckoutManagerConfig)
+			if err != nil {
+				return nil, err
+			}
 
-	node, err := node.NewNodeCore(cu, &policyLoggerStub{}, dsManager, &stateSyncerStub{}, dsCheckoutManager, nodeAConfig)
-	if err != nil {
-		return nil, err
-	}
+			node, err := node.NewNodeCore(cu, &policyLoggerStub{}, dsManager, &stateSyncerStub{}, dsCheckoutManager, nodeAConfig)
+			if err != nil {
+				return nil, err
+			}
 
-	return node, nil*/
+			return node, nil*/
 	return nil, nil
 }
 
 func setupNode(node *node.NodeCore) error {
-/*	opts := &node.DatasetIndexingOptions {
-		AllowMultipleCheckouts: true,
-	}
+	/*	opts := &node.DatasetIndexingOptions {
+			AllowMultipleCheckouts: true,
+		}
 
-	if err := n.nodeCore.IndexDataset(datasetId, opts); err != nil {
-		return err
-	}*/
+		if err := n.nodeCore.IndexDataset(datasetId, opts); err != nil {
+			return err
+		}*/
 
 	return nil
 }
 
 type policyLoggerStub struct {
-
 }
 
 func (p *policyLoggerStub) InsertObservedGossip(g *pb.GossipMessage) error {
@@ -556,10 +569,9 @@ func (p *policyLoggerStub) InsertAppliedGossipMessage(msg *pb.GossipMessage) err
 }
 
 type stateSyncerStub struct {
-
 }
 
-func (s *stateSyncerStub) RegisterIfritClient(client *ifrit.Client)  {
+func (s *stateSyncerStub) RegisterIfritClient(client *ifrit.Client) {
 }
 
 func (s *stateSyncerStub) SynchronizeDatasetIdentifiers(ctx context.Context, identifiers []string, remoteAddr string) error {

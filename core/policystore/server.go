@@ -1,7 +1,7 @@
 package policystore
 
 import (
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/x509"
 	"errors"
 	"github.com/arcsecc/lohpi/core/comm"
@@ -26,7 +26,7 @@ type gRPCServer struct {
 	listenAddr string
 }
 
-func newPolicyStoreGRPCServer(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey, l net.Listener) (*gRPCServer, error) {
+func newPolicyStoreGRPCServer(cert, caCert *x509.Certificate, priv crypto.PrivateKey, l net.Listener) (*gRPCServer, error) {
 	var serverOpts []grpc.ServerOption
 	if cert == nil {
 		return nil, errNilCert

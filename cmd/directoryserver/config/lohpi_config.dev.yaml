@@ -1,6 +1,6 @@
-httpport: 8080
-grpcport: 8081
-lohpicaaddr: 127.0.1.1:8301
+httpport: 5555
+grpcport: 8080
+lohpicaaddress: 127.0.1.1:8301
 azurekeyvaultname: "lohpi-key-vault"
 azurekeyvaultsecret: "directory-server-db-connection-string-dev"
 azureclientsecret: "-43gD5SuqB19l8CHlI~-lRaG2uPS~aynZd"
@@ -9,8 +9,9 @@ azureclientid: "8e9cc9b6-28cd-4194-ac56-fdd52f232fcf"
 azurekeyvaultbaseurl: "https://lohpi-key-vault.vault.azure.net/"
 ifrittcpport: 5000
 ifritudpport: 5001
-hostname: "127.0.1.1"
+hostnames: 
+  - "127.0.1.1"
 name: "directory_server"
 lohpicryptounitworkingdirectory: "crypto/dev/lohpi"
 ifritcryptounitworkingdirectory: "crypto/dev/ifrit"
-datasetidentifierssyncinterval: 1
+dbconnpoolsize: 10

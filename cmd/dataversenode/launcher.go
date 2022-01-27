@@ -3,44 +3,44 @@ package main
 /** Launcher.go launches one executable of the 'node' package and waits for a SIGTERM signal to arrive
  * from the environment. This should be used when we want to use a process-granularity run.
  */
- 
+
 import (
-	"context"
 	"bufio"
-	"net/http"
-	"time"
-	"io/ioutil"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
+	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/jinzhu/configor"
 	"github.com/arcsecc/lohpi"
 	"github.com/arcsecc/lohpi/core/util"
+	"github.com/jinzhu/configor"
+	log "github.com/sirupsen/logrus"
 )
 
 // TODO: find a better way to configure stuff :))
 
 var config = struct {
-	HTTPPort				int 		`default:"8080"`
-	HostName				string 		`required:"true"`
-	MultipleCheckouts		bool 		`required:"true"`
-	PolicyStoreAddress 		string 		`required:"true"` //`default:"127.0.1.1:8084"`
-	DirectoryServerAddress 	string		`required:"true"`//	`default:"127.0.1.1:8081"`
-	LohpiCaAddress 	   		string 		`required:"true"` //`default:"127.0.1.1:8301"`
-	RemoteBaseURL			string 		`required:"true"`
-	RemotePort				string 		`required:"true"`
-	AzureKeyVaultName 		string 		`required:"true"`
-	AzureKeyVaultSecret		string		`required:"true"`
-	AzureClientSecret		string 		`required:"true"`
-	AzureClientID			string		`required:"true"`
-	AzureKeyVaultBaseURL 	string		`required:"true"`
-	AzureTenantID			string		`required:"true"`
+	HTTPPort               int    `default:"8080"`
+	HostName               string `required:"true"`
+	MultipleCheckouts      bool   `required:"true"`
+	PolicyStoreAddress     string `required:"true"` //`default:"127.0.1.1:8084"`
+	DirectoryServerAddress string `required:"true"` //	`default:"127.0.1.1:8081"`
+	LohpiCaAddress         string `required:"true"` //`default:"127.0.1.1:8301"`
+	RemoteBaseURL          string `required:"true"`
+	RemotePort             string `required:"true"`
+	AzureKeyVaultName      string `required:"true"`
+	AzureKeyVaultSecret    string `required:"true"`
+	AzureClientSecret      string `required:"true"`
+	AzureClientID          string `required:"true"`
+	AzureKeyVaultBaseURL   string `required:"true"`
+	AzureTenantID          string `required:"true"`
 }{}
 
 type StorageNode struct {
@@ -64,8 +64,8 @@ func main() {
 	args.Parse(os.Args[1:])
 
 	configor.New(&configor.Config{
-		Debug: false, 
-		ENVPrefix: "PS_NODE",
+		Debug:                false,
+		ENVPrefix:            "PS_NODE",
 		ErrorOnUnmatchedKeys: true}).Load(&config, configFile)
 
 	if configFile == "" {
@@ -101,7 +101,7 @@ func main() {
 	} else {
 		log.Errorln("Need to set the 'new' flag to true. Exiting.")
 		os.Exit(1)
-	}	
+	}
 	go sn.Start()
 
 	// Wait for SIGTERM signal from the environment
@@ -235,7 +235,7 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 
 	if response.StatusCode != http.StatusOK {
 		log.Errorf("Response from remote data repository\n")
-		http.Error(w, http.StatusText(http.StatusInternalServerError) + ": " + "Could not fetch dataset from host.", http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+"Could not fetch dataset from host.", http.StatusInternalServerError)
 		return
 	}
 
@@ -246,7 +246,7 @@ func dataHandler(id string, w http.ResponseWriter, r *http.Request) {
 	reader := bufio.NewReader(response.Body)
 
 	// Stream from response to client
-	if err := util.StreamToResponseWriter(reader, w, 100 * 1024); err != nil {
+	if err := util.StreamToResponseWriter(reader, w, 100*1024); err != nil {
 		log.Errorln(err.Error())
 		http.Error(w, http.StatusText(http.StatusInternalServerError)+": "+err.Error(), http.StatusInternalServerError)
 		return
@@ -264,10 +264,10 @@ func remoteDatasetIdentifiers() ([]string, error) {
 	}
 
 	// TODO: preserve context created at the mux
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5 * time.Second))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(5*time.Second))
 	defer cancel()
 
- 	// Create a new request using http
+	// Create a new request using http
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -283,13 +283,13 @@ func remoteDatasetIdentifiers() ([]string, error) {
 	go func() {
 		resp, err := client.Do(req)
 		if err != nil {
-			errChan <-err
+			errChan <- err
 			return
 		}
- 
+
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			errChan <-err
+			errChan <- err
 			return
 		}
 
@@ -297,7 +297,7 @@ func remoteDatasetIdentifiers() ([]string, error) {
 		jsonMap := make(map[string](interface{}))
 		err = json.Unmarshal(body, &jsonMap)
 		if err != nil {
-			errChan <-err
+			errChan <- err
 			return
 		}
 
@@ -308,14 +308,14 @@ func remoteDatasetIdentifiers() ([]string, error) {
 			id := i.(map[string]interface{})["global_id"]
 			identifiers = append(identifiers, id.(string))
 		}
-		doneChan <-true
+		doneChan <- true
 	}()
 
 	select {
 	case <-doneChan:
 		break
 	case <-ctx.Done():
-		return nil, fmt.Errorf("Could not fetch identifiers from remote source")	
+		return nil, fmt.Errorf("Could not fetch identifiers from remote source")
 	case err := <-errChan:
 		return nil, err
 	}

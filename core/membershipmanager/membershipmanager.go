@@ -1,126 +1,138 @@
 package membershipmanager
 
 import (
+	"context"
 	"errors"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"github.com/jackc/pgx/v4/pgxpool"
-	"time"
 	"github.com/sirupsen/logrus"
-_	"os"
-	"context"
-)
-
-var (
-	errNilConfig            = errors.New("Configuration is nil")
-	errNoConnectionString = errors.New("No connection string is provided")
 )
 
 var log = logrus.New()
 
-var mainLogFields = logrus.Fields{
+var memshipLogFields = logrus.Fields{
 	"package": "membershipmanager",
-	"action": "network membership handling",
+	"action":  "network membership service",
 }
 
 var (
-	ErrInsertNode = errors.New("Inserting node failed")
-	ErrRemoveNode = errors.New("Removing node failed")
+	ErrEmptyInstanceIdentifier = errors.New("No instance ID was provided")
+	ErrNilConnectionPool       = errors.New("Connection pool was nil")
+	ErrNetworkNodes            = errors.New("Could not fetch network nodes")
+	ErrNetworkNode             = errors.New("Could not fetch network node")
+	ErrNilNode                 = errors.New("Protobuf node was nil")
+	ErrEmptyNodeNameIdentifier = errors.New("No node identifier was provided")
+	ErrAddNetworkNode          = errors.New("Inserting node into collection failed")
+	ErrRemoveNode              = errors.New("Removing node failed")
+	ErrNetworkNodeExists       = errors.New("Failed to check if a network node exists")
+	ErrNumNetworkMembers       = errors.New("Error while fetching number of network members")
 )
 
-type MembershipManagerUnitConfig struct {
-	SQLConnectionString string
-	UseDB bool
-}
-
 type MembershipManagerUnit struct {
-	config *MembershipManagerUnitConfig
 	storageNodeSchema string
-	storageNodeTable string
-	pool *pgxpool.Pool
+	storageNodeTable  string
+	pool              *pgxpool.Pool
 }
 
-func init() { 
+func init() {
 	log.SetReportCaller(true)
 }
 
-func NewMembershipManager(id string, config *MembershipManagerUnitConfig) (*MembershipManagerUnit, error) {
-	if config == nil {
-		return nil, errNilConfig
+func NewMembershipManager(id string, pool *pgxpool.Pool) (*MembershipManagerUnit, error) {
+	if id == "" {
+		return nil, ErrEmptyInstanceIdentifier
 	}
 
-	if config.SQLConnectionString == "" {
-		return nil, errNoConnectionString
-	}
-	
-	poolConfig, err := pgxpool.ParseConfig(config.SQLConnectionString)
-	if err != nil {
-		log.WithFields(mainLogFields).Error(err.Error())
-		return nil, err
+	if pool == nil {
+		return nil, ErrNilConnectionPool
 	}
 
-	poolConfig.MaxConnLifetime = time.Second * 10
-	poolConfig.MaxConnIdleTime = time.Second * 4
-	poolConfig.MaxConns = 100
-	poolConfig.HealthCheckPeriod = time.Second * 1
-	poolConfig.LazyConnect = false
-
-	pool, err := pgxpool.ConnectConfig(context.Background(), poolConfig)
-	if err != nil {
-		log.WithFields(mainLogFields).Error(err.Error())
-		return nil, err
-	}
-
-	m := &MembershipManagerUnit{
-		pool: pool,
-		config: config,
+	return &MembershipManagerUnit{
+		pool:              pool,
 		storageNodeSchema: id + "_schema",
-		storageNodeTable: id + "_storage_node_table",
-	}
-
-	// redis?
-
-	return m, nil
+		storageNodeTable:  id + "_storage_node_table",
+	}, nil
 }
 
-func (m *MembershipManagerUnit) NetworkNodes() map[string]*pb.Node {
-	nodes, err := m.dbSelectAllNetworkNodes()
+func (m *MembershipManagerUnit) NetworkNodes(ctx context.Context, cursor int, limit int) (*pb.Nodes, error) {
+	nodes, err := m.dbSelectNetworkNodes(ctx, cursor, limit)
 	if err != nil {
-		return nil
+		log.WithFields(memshipLogFields).Error(err.Error())
+		return nil, ErrNetworkNodes
 	}
-	return nodes
+
+	return nodes, nil
 }
 
-func (m *MembershipManagerUnit) NetworkNode(nodeId string) *pb.Node {
-	node, err := m.dbSelectNetworkNode(nodeId)
+func (m *MembershipManagerUnit) NetworkNode(ctx context.Context, nodeName string) (*pb.Node, error) {
+	if nodeName == "" {
+		return nil, ErrEmptyNodeNameIdentifier
+	}
+
+	node, err := m.dbSelectNetworkNode(ctx, nodeName)
 	if err != nil {
-		return nil
+		log.WithFields(memshipLogFields).Error(err.Error())
+		return nil, ErrNetworkNode
 	}
-	return node
+
+	return node, nil
 }
 
-func (m *MembershipManagerUnit) AddNetworkNode(nodeId string, node *pb.Node) error {
-	if err := m.dbInsertNetworkNode(nodeId, node); err != nil {
-		return ErrInsertNode
+func (m *MembershipManagerUnit) AddNetworkNode(ctx context.Context, nodeName string, node *pb.Node) error {
+	if nodeName == "" {
+		return ErrEmptyNodeNameIdentifier
 	}
+
+	if node == nil {
+		return ErrNilNode
+	}
+
+	if err := m.dbInsertNetworkNode(ctx, nodeName, node); err != nil {
+		log.WithFields(memshipLogFields).Error(err.Error())
+		return ErrAddNetworkNode
+	}
+
 	return nil
 }
 
-func (m *MembershipManagerUnit) NetworkNodeExists(id string) bool {
-	exists, err := m.dbNetworkNodeExists(id)
-	if err != nil {
-		return exists
+func (m *MembershipManagerUnit) NetworkNodeExists(ctx context.Context, nodeName string) (bool, error) {
+	if nodeName == "" {
+		return false, ErrEmptyNodeNameIdentifier
 	}
-	return exists
+
+	exists, err := m.dbNetworkNodeExists(ctx, nodeName)
+	if err != nil {
+		log.WithFields(memshipLogFields).Error(err.Error())
+		return exists, ErrNetworkNodeExists
+	}
+
+	return exists, nil
 }
 
-func (m *MembershipManagerUnit) RemoveNetworkNode(id string) error {
-	if err := m.dbDeleteNetworkNode(id); err != nil {
+func (m *MembershipManagerUnit) RemoveNetworkNode(ctx context.Context, nodeName string) error {
+	if nodeName == "" {
+		return ErrEmptyNodeNameIdentifier
+	}
+
+	if err := m.dbDeleteNetworkNode(ctx, nodeName); err != nil {
+		log.WithFields(memshipLogFields).Error(err.Error())
 		return ErrRemoveNode
 	}
+
 	return nil
 }
 
 func (m *MembershipManagerUnit) Stop() {
-	log.WithFields(mainLogFields).Infoln("Closing database connection pool")
+	log.WithFields(memshipLogFields).Infoln("Closing database connection pool")
 	m.pool.Close()
+}
+
+func (m *MembershipManagerUnit) NumNetworkMembers(ctx context.Context) (int, error) {
+	n, err := m.dbNumNetworkMembers(ctx)
+	if err != nil {
+		log.WithFields(memshipLogFields).Error(err.Error())
+		return 0, ErrNumNetworkMembers
+	}
+
+	return n, nil
 }

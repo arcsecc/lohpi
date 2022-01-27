@@ -1,4 +1,5 @@
-ca_addr: lohpi-cauth.norwayeast.azurecontainer.io:8300
+ca_addr: lohpi-ca.northeurope.azurecontainer.io:8300
+#ca_addr: 127.0.1.1:8300
 gossip_interval: 3
 max_concurrent_messages: 10
 monitor_interval: 10

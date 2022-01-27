@@ -16,13 +16,13 @@ require (
 	github.com/joonnna/ifrit v0.0.0-20211012081351-7e24c04fee11
 	github.com/joonnna/workerpool v0.0.0-20180531065140-2c82629f6727
 	github.com/lestrrat-go/jwx v1.1.4
-	github.com/lib/pq v1.10.2
 	github.com/mattn/go-colorable v0.1.11 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/rs/cors v1.8.0
 	github.com/sirupsen/logrus v1.7.0
-	github.com/spf13/viper v1.9.0
+	github.com/spf13/viper v1.9.0 // indirect
 	github.com/stretchr/testify v1.7.0
+	golang.org/x/crypto v0.0.0-20210817164053-32db794688a5
 	golang.org/x/net v0.0.0-20211011170408-caeb26a5c8c0 // indirect
 	golang.org/x/sys v0.0.0-20211007075335-d3039528d8ac // indirect
 	golang.org/x/text v0.3.7 // indirect

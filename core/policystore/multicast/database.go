@@ -1,21 +1,20 @@
 package multicast
 
 import (
-	"encoding/base64"
 	"context"
+	"encoding/base64"
 	"errors"
-	"time"
-	log "github.com/sirupsen/logrus"
 	pb "github.com/arcsecc/lohpi/protobuf"
+	log "github.com/sirupsen/logrus"
+	"time"
 )
 
 var dbLogFields = log.Fields{
-	"package": "core/policy/multicast",
+	"package":     "core/policy/multicast",
 	"description": "database client",
 }
 
-
-func (m *MulticastManager) dbInsertGossipBatch(addr string, g *pb.GossipMessage, t time.Time, id []byte) error {
+func (m *MulticastManager) dbInsertGossipBatch(ctx context.Context, addr string, g *pb.PolicyGossipUpdate, t time.Time, id []byte) error {
 	if g == nil {
 		return errors.New("Gossip message is nil")
 	}
@@ -27,7 +26,7 @@ func (m *MulticastManager) dbInsertGossipBatch(addr string, g *pb.GossipMessage,
 
 	log.WithFields(dbLogFields).Debugf("Running PSQL query %s", q)
 
-	_, err := m.pool.Exec(context.Background(), q, addr, t.String(), base64.StdEncoding.EncodeToString(id), g.GetGossipMessageID().GetSequenceNumber(), zone, offset)
+	_, err := m.pool.Exec(ctx, q, addr, t.Format(time.RFC1123Z), base64.StdEncoding.EncodeToString(id), g.GetGossipMessageID().GetSequenceNumber(), zone, offset)
 	if err != nil {
 		log.WithFields(logFields).Error(err.Error())
 		return err

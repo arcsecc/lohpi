@@ -1,7 +1,7 @@
 package comm
 
 import (
-	"crypto/ecdsa"
+	"crypto"
 	"crypto/x509"
 	pb "github.com/arcsecc/lohpi/protobuf"
 	"google.golang.org/grpc"
@@ -31,7 +31,7 @@ type PolicyStoreConn struct {
 	cc *grpc.ClientConn
 }
 
-func NewDirectoryServerGRPCClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*DirectoryGRPCClient, error) {
+func NewDirectoryServerGRPCClient(cert, caCert *x509.Certificate, priv crypto.PrivateKey) (*DirectoryGRPCClient, error) {
 	var dialOptions []grpc.DialOption
 	// check paramters here
 	config := ClientConfig(cert, caCert, priv)
@@ -63,7 +63,7 @@ func (c *DirectoryServerConn) CloseConn() {
 	c.cc.Close()
 }
 
-func NewPolicyStoreClient(cert, caCert *x509.Certificate, priv *ecdsa.PrivateKey) (*PolicyStoreGRPCClient, error) {
+func NewPolicyStoreClient(cert, caCert *x509.Certificate, priv crypto.PrivateKey) (*PolicyStoreGRPCClient, error) {
 	var dialOptions []grpc.DialOption
 	// check paramters here
 	config := ClientConfig(cert, caCert, priv)
