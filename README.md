@@ -55,4 +55,4 @@ You can compile the programs separately by running ```go build``` in the ```cmd`
 
 ## Lohpi roadmap
 To be completed
-psql "host=lohpi-demo.postgres.database.azure.com port=5432 dbname=postgres user=lohpiadmin@lohpi-demo password=wiGeeT3s sslmode=require"
+psql "host=lohpi-demo-temp.postgres.database.azure.com port=5432 dbname=postgres user=lohpiadmin@lohpi-demo password=wiGeeT3sNodes sslmode=require"
